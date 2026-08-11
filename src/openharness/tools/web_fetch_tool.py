@@ -54,6 +54,21 @@ class WebFetchTool(BaseTool):
             return ToolResult(output=f"web_fetch failed: {exc}", is_error=True)
 
         content_type = response.headers.get("content-type", "")
+        if content_type and not _is_readable_content_type(content_type):
+            media_type = content_type.split(";", 1)[0].strip().lower()
+            return ToolResult(
+                output=(
+                    "web_fetch refused non-text content: "
+                    f"{media_type or 'unknown content type'}. "
+                    "Use a dedicated document parser instead."
+                ),
+                is_error=True,
+                metadata={
+                    "url": str(response.url),
+                    "content_type": media_type,
+                    "reason": "non_text_content",
+                },
+            )
         body = response.text
         if "html" in content_type:
             body = _html_to_text(body)
@@ -90,6 +105,22 @@ def _validate_url(url: str) -> tuple[bool, str]:
     except NetworkGuardError as exc:
         return False, str(exc)
     return True, ""
+
+
+def _is_readable_content_type(content_type: str) -> bool:
+    """Return whether a response can safely enter the text-only Agent context."""
+
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type.startswith("text/"):
+        return True
+    return media_type in {
+        "application/json",
+        "application/ld+json",
+        "application/xml",
+        "application/xhtml+xml",
+        "application/rss+xml",
+        "application/atom+xml",
+    }
 
 
 class _HTMLTextExtractor(HTMLParser):

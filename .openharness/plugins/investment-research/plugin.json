@@ -1,0 +1,6 @@
+{
+  "name": "investment-research",
+  "version": "0.1.0",
+  "description": "Seven-role, evidence-traceable listed-company research Agent definitions and contracts.",
+  "enabled_by_default": true
+}

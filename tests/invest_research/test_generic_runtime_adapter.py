@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import shutil
+import unittest
+from pathlib import Path
+from uuid import uuid4
+
+from openharness.api.client import ApiMessageCompleteEvent
+from openharness.api.usage import UsageSnapshot
+from openharness.config.settings import Settings
+from openharness.engine.messages import ConversationMessage, TextBlock
+from openharness.invest_research.agent_registry import AGENT_REGISTRY
+from openharness.invest_research.evidence_store import EvidenceStore
+from openharness.invest_research.runtime_adapter import (
+    AgentExecutionRequest,
+    InvestmentResearchRuntimeAdapter,
+)
+
+
+RUN_ID = "RUN-GENERIC-TEST-001"
+PARAMETER_CARD = {"parameter_card_id": "PC-DEMO-001", "version": "1.0"}
+COMPETITORS = [
+    {"company_name": "竞品甲", "selection_reasons": ["业务可比"]},
+    {"company_name": "竞品乙", "selection_reasons": ["资料可得"]},
+]
+
+
+class _StaticApiClient:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.closed = False
+
+    async def stream_message(self, request):
+        self.last_request = request
+        yield ApiMessageCompleteEvent(
+            message=ConversationMessage(
+                role="assistant",
+                content=[TextBlock(text=self.text)],
+            ),
+            usage=UsageSnapshot(input_tokens=12, output_tokens=8),
+            stop_reason=None,
+        )
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _common_input(agent_id: str) -> dict:
+    return {
+        "protocol_version": "1.0",
+        "run_id": RUN_ID,
+        "task_id": f"TASK-{agent_id.upper().replace('_', '-')}-001",
+        "objective": "离线验证通用运行路由",
+        "agent_id": agent_id,
+    }
+
+
+def _inputs() -> dict[str, dict]:
+    return {
+        "planner": {
+            **_common_input("planner"),
+            "company_query": "示例公司",
+            "as_of_date": "2026-08-11",
+        },
+        "fundamental": {
+            **_common_input("fundamental"),
+            "parameter_card": PARAMETER_CARD,
+        },
+        "industry_competition": {
+            **_common_input("industry_competition"),
+            "parameter_card": PARAMETER_CARD,
+            "confirmed_competitors": COMPETITORS,
+        },
+        "market_catalyst": {
+            **_common_input("market_catalyst"),
+            "parameter_card": PARAMETER_CARD,
+            "catalyst_window": {
+                "start_date": "2026-08-12",
+                "end_date": "2027-02-11",
+            },
+        },
+        "risk": {
+            **_common_input("risk"),
+            "parameter_card": PARAMETER_CARD,
+            "fundamental_artifact_id": "ART-FUND-001",
+            "industry_competition_artifact_id": "ART-IND-001",
+            "market_catalyst_artifact_id": "ART-CAT-001",
+        },
+        "reviewer_arbiter": {
+            **_common_input("reviewer_arbiter"),
+            "parameter_card": PARAMETER_CARD,
+            "research_artifact_ids": [
+                "ART-FUND-001",
+                "ART-IND-001",
+                "ART-CAT-001",
+                "ART-RISK-001",
+            ],
+        },
+        "report_writer": {
+            **_common_input("report_writer"),
+            "parameter_card": PARAMETER_CARD,
+            "review_id": "REVIEW-DEMO-001",
+            "approved_logic_ids": ["L-DEMO-001", "L-DEMO-002", "L-DEMO-003"],
+        },
+    }
+
+
+def _output(agent_id: str) -> str:
+    payload = {
+        "protocol_version": "1.0",
+        "status": "partial",
+        "completed_scope": ["离线运行路由"],
+        "evidence_refs": [],
+        "unverified_items": [],
+        "limitations": ["离线测试未调用真实工具"],
+        "handoff_requests": [],
+        "blocking_reasons": [],
+    }
+    if agent_id == "reviewer_arbiter":
+        payload.update(
+            {
+                "status": "completed",
+                "review_id": "REVIEW-DEMO-002",
+                "decision": "approve_for_report",
+                "approved_logic_ids": ["L-DEMO-001", "L-DEMO-002", "L-DEMO-003"],
+                "decision_rationale": "固定测试证据已满足离线合同",
+            }
+        )
+    return json.dumps(payload, ensure_ascii=False)
+
+
+class GenericRuntimeAdapterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        base = Path(__file__).resolve().parents[2] / ".openharness" / "data" / "tests"
+        self.root = base / uuid4().hex
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.store = EvidenceStore(
+            self.root / "evidence.sqlite3",
+            upload_root=self.root / "uploads",
+        )
+        self.store.create_run(RUN_ID, "示例公司")
+        self.store.upsert_record(
+            "parameter_card",
+            "PC-DEMO-001",
+            RUN_ID,
+            PARAMETER_CARD,
+            status="confirmed",
+            submitted_by="planner",
+        )
+        for artifact_id in ("ART-FUND-001", "ART-IND-001", "ART-CAT-001", "ART-RISK-001"):
+            self.store.upsert_record(
+                "artifact",
+                artifact_id,
+                RUN_ID,
+                {"artifact_id": artifact_id},
+                status="completed",
+                submitted_by="fixture",
+            )
+        for logic_id in ("L-DEMO-001", "L-DEMO-002", "L-DEMO-003"):
+            self.store.upsert_record(
+                "logic",
+                logic_id,
+                RUN_ID,
+                {"logic_id": logic_id},
+                status="approved",
+                submitted_by="fixture",
+            )
+        self.store.upsert_record(
+            "review",
+            "REVIEW-DEMO-001",
+            RUN_ID,
+            {"review_id": "REVIEW-DEMO-001", "decision": "approve_for_report"},
+            status="approve_for_report",
+            submitted_by="reviewer_arbiter",
+        )
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def adapter(self, text: str) -> InvestmentResearchRuntimeAdapter:
+        return InvestmentResearchRuntimeAdapter(
+            evidence_store=self.store,
+            settings_loader=lambda: Settings(),
+            api_client_factory=lambda settings: _StaticApiClient(text),
+            require_search_configuration=False,
+        )
+
+    def test_each_role_gets_exactly_its_registry_whitelist(self):
+        adapter = self.adapter(_output("planner"))
+        for agent_id, entry in AGENT_REGISTRY.items():
+            with self.subTest(agent_id=agent_id):
+                tools = adapter.build_restricted_tool_registry(agent_id).list_tools()
+                self.assertEqual(tuple(item.name for item in tools), entry.allowed_tools)
+                self.assertTrue(set(entry.disallowed_tools).isdisjoint(item.name for item in tools))
+
+    def test_all_seven_roles_can_execute_through_generic_router(self):
+        for agent_id, input_payload in _inputs().items():
+            with self.subTest(agent_id=agent_id):
+                result = asyncio.run(
+                    self.adapter(_output(agent_id)).execute_agent(
+                        AgentExecutionRequest(
+                            agent_id=agent_id,
+                            input_payload=input_payload,
+                        )
+                    )
+                )
+                self.assertEqual(result.status, "succeeded")
+                self.assertEqual(result.usage.total_tokens, 20)
+                self.assertEqual(result.agent_id, agent_id)
+                self.assertIsNotNone(result.artifact_id)
+
+    def test_unknown_cross_run_input_reference_blocks_before_model(self):
+        payload = _inputs()["fundamental"]
+        payload["source_ids"] = ["S-DOES-NOT-EXIST"]
+        result = asyncio.run(
+            self.adapter(_output("fundamental")).execute_agent(
+                AgentExecutionRequest(agent_id="fundamental", input_payload=payload)
+            )
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertIn("not registered", result.error or "")
+
+
+if __name__ == "__main__":
+    unittest.main()

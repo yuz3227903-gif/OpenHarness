@@ -1,0 +1,415 @@
+{
+  "$defs": {
+    "Gate2Payload": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_report_sections": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Affected Report Sections",
+          "type": "array"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/ReviewConflict"
+          },
+          "minItems": 1,
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "reviewer_recommendation": {
+          "minLength": 1,
+          "title": "Reviewer Recommendation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conflicts",
+        "reviewer_recommendation"
+      ],
+      "title": "Gate2Payload",
+      "type": "object"
+    },
+    "HandoffRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "request": {
+          "minLength": 1,
+          "title": "Request",
+          "type": "string"
+        },
+        "target_agent_id": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Target Agent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_agent_id",
+        "request"
+      ],
+      "title": "HandoffRequest",
+      "type": "object"
+    },
+    "ReviewConflict": {
+      "additionalProperties": false,
+      "properties": {
+        "conflict_id": {
+          "minLength": 1,
+          "title": "Conflict Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "involved_agent_ids": {
+          "items": {
+            "enum": [
+              "planner",
+              "fundamental",
+              "industry_competition",
+              "market_catalyst",
+              "risk",
+              "reviewer_arbiter",
+              "report_writer"
+            ],
+            "type": "string"
+          },
+          "minItems": 2,
+          "title": "Involved Agent Ids",
+          "type": "array"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "topic": {
+          "minLength": 1,
+          "title": "Topic",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conflict_id",
+        "topic",
+        "severity",
+        "involved_agent_ids",
+        "description"
+      ],
+      "title": "ReviewConflict",
+      "type": "object"
+    },
+    "ReviewIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expected Fields",
+          "type": "array"
+        },
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "issue_id": {
+          "pattern": "^ISSUE-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Issue Id",
+          "type": "string"
+        },
+        "issue_type": {
+          "minLength": 1,
+          "title": "Issue Type",
+          "type": "string"
+        },
+        "parent_task_id": {
+          "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Parent Task Id",
+          "type": "string"
+        },
+        "problem_statement": {
+          "minLength": 1,
+          "title": "Problem Statement",
+          "type": "string"
+        },
+        "required_evidence_quality": {
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D"
+          ],
+          "title": "Required Evidence Quality",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "supplement_round": {
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Supplement Round",
+          "type": "integer"
+        },
+        "target_agent_id": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Target Agent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_id",
+        "issue_type",
+        "severity",
+        "target_agent_id",
+        "parent_task_id",
+        "problem_statement",
+        "required_evidence_quality",
+        "supplement_round"
+      ],
+      "title": "ReviewIssue",
+      "type": "object"
+    },
+    "UnverifiedItem": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "minLength": 1,
+          "title": "Item",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Evidence"
+        }
+      },
+      "required": [
+        "item",
+        "reason"
+      ],
+      "title": "UnverifiedItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "approved_catalyst_ids": {
+      "items": {
+        "pattern": "^CAT-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Approved Catalyst Ids",
+      "type": "array"
+    },
+    "approved_fact_ids": {
+      "items": {
+        "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Approved Fact Ids",
+      "type": "array"
+    },
+    "approved_logic_ids": {
+      "items": {
+        "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Approved Logic Ids",
+      "type": "array"
+    },
+    "approved_risk_ids": {
+      "items": {
+        "pattern": "^RISK-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Approved Risk Ids",
+      "type": "array"
+    },
+    "blocking_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocking Reasons",
+      "type": "array"
+    },
+    "completed_scope": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Completed Scope",
+      "type": "array"
+    },
+    "conflicts": {
+      "items": {
+        "$ref": "#/$defs/ReviewConflict"
+      },
+      "title": "Conflicts",
+      "type": "array"
+    },
+    "decision": {
+      "enum": [
+        "approve_for_report",
+        "approve_with_warnings",
+        "request_supplement",
+        "require_human_resolution"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "decision_rationale": {
+      "minLength": 1,
+      "title": "Decision Rationale",
+      "type": "string"
+    },
+    "evidence_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "gate_2_payload": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Gate2Payload"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "handoff_requests": {
+      "items": {
+        "$ref": "#/$defs/HandoffRequest"
+      },
+      "title": "Handoff Requests",
+      "type": "array"
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/ReviewIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "rejected_items": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rejected Items",
+      "type": "array"
+    },
+    "review_id": {
+      "pattern": "^REVIEW-[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Review Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "blocked",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "unverified_items": {
+      "items": {
+        "$ref": "#/$defs/UnverifiedItem"
+      },
+      "title": "Unverified Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "status",
+    "completed_scope",
+    "evidence_refs",
+    "unverified_items",
+    "limitations",
+    "handoff_requests",
+    "blocking_reasons",
+    "review_id",
+    "decision",
+    "decision_rationale"
+  ],
+  "title": "ReviewDecision",
+  "type": "object"
+}

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 帮投研助手｜七 Agent 研究工作台</title>
+    <meta name="description" content="OpenHarness 七 Agent 投研全链路本地工作台" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-mark">IR</div>
+      <div>
+        <div class="brand-title">AI 帮投研助手</div>
+        <div class="brand-subtitle">OpenHarness 七 Agent 真实运行工作台</div>
+      </div>
+      <div class="runtime-state" id="runtime-state">
+        <span class="status-dot"></span>
+        <span id="runtime-text">正在检查运行环境</span>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="hero">
+        <div>
+          <div class="eyebrow">INVESTMENT RESEARCH WORKSPACE</div>
+          <h1>宁德时代多 Agent<br />完整研究链路</h1>
+          <p>
+            Planner 负责规划，三个研究 Agent 并行工作，Risk 消费上游成果，
+            Reviewer 记录问题，最后由 ReportWriter 或本地兜底程序交付报告。
+          </p>
+          <div class="pill-row">
+            <span>DeepSeek V4 Flash</span>
+            <span>Tavily Search</span>
+            <span>SQLite 证据链</span>
+            <span>始终产出报告</span>
+          </div>
+        </div>
+        <aside class="launch-card">
+          <div class="card-label">当前验证案例</div>
+          <h2>宁德时代（300750.SZ）</h2>
+          <p>竞品：比亚迪、LG Energy Solution</p>
+          <button id="run-button" type="button">
+            <span id="run-button-label">启动新的完整研究</span>
+            <span>→</span>
+          </button>
+          <div class="cost-note">会真实调用 DeepSeek 与 Tavily；已有结果可直接查看，无需重复运行。</div>
+        </aside>
+      </section>
+
+      <section class="overview-grid">
+        <article class="metric-card">
+          <span>运行状态</span>
+          <strong id="pipeline-status">尚未运行</strong>
+        </article>
+        <article class="metric-card">
+          <span>Run ID</span>
+          <strong id="run-id">—</strong>
+        </article>
+        <article class="metric-card">
+          <span>报告质量</span>
+          <strong id="report-quality">—</strong>
+        </article>
+        <article class="metric-card">
+          <span>累计 Tokens</span>
+          <strong id="total-tokens">—</strong>
+        </article>
+      </section>
+
+      <section class="workspace-section">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">AGENT TEAM</div>
+            <h2>七个岗位，一人一责</h2>
+          </div>
+          <div class="live-message" id="live-message">正在读取最近一次运行记录……</div>
+        </div>
+        <div class="agent-grid" id="agent-grid">
+          <article class="agent-card" data-agent="planner">
+            <div class="agent-avatar planner">P</div><div><h3>Planner</h3><p>任务规划与竞品确认</p></div><span class="agent-state">等待</span>
+          </article>
+          <article class="agent-card" data-agent="fundamental">
+            <div class="agent-avatar research">F</div><div><h3>Fundamental</h3><p>基本面与经营变化</p></div><span class="agent-state">等待</span>
+          </article>
+          <article class="agent-card" data-agent="industry_competition">
+            <div class="agent-avatar research">I</div><div><h3>IndustryCompetition</h3><p>行业与两家竞品对比</p></div><span class="agent-state">等待</span>
+          </article>
+          <article class="agent-card" data-agent="market_catalyst">
+            <div class="agent-avatar research">M</div><div><h3>MarketCatalyst</h3><p>未来半年催化因素</p></div><span class="agent-state">等待</span>
+          </article>
+          <article class="agent-card" data-agent="risk">
+            <div class="agent-avatar risk">R</div><div><h3>Risk</h3><p>风险、反方证据与证伪指标</p></div><span class="agent-state">等待</span>
+          </article>
+          <article class="agent-card" data-agent="reviewer_arbiter">
+            <div class="agent-avatar review">A</div><div><h3>ReviewerArbiter</h3><p>证据审查与问题记录</p></div><span class="agent-state">等待</span>
+          </article>
+          <article class="agent-card" data-agent="report_writer">
+            <div class="agent-avatar writer">W</div><div><h3>ReportWriter</h3><p>正式报告或兜底交付</p></div><span class="agent-state">等待</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="report-section">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">FINAL DELIVERABLE</div>
+            <h2>最终研究报告</h2>
+          </div>
+          <a class="download-button is-disabled" id="download-report" href="/api/research/report/download">下载 Markdown</a>
+        </div>
+        <div class="report-meta" id="report-meta">尚未生成报告。</div>
+        <pre class="report-content" id="report-content">运行完成后，报告会在这里显示。</pre>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
