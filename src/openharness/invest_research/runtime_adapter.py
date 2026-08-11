@@ -89,6 +89,7 @@ class AgentExecutionRequest(AdapterModel):
     context_package: dict[str, Any] = Field(default_factory=dict)
     timeout_seconds: float = Field(default=300.0, ge=10.0, le=1200.0)
     max_repair_attempts: int = Field(default=1, ge=0, le=1)
+    max_turns: int | None = Field(default=None, ge=1, le=30)
     tool_call_limits: dict[str, int] = Field(default_factory=dict)
 
 
@@ -262,8 +263,7 @@ class InvestmentResearchRuntimeAdapter:
         task_id = str(validated_input.task_id)
         if not self._evidence_store.run_exists(run_id):
             company_query = str(
-                getattr(validated_input, "company_query", None)
-                or validated_input.objective
+                getattr(validated_input, "company_query", None) or validated_input.objective
             )
             self._evidence_store.create_run(run_id, company_query)
 
@@ -283,8 +283,7 @@ class InvestmentResearchRuntimeAdapter:
             missing = [*missing_input_refs, *missing_uploads]
             return self._blocked_result(
                 entry.agent_id,
-                "Input references are not registered in the current Run: "
-                + ", ".join(missing),
+                "Input references are not registered in the current Run: " + ", ".join(missing),
             )
 
         approved_refs = _collect_approved_refs(input_payload)
@@ -360,7 +359,7 @@ class InvestmentResearchRuntimeAdapter:
             model=settings.model,
             system_prompt=system_prompt,
             max_tokens=min(settings.max_tokens, 16_000),
-            max_turns=entry.max_turns,
+            max_turns=min(request.max_turns or entry.max_turns, entry.max_turns),
             tool_metadata=tool_metadata,
             settings=None,
         )
@@ -439,8 +438,7 @@ class InvestmentResearchRuntimeAdapter:
                     )
         except TimeoutError:
             execution_error = (
-                f"{entry.display_name} execution exceeded "
-                f"{request.timeout_seconds:.0f} seconds."
+                f"{entry.display_name} execution exceeded {request.timeout_seconds:.0f} seconds."
             )
         except Exception as exc:
             execution_error = _sanitize_text(
@@ -603,8 +601,7 @@ class InvestmentResearchRuntimeAdapter:
             )
             if unknown:
                 raise ValueError(
-                    "output references IDs not registered in the current Run: "
-                    + ", ".join(unknown)
+                    "output references IDs not registered in the current Run: " + ", ".join(unknown)
                 )
         except (ValueError, ValidationError) as exc:
             return None, str(exc)
@@ -721,9 +718,7 @@ def _extract_json_object(raw_output: str) -> dict[str, Any]:
     candidates = [text]
     candidates.extend(
         fenced.strip()
-        for fenced in re.findall(
-            r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE
-        )
+        for fenced in re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     )
     first_brace = text.find("{")
     last_brace = text.rfind("}")

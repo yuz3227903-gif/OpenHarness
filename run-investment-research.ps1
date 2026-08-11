@@ -7,6 +7,7 @@ param(
     [string]$AgentSmoke,
     [switch]$ValidateAllAgents,
     [switch]$FullChainValidation,
+    [switch]$CrewAIFlowSmoke,
     [string]$Company = "CATL",
     [string]$AsOfDate = (Get-Date -Format "yyyy-MM-dd"),
     [ValidateRange(1024, 65535)]
@@ -21,7 +22,7 @@ $secretPath = Join-Path $projectRoot ".openharness\secrets\tavily-key.dpapi"
 $openHarnessLauncher = Join-Path $projectRoot "run-openh.ps1"
 $pythonExecutable = Join-Path $projectRoot ".venv\Scripts\python.exe"
 
-$needsTavily = $PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $ValidateAllAgents -or $FullChainValidation
+$needsTavily = $PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke
 if ($AgentSmoke -and $AgentSmoke -notin @("reviewer_arbiter", "report_writer")) {
     $needsTavily = $true
 }
@@ -29,7 +30,7 @@ if ($needsTavily -and -not (Test-Path -LiteralPath $secretPath)) {
     throw "Tavily is not configured. Run .\setup-tavily-key.ps1 first."
 }
 
-if ($PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $AgentSmoke -or $ValidateAllAgents -or $FullChainValidation) {
+if ($PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $AgentSmoke -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke) {
     if (-not (Test-Path -LiteralPath $pythonExecutable)) {
         throw "Existing Python environment was not found: .venv\Scripts\python.exe"
     }
@@ -82,6 +83,55 @@ try {
     elseif ($FullChainValidation) {
         & $pythonExecutable -m openharness.invest_research.validation_harness `
             --mode chain
+    }
+    elseif ($CrewAIFlowSmoke) {
+        $previousCrewAIStorage = [Environment]::GetEnvironmentVariable(
+            "CREWAI_STORAGE_DIR",
+            "Process"
+        )
+        $previousOtelDisabled = [Environment]::GetEnvironmentVariable(
+            "OTEL_SDK_DISABLED",
+            "Process"
+        )
+        $previousPythonUtf8 = [Environment]::GetEnvironmentVariable(
+            "PYTHONUTF8",
+            "Process"
+        )
+        $previousPythonIoEncoding = [Environment]::GetEnvironmentVariable(
+            "PYTHONIOENCODING",
+            "Process"
+        )
+        try {
+            [Environment]::SetEnvironmentVariable(
+                "CREWAI_STORAGE_DIR",
+                (Join-Path $projectRoot ".openharness\data\crewai"),
+                "Process"
+            )
+            [Environment]::SetEnvironmentVariable("OTEL_SDK_DISABLED", "true", "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", "utf-8", "Process")
+            & $pythonExecutable -m openharness.invest_research.orchestration.flow_runner `
+                --company $Company `
+                --as-of-date $AsOfDate
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable(
+                "CREWAI_STORAGE_DIR",
+                $previousCrewAIStorage,
+                "Process"
+            )
+            [Environment]::SetEnvironmentVariable(
+                "OTEL_SDK_DISABLED",
+                $previousOtelDisabled,
+                "Process"
+            )
+            [Environment]::SetEnvironmentVariable("PYTHONUTF8", $previousPythonUtf8, "Process")
+            [Environment]::SetEnvironmentVariable(
+                "PYTHONIOENCODING",
+                $previousPythonIoEncoding,
+                "Process"
+            )
+        }
     }
     else {
         & $openHarnessLauncher @OpenHarnessArgs

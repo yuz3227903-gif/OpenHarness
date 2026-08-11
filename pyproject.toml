@@ -45,6 +45,9 @@ dev = [
     "ruff>=0.5.0",
     "mypy>=1.10.0",
 ]
+orchestration = [
+    "crewai==1.15.5",
+]
 
 [project.scripts]
 openharness = "openharness.cli:app"
