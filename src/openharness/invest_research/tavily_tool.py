@@ -105,6 +105,11 @@ class TavilySearchTool(BaseTool):
             async with self._client_factory(
                 timeout=self._timeout_seconds,
                 follow_redirects=False,
+                # Keep research search independent from accidental shell
+                # proxy variables. Explicit proxy support belongs in a future
+                # network configuration, not an invisible environment side
+                # effect.
+                trust_env=False,
             ) as client:
                 response = await client.post(
                     TAVILY_SEARCH_ENDPOINT,

@@ -1,134 +1,5 @@
 {
   "$defs": {
-    "CatalystEvent": {
-      "additionalProperties": false,
-      "properties": {
-        "affected_metrics": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Affected Metrics",
-          "type": "array"
-        },
-        "announced_at": {
-          "anyOf": [
-            {
-              "format": "date",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Announced At"
-        },
-        "catalyst_id": {
-          "pattern": "^CAT-[A-Za-z0-9][A-Za-z0-9_-]*$",
-          "title": "Catalyst Id",
-          "type": "string"
-        },
-        "confidence_basis": {
-          "minLength": 1,
-          "title": "Confidence Basis",
-          "type": "string"
-        },
-        "direction": {
-          "enum": [
-            "positive",
-            "negative",
-            "mixed",
-            "uncertain"
-          ],
-          "title": "Direction",
-          "type": "string"
-        },
-        "event_type": {
-          "minLength": 1,
-          "title": "Event Type",
-          "type": "string"
-        },
-        "evidence_class": {
-          "enum": [
-            "disclosed_fact",
-            "public_report",
-            "market_expectation",
-            "analysis_inference",
-            "speculation"
-          ],
-          "title": "Evidence Class",
-          "type": "string"
-        },
-        "expected_date": {
-          "anyOf": [
-            {
-              "format": "date",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Expected Date"
-        },
-        "expected_window": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DateRange"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "failure_signals": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Failure Signals",
-          "type": "array"
-        },
-        "related_fact_ids": {
-          "items": {
-            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
-            "type": "string"
-          },
-          "title": "Related Fact Ids",
-          "type": "array"
-        },
-        "source_ids": {
-          "items": {
-            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
-            "type": "string"
-          },
-          "title": "Source Ids",
-          "type": "array"
-        },
-        "title": {
-          "minLength": 1,
-          "title": "Title",
-          "type": "string"
-        },
-        "transmission_path": {
-          "minLength": 1,
-          "title": "Transmission Path",
-          "type": "string"
-        }
-      },
-      "required": [
-        "catalyst_id",
-        "title",
-        "event_type",
-        "evidence_class",
-        "confidence_basis",
-        "transmission_path",
-        "direction"
-      ],
-      "title": "CatalystEvent",
-      "type": "object"
-    },
     "DateRange": {
       "additionalProperties": false,
       "properties": {
@@ -184,136 +55,6 @@
         "request"
       ],
       "title": "HandoffRequest",
-      "type": "object"
-    },
-    "LogicCandidate": {
-      "additionalProperties": false,
-      "properties": {
-        "counter_evidence_ids": {
-          "items": {
-            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
-            "type": "string"
-          },
-          "title": "Counter Evidence Ids",
-          "type": "array"
-        },
-        "falsification_conditions": {
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "title": "Falsification Conditions",
-          "type": "array"
-        },
-        "logic_id": {
-          "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
-          "title": "Logic Id",
-          "type": "string"
-        },
-        "mechanism": {
-          "minLength": 1,
-          "title": "Mechanism",
-          "type": "string"
-        },
-        "submitted_by": {
-          "enum": [
-            "planner",
-            "fundamental",
-            "industry_competition",
-            "market_catalyst",
-            "risk",
-            "reviewer_arbiter",
-            "report_writer"
-          ],
-          "title": "Submitted By",
-          "type": "string"
-        },
-        "supporting_fact_ids": {
-          "items": {
-            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
-            "type": "string"
-          },
-          "minItems": 1,
-          "title": "Supporting Fact Ids",
-          "type": "array"
-        },
-        "title": {
-          "minLength": 1,
-          "title": "Title",
-          "type": "string"
-        },
-        "tracking_indicators": {
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "title": "Tracking Indicators",
-          "type": "array"
-        }
-      },
-      "required": [
-        "logic_id",
-        "title",
-        "mechanism",
-        "supporting_fact_ids",
-        "falsification_conditions",
-        "tracking_indicators",
-        "submitted_by"
-      ],
-      "title": "LogicCandidate",
-      "type": "object"
-    },
-    "PeerComparisonRow": {
-      "additionalProperties": false,
-      "properties": {
-        "company_name": {
-          "minLength": 1,
-          "title": "Company Name",
-          "type": "string"
-        },
-        "source_ids": {
-          "items": {
-            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
-            "type": "string"
-          },
-          "title": "Source Ids",
-          "type": "array"
-        },
-        "ticker": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Ticker"
-        },
-        "values": {
-          "additionalProperties": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "title": "Values",
-          "type": "object"
-        }
-      },
-      "required": [
-        "company_name",
-        "values"
-      ],
-      "title": "PeerComparisonRow",
       "type": "object"
     },
     "ReportBlocker": {
@@ -425,100 +166,6 @@
       "title": "ReportSection",
       "type": "object"
     },
-    "RiskItem": {
-      "additionalProperties": false,
-      "properties": {
-        "affected_logic_ids": {
-          "items": {
-            "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
-            "type": "string"
-          },
-          "title": "Affected Logic Ids",
-          "type": "array"
-        },
-        "falsification_indicators": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Falsification Indicators",
-          "type": "array"
-        },
-        "impact_path": {
-          "minLength": 1,
-          "title": "Impact Path",
-          "type": "string"
-        },
-        "monitoring_plan": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Monitoring Plan",
-          "type": "array"
-        },
-        "probability_basis": {
-          "minLength": 1,
-          "title": "Probability Basis",
-          "type": "string"
-        },
-        "risk_id": {
-          "pattern": "^RISK-[A-Za-z0-9][A-Za-z0-9_-]*$",
-          "title": "Risk Id",
-          "type": "string"
-        },
-        "severity": {
-          "enum": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "title": "Severity",
-          "type": "string"
-        },
-        "source_ids": {
-          "items": {
-            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
-            "type": "string"
-          },
-          "title": "Source Ids",
-          "type": "array"
-        },
-        "time_window": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Time Window"
-        },
-        "title": {
-          "minLength": 1,
-          "title": "Title",
-          "type": "string"
-        },
-        "trigger_conditions": {
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "title": "Trigger Conditions",
-          "type": "array"
-        }
-      },
-      "required": [
-        "risk_id",
-        "title",
-        "trigger_conditions",
-        "impact_path",
-        "severity",
-        "probability_basis"
-      ],
-      "title": "RiskItem",
-      "type": "object"
-    },
     "UnverifiedItem": {
       "additionalProperties": false,
       "properties": {
@@ -562,13 +209,6 @@
       "title": "Blocking Reasons",
       "type": "array"
     },
-    "catalysts": {
-      "items": {
-        "$ref": "#/$defs/CatalystEvent"
-      },
-      "title": "Catalysts",
-      "type": "array"
-    },
     "completed_scope": {
       "items": {
         "type": "string"
@@ -602,6 +242,15 @@
       "title": "Handoff Requests",
       "type": "array"
     },
+    "included_logic_ids": {
+      "items": {
+        "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Included Logic Ids",
+      "type": "array"
+    },
     "limitations": {
       "items": {
         "type": "string"
@@ -620,13 +269,6 @@
       ],
       "default": null
     },
-    "peer_comparison": {
-      "items": {
-        "$ref": "#/$defs/PeerComparisonRow"
-      },
-      "title": "Peer Comparison",
-      "type": "array"
-    },
     "protocol_version": {
       "const": "1.0",
       "default": "1.0",
@@ -638,13 +280,6 @@
         "$ref": "#/$defs/ReportBlocker"
       },
       "title": "Report Blockers",
-      "type": "array"
-    },
-    "risks": {
-      "items": {
-        "$ref": "#/$defs/RiskItem"
-      },
-      "title": "Risks",
       "type": "array"
     },
     "section_evidence_map": {
@@ -673,14 +308,6 @@
       ],
       "title": "Status",
       "type": "string"
-    },
-    "three_approved_logics": {
-      "items": {
-        "$ref": "#/$defs/LogicCandidate"
-      },
-      "maxItems": 3,
-      "title": "Three Approved Logics",
-      "type": "array"
     },
     "title": {
       "anyOf": [

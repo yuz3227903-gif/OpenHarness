@@ -1,8 +1,8 @@
 """Best-effort Markdown report generation for investment research runs.
 
-This module is deliberately deterministic.  It never invents facts: it only
+This module is deliberately deterministic. It never invents facts: it only
 renders records already present in the current Run and labels missing material.
-It is used when the LLM report writer cannot complete, or when an upstream
+It is used when the LLM ReportWriter cannot complete, or when an upstream
 Agent failed but the user still needs a reviewable deliverable.
 """
 
@@ -33,12 +33,14 @@ def write_fallback_report(
     records = _load_records(store, run_id)
     parameter = _first_payload(records.get("parameter_card", []))
     company = _company_name(parameter, records)
-    ticker = _ticker(parameter, records)
+    ticker = _ticker(parameter)
+
     logic_records = records.get("logic", [])
     fact_records = records.get("fact", [])
     source_records = records.get("source", [])
     catalyst_records = records.get("catalyst", [])
     risk_records = records.get("risk", [])
+
     issues = list((review_output or {}).get("issues") or [])
     if not issues:
         issues = [
@@ -47,6 +49,7 @@ def write_fallback_report(
             if isinstance(item.get("payload"), dict)
         ]
 
+    receipt_list = [item for item in receipts if isinstance(item, dict)]
     completed_agents = [
         agent_id
         for agent_id, result in results.items()
@@ -57,23 +60,42 @@ def write_fallback_report(
         for agent_id, result in results.items()
         if getattr(result, "status", None) not in {None, "succeeded"}
     ]
-    receipt_lines = _receipt_lines(receipts)
+    if not completed_agents and not failed_agents:
+        completed_agents = _unique_agent_ids(
+            item.get("agent_id")
+            for item in receipt_list
+            if item.get("execution_status") == "succeeded"
+        )
+        failed_agents = _unique_agent_ids(
+            item.get("agent_id")
+            for item in receipt_list
+            if item.get("execution_status") not in {None, "succeeded"}
+        )
+
+    agent_outputs = _agent_outputs(results)
+    if not agent_outputs:
+        agent_outputs = _artifact_outputs(records)
+    receipt_lines = _receipt_lines(receipt_list)
     logic_lines = _record_lines(logic_records, "logic_id", _logic_summary)
     fact_lines = _record_lines(fact_records, "fact_id", _fact_summary, limit=12)
     catalyst_lines = _record_lines(catalyst_records, "catalyst_id", _catalyst_summary)
     risk_lines = _record_lines(risk_records, "risk_id", _risk_summary)
     source_lines = _record_lines(source_records, "source_id", _source_summary, limit=12)
     issue_lines = [
-        f"- `{item.get('issue_id', 'ISSUE-UNKNOWN')}`：{item.get('problem_statement') or item.get('description') or MISSING}"
+        f"- `{item.get('issue_id', 'ISSUE-UNKNOWN')}`："
+        f"{item.get('problem_statement') or item.get('description') or MISSING}"
         for item in issues
         if isinstance(item, dict)
     ]
+    if not issue_lines:
+        issue_lines = _failure_issue_lines(results)
 
-    report_quality = "partial" if completed_agents and failed_agents else "fallback"
+    report_quality = "fallback"
     sections = [
         f"# {company}（{ticker}）上市公司研究报告",
         "",
-        "> 本报告由 OpenHarness 多 Agent 投研流程生成。报告包含演示/验证运行数据，部分内容可能仍需人工核验，不构成投资建议。",
+        "> 本报告由 OpenHarness 多 Agent 投研流程生成。报告包含演示/验证运行数据，"
+        "部分内容可能仍需人工核验，不构成投资建议。",
         "",
         f"- Run ID：`{run_id}`",
         f"- 生成方式：本地兜底报告（{reason}）",
@@ -81,7 +103,7 @@ def write_fallback_report(
         "",
         "## 一、公司概况",
         "",
-        _company_overview(parameter, records),
+        _company_overview(parameter),
         "",
         "## 二、最近一年经营变化",
         "",
@@ -89,11 +111,14 @@ def write_fallback_report(
         "",
         "## 三、三个最值得关注的投资逻辑",
         "",
-        _bullets_or_missing(logic_lines, "当前已收集的候选逻辑如下，尚未全部完成严格审查："),
+        _bullets_or_missing(
+            logic_lines,
+            "当前已收集的候选投资逻辑如下，尚未全部完成严格审查：",
+        ),
         "",
         "## 四、两家主要竞争对手对比",
         "",
-        _competitor_summary(parameter, records),
+        _competitor_summary(parameter, agent_outputs),
         "",
         "## 五、未来半年可能的催化因素",
         "",
@@ -101,7 +126,10 @@ def write_fallback_report(
         "",
         "## 六、主要风险",
         "",
-        _bullets_or_missing(risk_lines),
+        _bullets_or_missing(
+            risk_lines or _derived_risk_lines(agent_outputs),
+            "当前风险信息来自 Risk Agent 或上游 Agent 明确标出的失效条件/待验证事项：",
+        ),
         "",
         "## 七、已完成与未完成的 Agent",
         "",
@@ -126,11 +154,15 @@ def write_fallback_report(
         "",
         "## 十二、合规声明",
         "",
-        "本报告仅用于展示多 Agent 协作流程和研究资料组织方式，不构成任何投资建议、目标价或交易指令。报告中的事实、推测和市场预期应在正式使用前由人工再次核验。",
+        "本报告仅用于展示多 Agent 协作流程和研究资料组织方式，不构成任何投资建议、"
+        "目标价或交易指令。报告中的事实、推测和市场预期应在正式使用前由人工再次核验。",
         "",
     ]
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(sections), encoding="utf-8")
+    # Use UTF-8 with BOM because the report is mainly opened on Windows.
+    # It prevents older PowerShell/Notepad paths from rendering Chinese as mojibake.
+    output_path.write_text("\n".join(sections), encoding="utf-8-sig")
     return {
         "path": str(output_path),
         "report_quality": report_quality,
@@ -152,14 +184,17 @@ def _load_records(store: EvidenceStore, run_id: str) -> dict[str, list[dict[str,
         "logic",
         "catalyst",
         "risk",
+        "artifact",
         "review",
         "issue",
     ):
         try:
             output[record_type] = store.query_records(
-                run_id, record_types=(record_type,), limit=100
+                run_id,
+                record_types=(record_type,),
+                limit=100,
             )
-        except (KeyError, ValueError):
+        except (AttributeError, KeyError, ValueError):
             output[record_type] = []
     return output
 
@@ -184,30 +219,51 @@ def _company_name(parameter: dict[str, Any], records: dict[str, list[dict[str, A
     return "目标上市公司"
 
 
-def _ticker(parameter: dict[str, Any], records: dict[str, list[dict[str, Any]]]) -> str:
+def _ticker(parameter: dict[str, Any]) -> str:
     identity = parameter.get("company_identity") or {}
-    if isinstance(identity, dict) and identity.get("ticker"):
-        return str(identity["ticker"])
+    if isinstance(identity, dict):
+        for key in ("ticker", "stock_code", "security_code"):
+            if identity.get(key):
+                return str(identity[key])
+    for key in ("ticker", "stock_code", "security_code"):
+        if parameter.get(key):
+            return str(parameter[key])
     return "待确认"
 
 
-def _company_overview(parameter: dict[str, Any], records: dict[str, list[dict[str, Any]]]) -> str:
+def _company_overview(parameter: dict[str, Any]) -> str:
     identity = parameter.get("company_identity") or {}
     if isinstance(identity, dict):
         pieces = [
-            str(identity.get("legal_name") or identity.get("short_name"))
-            if identity.get("legal_name") or identity.get("short_name")
-            else None,
-            str(identity.get("exchange")) if identity.get("exchange") else None,
-            str(identity.get("primary_business")) if identity.get("primary_business") else None,
+            identity.get("legal_name") or identity.get("short_name"),
+            identity.get("exchange"),
+            identity.get("primary_business"),
         ]
-        text = "；".join(item for item in pieces if item)
+        text = "；".join(str(item) for item in pieces if item)
         if text:
             return text + "。"
     return MISSING
 
 
-def _competitor_summary(parameter: dict[str, Any], records: dict[str, list[dict[str, Any]]]) -> str:
+def _competitor_summary(
+    parameter: dict[str, Any],
+    agent_outputs: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    industry_output = (agent_outputs or {}).get("industry_competition") or {}
+    peer_comparison = industry_output.get("peer_comparison")
+    if isinstance(peer_comparison, list) and peer_comparison:
+        lines = ["已收集的三家公司对比结果如下，仍需人工核对币种、口径和时间范围："]
+        for row in peer_comparison[:3]:
+            if isinstance(row, dict):
+                name = row.get("company_name") or row.get("company") or "未命名公司"
+                details = "; ".join(
+                    f"{key}={value}"
+                    for key, value in row.items()
+                    if key not in {"company_name", "company"} and value not in (None, "")
+                )
+                lines.append(f"- {name}：{details or _json_text(row)}")
+        return "\n".join(lines)
+
     candidates = parameter.get("recommended_competitors") or parameter.get("competitor_candidates")
     if isinstance(candidates, list) and candidates:
         names = [
@@ -216,12 +272,69 @@ def _competitor_summary(parameter: dict[str, Any], records: dict[str, list[dict[
             if isinstance(item, dict) and item.get("company_name")
         ]
         if names:
-            return "当前研究计划中的竞品为：" + "、".join(names) + "。详细可比指标仍需结合已登记来源核验。"
-    for item in records.get("logic", []):
-        payload = item.get("payload", {})
-        if payload.get("peer_comparison"):
-            return _json_text(payload["peer_comparison"])
+            return (
+                "当前研究计划中的竞品为："
+                + "、".join(names)
+                + "。详细可比指标仍需结合已登记来源核验。"
+            )
     return MISSING
+
+
+def _agent_outputs(results: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    outputs: dict[str, dict[str, Any]] = {}
+    for agent_id, result in results.items():
+        payload = getattr(result, "structured_output", None)
+        if isinstance(payload, dict):
+            outputs[agent_id] = payload
+    return outputs
+
+
+def _artifact_outputs(records: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    outputs: dict[str, dict[str, Any]] = {}
+    for record in records.get("artifact", []):
+        payload = record.get("payload") or {}
+        agent_id = payload.get("agent_id") or record.get("submitted_by")
+        output = payload.get("output")
+        if agent_id and isinstance(output, dict) and agent_id not in outputs:
+            outputs[str(agent_id)] = output
+    return outputs
+
+
+def _failure_issue_lines(results: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for agent_id, result in results.items():
+        status = getattr(result, "status", None)
+        if status in {None, "succeeded"}:
+            continue
+        failure_class = getattr(result, "failure_class", None) or "unknown"
+        error = getattr(result, "error", None) or "未提供错误详情"
+        lines.append(
+            f"- `{agent_id}`：执行状态 `{status}`，失败类型 `{failure_class}`，{error}"
+        )
+    return lines
+
+
+def _derived_risk_lines(agent_outputs: dict[str, dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for agent_id, output in agent_outputs.items():
+        for logic in output.get("logic_candidates", []) or []:
+            if not isinstance(logic, dict):
+                continue
+            title = logic.get("title") or logic.get("logic_id") or "候选逻辑"
+            for condition in logic.get("falsification_conditions", []) or []:
+                lines.append(f"- `{agent_id}` 候选逻辑“{title}”的失效条件：{condition}")
+        for item in output.get("unverified_items", []) or []:
+            if isinstance(item, dict):
+                lines.append(
+                    f"- `{agent_id}` 待验证事项："
+                    f"{item.get('item') or item.get('reason') or _json_text(item)}"
+                )
+        for event in output.get("events", []) or []:
+            if not isinstance(event, dict):
+                continue
+            for signal in event.get("failure_signals", []) or []:
+                lines.append(f"- `{agent_id}` 催化失效信号：{signal}")
+    return lines[:24]
 
 
 def _record_lines(
@@ -234,7 +347,7 @@ def _record_lines(
     lines: list[str] = []
     for record in records[:limit]:
         payload = record.get("payload", {})
-        record_id = payload.get(id_key) or record.get(id_key) or "UNKNOWN"
+        record_id = payload.get(id_key) or record.get("record_id") or "UNKNOWN"
         lines.append(f"- `{record_id}`：{formatter(payload)}")
     return lines
 
@@ -248,11 +361,10 @@ def _logic_summary(payload: dict[str, Any]) -> str:
 
 
 def _fact_summary(payload: dict[str, Any]) -> str:
-    return "；".join(
-        str(payload.get(key))
-        for key in ("metric_name", "statement", "value", "period", "unit")
-        if payload.get(key) is not None
-    ) or _json_text(payload)
+    metric = payload.get("metric_name") or payload.get("statement")
+    value = _readable_financial_value(payload.get("value"), payload.get("unit"))
+    pieces = [metric, value, payload.get("period")]
+    return "；".join(str(item) for item in pieces if item is not None) or _json_text(payload)
 
 
 def _catalyst_summary(payload: dict[str, Any]) -> str:
@@ -295,7 +407,9 @@ def _receipt_lines(receipts: Iterable[dict[str, Any]]) -> list[str]:
 def _limitations(records: dict[str, list[dict[str, Any]]], reason: str) -> str:
     items = [
         f"- 本次交付采用尽力生成模式，原因：{reason}。",
-        f"- 已登记来源 {len(records.get('source', []))} 条、事实 {len(records.get('fact', []))} 条、候选逻辑 {len(records.get('logic', []))} 条。",
+        f"- 已登记来源 {len(records.get('source', []))} 条、"
+        f"事实 {len(records.get('fact', []))} 条、"
+        f"候选逻辑 {len(records.get('logic', []))} 条。",
         "- 未被来源直接支持的内容不得视为已确认事实。",
         "- 对于缺失的 Agent 结果、来源或指标，后续需要重新运行对应研究任务补充。",
     ]
@@ -310,3 +424,26 @@ def _bullets_or_missing(lines: list[str], prefix: str | None = None) -> str:
 
 def _json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _readable_financial_value(value: Any, unit: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        unit_text = str(unit or "")
+        if unit_text in {"千元", "CNY thousand", "RMB thousand"}:
+            return f"{number:,.0f}千元（约{number / 100_000:,.2f}亿元）"
+        return f"{number:,.2f}{unit_text}"
+    return f"{value}{unit or ''}"
+
+
+def _unique_agent_ids(values: Iterable[Any]) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if text and text not in output:
+            output.append(text)
+    return output

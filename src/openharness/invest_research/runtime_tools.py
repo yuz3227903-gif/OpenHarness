@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel
@@ -49,7 +50,27 @@ class BudgetedTool(BaseTool):
                 },
             )
         counts[self.name] = used + 1
-        return await self._delegate.execute(arguments, context)
+        result = await self._delegate.execute(arguments, context)
+        if not _retryable_tool_result(result):
+            return result
+
+        # A retry is still charged against the same per-run budget. This keeps
+        # the guard finite and prevents a broken provider from causing a loop.
+        retry_used = int(counts.get(self.name, 0))
+        if retry_used >= limit:
+            return result
+        await asyncio.sleep(0.25)
+        counts[self.name] = retry_used + 1
+        retry_result = await self._delegate.execute(arguments, context)
+        return ToolResult(
+            output=retry_result.output,
+            is_error=retry_result.is_error,
+            metadata={
+                **retry_result.metadata,
+                "retry_count": 1,
+                "first_attempt_error": result.output[:240],
+            },
+        )
 
     def is_read_only(self, arguments: BaseModel) -> bool:
         return self._delegate.is_read_only(arguments)
@@ -153,6 +174,18 @@ def _authorize_ref(metadata: dict[str, Any], record_id: str) -> None:
     elif isinstance(refs, list):
         if record_id not in refs:
             refs.append(record_id)
+
+
+def _retryable_tool_result(result: ToolResult) -> bool:
+    if not result.is_error:
+        return False
+    text = result.output.lower()
+    status = result.metadata.get("status_code")
+    return (
+        status == 429
+        or (isinstance(status, int) and status >= 500)
+        or any(marker in text for marker in ("network", "timeout", "connection", "temporarily"))
+    )
 
 
 __all__ = [

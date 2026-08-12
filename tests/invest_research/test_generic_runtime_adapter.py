@@ -11,11 +11,14 @@ from openharness.api.client import ApiMessageCompleteEvent
 from openharness.api.usage import UsageSnapshot
 from openharness.config.settings import Settings
 from openharness.engine.messages import ConversationMessage, TextBlock
+from openharness.engine.stream_events import ErrorEvent
 from openharness.invest_research.agent_registry import AGENT_REGISTRY
 from openharness.invest_research.evidence_store import EvidenceStore
 from openharness.invest_research.runtime_adapter import (
     AgentExecutionRequest,
+    ToolCallTrace,
     InvestmentResearchRuntimeAdapter,
+    _classify_failure,
 )
 
 
@@ -34,6 +37,59 @@ class _StaticApiClient:
 
     async def stream_message(self, request):
         self.last_request = request
+        yield ApiMessageCompleteEvent(
+            message=ConversationMessage(
+                role="assistant",
+                content=[TextBlock(text=self.text)],
+            ),
+            usage=UsageSnapshot(input_tokens=12, output_tokens=8),
+            stop_reason=None,
+        )
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _SequentialApiClient(_StaticApiClient):
+    """Return one invalid result first, then a schema-only repair result."""
+
+    def __init__(self, texts: list[str]) -> None:
+        super().__init__(texts[0])
+        self.texts = texts
+        self.call_count = 0
+
+    async def stream_message(self, request):
+        self.last_request = request
+        text = self.texts[min(self.call_count, len(self.texts) - 1)]
+        self.call_count += 1
+        yield ApiMessageCompleteEvent(
+            message=ConversationMessage(
+                role="assistant",
+                content=[TextBlock(text=text)],
+            ),
+            usage=UsageSnapshot(input_tokens=12, output_tokens=8),
+            stop_reason=None,
+        )
+
+
+class _EmptyThenJsonApiClient:
+    """Simulate a transient empty provider response followed by valid JSON."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.call_count = 0
+        self.closed = False
+
+    async def stream_message(self, request):
+        self.call_count += 1
+        if self.call_count == 1:
+            yield ErrorEvent(
+                message=(
+                    "Model returned an empty assistant message. "
+                    "The turn was ignored to keep the session healthy."
+                )
+            )
+            return
         yield ApiMessageCompleteEvent(
             message=ConversationMessage(
                 role="assistant",
@@ -221,6 +277,101 @@ class GenericRuntimeAdapterTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "blocked")
         self.assertIn("not registered", result.error or "")
+
+    def test_invalid_completed_industry_output_is_repaired_to_partial(self):
+        invalid_completed = {
+            "protocol_version": "1.0",
+            "status": "completed",
+            "completed_scope": ["竞品比较"],
+            "evidence_refs": [],
+            "unverified_items": [],
+            "limitations": [],
+            "handoff_requests": [],
+            "blocking_reasons": [],
+            "industry_definition": "动力电池行业",
+            "comparison_dictionary": [
+                {
+                    "metric_name": "市场份额",
+                    "formula_or_definition": "装机量占比",
+                    "period": "2026H1",
+                }
+            ],
+            "peer_comparison": [
+                {"company_name": "宁德时代", "values": {"市场份额": "待验证"}},
+                {"company_name": "竞品甲", "values": {"市场份额": "待验证"}},
+                {"company_name": "竞品乙", "values": {"市场份额": "待验证"}},
+            ],
+            "logic_candidates": [],
+        }
+        repaired_partial = json.loads(_output("industry_competition"))
+        repaired_partial["unverified_items"] = [
+            {
+                "item": "竞争差异对应的可核验候选逻辑",
+                "reason": "现有来源不足",
+                "required_evidence": "三家公司同口径经营数据",
+            }
+        ]
+        client = _SequentialApiClient(
+            [
+                json.dumps(invalid_completed, ensure_ascii=False),
+                json.dumps(repaired_partial, ensure_ascii=False),
+            ]
+        )
+        adapter = InvestmentResearchRuntimeAdapter(
+            evidence_store=self.store,
+            settings_loader=lambda: Settings(),
+            api_client_factory=lambda settings: client,
+            require_search_configuration=False,
+        )
+
+        result = asyncio.run(
+            adapter.execute_agent(
+                AgentExecutionRequest(
+                    agent_id="industry_competition",
+                    input_payload=_inputs()["industry_competition"],
+                )
+            )
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(result.structured_output["status"], "partial")
+        self.assertEqual(client.call_count, 2)
+        self.assertTrue(any("repair attempt 1" in warning for warning in result.warnings))
+
+    def test_empty_model_response_is_retried_once(self):
+        client = _EmptyThenJsonApiClient(_output("planner"))
+        adapter = InvestmentResearchRuntimeAdapter(
+            evidence_store=self.store,
+            settings_loader=lambda: Settings(),
+            api_client_factory=lambda settings: client,
+            require_search_configuration=False,
+        )
+
+        result = asyncio.run(
+            adapter.execute_agent(
+                AgentExecutionRequest(
+                    agent_id="planner",
+                    input_payload=_inputs()["planner"],
+                )
+            )
+        )
+
+        self.assertEqual(
+            result.status,
+            "succeeded",
+            f"error={result.error}; warnings={result.warnings}; calls={client.call_count}",
+        )
+        self.assertEqual(client.call_count, 2)
+        self.assertTrue(any("empty model response" in warning for warning in result.warnings))
+        self.assertTrue(client.closed)
+
+    def test_execution_exceeded_is_classified_as_timeout_before_tool_error(self):
+        failure_class = _classify_failure(
+            "Risk execution exceeded 120 seconds.",
+            [ToolCallTrace(tool_name="evidence_query", tool_input={}, is_error=True)],
+        )
+
+        self.assertEqual(failure_class, "timeout")
 
 
 if __name__ == "__main__":

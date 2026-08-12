@@ -63,6 +63,20 @@ _DEFAULT_TOOL_LIMITS = {
     "evidence_query": 12,
 }
 
+FailureClass = Literal[
+    "network",
+    "rate_limit",
+    "provider_auth",
+    "timeout",
+    "empty_response",
+    "invalid_json",
+    "schema_error",
+    "tool_error",
+    "permission_error",
+    "input_error",
+    "unknown",
+]
+
 
 class _ApiClientFactory(Protocol):
     def __call__(self, settings: Settings) -> SupportsStreamingMessages: ...
@@ -132,6 +146,10 @@ class AgentExecutionResult(AdapterModel):
     review_id: str | None = None
     report_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    failure_class: FailureClass | None = None
+    retry_count: int = 0
+    degraded: bool = False
+    fallback_used: bool = False
     error: str | None = None
 
 
@@ -372,30 +390,62 @@ class InvestmentResearchRuntimeAdapter:
         parsed: dict[str, Any] | None = None
         validation_error: str | None = None
 
-        async def run_turn(prompt: str) -> str:
-            nonlocal execution_error
+        async def run_turn(prompt: str) -> tuple[str, str | None]:
             final_text = ""
-            async for event in engine.submit_message(prompt):
-                if isinstance(event, ToolExecutionStarted):
-                    tool_calls.append(
-                        ToolCallTrace(
-                            call_id=f"TOOL-{uuid4().hex[:12].upper()}",
-                            tool_name=event.tool_name,
-                            tool_input=_sanitize_value(event.tool_input),
+            turn_error: str | None = None
+            try:
+                async for event in engine.submit_message(prompt):
+                    if isinstance(event, ToolExecutionStarted):
+                        tool_calls.append(
+                            ToolCallTrace(
+                                call_id=f"TOOL-{uuid4().hex[:12].upper()}",
+                                tool_name=event.tool_name,
+                                tool_input=_sanitize_value(event.tool_input),
+                            )
                         )
+                    elif isinstance(event, ToolExecutionCompleted):
+                        for trace in reversed(tool_calls):
+                            if trace.tool_name == event.tool_name and trace.output is None:
+                                trace.output = _sanitize_text(event.output)
+                                trace.is_error = event.is_error
+                                trace.metadata = _sanitize_value(dict(event.metadata or {}))
+                                break
+                    elif isinstance(event, AssistantTurnComplete):
+                        final_text = event.message.text
+                    elif isinstance(event, ErrorEvent):
+                        turn_error = _sanitize_text(event.message)
+            except RuntimeError as exc:
+                runtime_error = _sanitize_text(str(exc))
+                if turn_error and _is_retryable_empty_response(turn_error):
+                    return final_text, turn_error
+                if "without a final message" in runtime_error.lower():
+                    return final_text, (
+                        "Model returned an empty assistant message. "
+                        "The turn was ignored to keep the session healthy."
                     )
-                elif isinstance(event, ToolExecutionCompleted):
-                    for trace in reversed(tool_calls):
-                        if trace.tool_name == event.tool_name and trace.output is None:
-                            trace.output = _sanitize_text(event.output)
-                            trace.is_error = event.is_error
-                            trace.metadata = _sanitize_value(dict(event.metadata or {}))
-                            break
-                elif isinstance(event, AssistantTurnComplete):
-                    final_text = event.message.text
-                elif isinstance(event, ErrorEvent):
-                    execution_error = _sanitize_text(event.message)
-            return final_text
+                raise
+            return final_text, turn_error
+
+        async def run_turn_with_empty_response_retry(
+            prompt: str,
+            *,
+            phase: str,
+        ) -> tuple[str, str | None]:
+            """Retry one transient provider empty response in the same Agent task."""
+
+            text, turn_error = await run_turn(prompt)
+            if not _is_retryable_empty_response(turn_error):
+                return text, turn_error
+
+            warnings.append(
+                f"{entry.display_name} received an empty model response during {phase}; "
+                "retried once using existing task context."
+            )
+            return await run_turn(
+                "上一轮模型返回空内容，无法形成有效交付。不要重新调研，也不要调用任何新工具；"
+                "只基于本会话已经获得的工具结果和授权上下文，立即输出一个符合 OUTPUT CONTRACT 的 JSON 对象。"
+                "若资料不足，返回 status=partial 并如实写明限制；不要输出空内容、Markdown 或解释文字。"
+            )
 
         initial_prompt = (
             f"执行系统提示中的当前 {entry.display_name} 任务。按需调用允许的工具。"
@@ -405,13 +455,17 @@ class InvestmentResearchRuntimeAdapter:
         )
         try:
             async with asyncio.timeout(request.timeout_seconds):
-                raw_output = await run_turn(initial_prompt)
-                parsed, validation_error = self._validate_output(
-                    raw_output,
-                    entry.agent_id,
-                    entry.output_model,
-                    run_id,
+                raw_output, execution_error = await run_turn_with_empty_response_retry(
+                    initial_prompt,
+                    phase="initial response",
                 )
+                if execution_error is None:
+                    parsed, validation_error = self._validate_output(
+                        raw_output,
+                        entry.agent_id,
+                        entry.output_model,
+                        run_id,
+                    )
                 repair_count = 0
                 while (
                     parsed is None
@@ -424,12 +478,19 @@ class InvestmentResearchRuntimeAdapter:
                         f"{entry.display_name} output required JSON/schema repair attempt "
                         f"{repair_count}."
                     )
-                    raw_output = await run_turn(
+                    raw_output, execution_error = await run_turn_with_empty_response_retry(
                         f"上一条输出未通过 {entry.output_contract_name} 校验。"
                         "不要重新调研或调用新工具，只修复 JSON；只能返回一个 JSON 对象。"
+                        "保留上一条已经有依据的内容，不能为了通过校验而编造来源、事实或编号。"
+                        "如果校验错误要求 completed 结果具备某项内容，而现有证据无法支持该项内容，"
+                        "请将 status 改为 partial，并在 unverified_items 或 limitations 中说明缺口；"
+                        "不要保留 status=completed 却遗漏必填研究结论。"
                         "不得创造证据库不存在的编号。校验错误如下：\n"
-                        f"{validation_error}"
+                        f"{validation_error}",
+                        phase=f"schema repair {repair_count}",
                     )
+                    if execution_error is not None:
+                        break
                     parsed, validation_error = self._validate_output(
                         raw_output,
                         entry.agent_id,
@@ -463,6 +524,9 @@ class InvestmentResearchRuntimeAdapter:
                 tool_calls=tool_calls,
                 usage=usage,
                 warnings=warnings,
+                failure_class=_classify_failure(execution_error, tool_calls),
+                retry_count=1 if warnings and any("retried" in item for item in warnings) else 0,
+                degraded=True,
                 error=execution_error,
             )
             self._record_execution_event(run_id, task_id, result)
@@ -478,6 +542,9 @@ class InvestmentResearchRuntimeAdapter:
                 tool_calls=tool_calls,
                 usage=usage,
                 warnings=warnings,
+                failure_class=_classify_failure(validation_error, tool_calls),
+                retry_count=1 if repair_count else 0,
+                degraded=True,
                 error=_sanitize_text(
                     validation_error or f"{entry.display_name} returned invalid JSON."
                 ),
@@ -514,6 +581,9 @@ class InvestmentResearchRuntimeAdapter:
             review_id=persisted.get("review_id"),
             report_id=persisted.get("report_id"),
             warnings=warnings,
+            retry_count=(1 if any("retried" in item for item in warnings) else 0)
+            + sum("repair attempt" in item for item in warnings),
+            degraded=bool(warnings),
         )
         self._record_execution_event(run_id, task_id, result)
         return result
@@ -532,6 +602,8 @@ class InvestmentResearchRuntimeAdapter:
             runtime_agent_name=entry.runtime_agent_name,
             model=model,
             warnings=["The Agent was not started because runtime preconditions failed."],
+            failure_class="input_error" if "Input references" in reason else "permission_error",
+            degraded=True,
             error=_sanitize_text(reason),
         )
 
@@ -626,6 +698,10 @@ class InvestmentResearchRuntimeAdapter:
                 "tool_names": [item.tool_name for item in result.tool_calls],
                 "usage": result.usage.model_dump(mode="json"),
                 "artifact_id": result.artifact_id,
+                "failure_class": result.failure_class,
+                "retry_count": result.retry_count,
+                "degraded": result.degraded,
+                "fallback_used": result.fallback_used,
                 "error": result.error,
             },
             submitted_by=result.agent_id,
@@ -743,6 +819,45 @@ def _sanitize_text(text: str) -> str:
     for pattern in _SECRET_PATTERNS:
         sanitized = pattern.sub("[REDACTED]", sanitized)
     return sanitized
+
+
+def _is_retryable_empty_response(error: str | None) -> bool:
+    """Identify the provider response condition that is safe to retry once."""
+
+    if not error:
+        return False
+    normalized = error.lower()
+    return "model returned an empty assistant message" in normalized
+
+
+def _classify_failure(
+    error: str | None,
+    tool_calls: list[ToolCallTrace],
+) -> FailureClass:
+    """Normalize provider/runtime failures for orchestration and UI decisions."""
+
+    normalized = (error or "").lower()
+    if "empty model output" in normalized or "empty assistant" in normalized:
+        return "empty_response"
+    if "401" in normalized or "403" in normalized or "unauthorized" in normalized:
+        return "provider_auth"
+    if "429" in normalized or "rate limit" in normalized or "too many requests" in normalized:
+        return "rate_limit"
+    if "timeout" in normalized or "timed out" in normalized or "execution exceeded" in normalized:
+        return "timeout"
+    if any(marker in normalized for marker in ("network", "connection", "httpx", "5xx")):
+        return "network"
+    if any(item.is_error for item in tool_calls):
+        return "tool_error"
+    if "json" in normalized:
+        return "invalid_json"
+    if "schema" in normalized or "requires" in normalized:
+        return "schema_error"
+    if "permission" in normalized or "not allowed" in normalized:
+        return "permission_error"
+    if "input" in normalized or "reference" in normalized:
+        return "input_error"
+    return "unknown"
 
 
 def _sanitize_value(value: Any) -> Any:

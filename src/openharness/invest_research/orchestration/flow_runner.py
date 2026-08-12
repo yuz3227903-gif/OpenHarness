@@ -1,4 +1,4 @@
-"""Command-line entry point for the minimal CrewAI/OpenHarness flow."""
+"""Command-line entry point for the parallel CrewAI/OpenHarness smoke flow."""
 
 from __future__ import annotations
 
@@ -10,27 +10,37 @@ from pathlib import Path
 from typing import Any
 
 from openharness.invest_research.orchestration import configure_crewai_environment
+from openharness.invest_research.report_delivery import write_run_summary
 
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def _write_receipt(payload: dict[str, Any]) -> Path:
-    output_dir = _project_root() / ".openharness" / "validation"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "crewai-flow-smoke.json"
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+def _write_receipt(payload: dict[str, Any], *, complete_report: bool) -> Path:
+    compatibility_name = (
+        "full-chain.json" if complete_report else "crewai-flow-smoke.json"
+    )
+    return write_run_summary(
+        _project_root(),
+        str(payload["run_id"]),
+        payload,
+        compatibility_name=compatibility_name,
+    )
 
 
-async def run(company: str, as_of_date: date) -> tuple[dict[str, Any], Path]:
+async def run(
+    company: str,
+    as_of_date: date,
+    *,
+    complete_report: bool = False,
+) -> tuple[dict[str, Any], Path]:
     configure_crewai_environment(_project_root())
     from openharness.invest_research.orchestration.research_flow import (
         InvestmentResearchSmokeFlow,
     )
 
-    flow = InvestmentResearchSmokeFlow()
+    flow = InvestmentResearchSmokeFlow(complete_report=complete_report)
     result = await flow.kickoff_async(
         inputs={
             "company_query": company,
@@ -38,25 +48,42 @@ async def run(company: str, as_of_date: date) -> tuple[dict[str, Any], Path]:
         }
     )
     payload = result if isinstance(result, dict) else flow.summary()
-    payload["pass"] = (
-        payload.get("pipeline_status") == "completed"
-        and payload.get("runtime_executions") == 2
+    base_pass = (
+        payload.get("pipeline_status") in {"completed", "awaiting_reviewer_recheck", "completed_with_warnings"}
+        and payload.get("runtime_executions", 0) >= 6
+        and {
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+        }.issubset(set(payload.get("agent_results", {})))
+        and payload["agent_results"]["risk"].get("output_status")
+        in {"completed", "partial"}
+        and payload["agent_results"]["reviewer_arbiter"].get("output_status")
+        in {"completed", "partial"}
+        and payload["agent_results"]["reviewer_arbiter"].get("review_id")
         and payload.get("orchestrator_llm_calls") == 0
     )
-    path = _write_receipt(payload)
+    payload["pass"] = bool(payload.get("report_generated")) if complete_report else base_pass
+    path = _write_receipt(payload, complete_report=complete_report)
     return payload, path
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--company", default="宁德时代 CATL 300750.SZ")
+    parser.add_argument("--complete-report", action="store_true")
     parser.add_argument(
         "--as-of-date",
         type=date.fromisoformat,
         default=datetime.now(UTC).date(),
     )
     args = parser.parse_args()
-    payload, path = asyncio.run(run(args.company, args.as_of_date))
+    payload, path = asyncio.run(
+        run(args.company, args.as_of_date, complete_report=args.complete_report)
+    )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     print(f"CrewAI flow receipt: {path}")
     return 0 if payload["pass"] else 1

@@ -19,7 +19,33 @@ from openharness.invest_research.uploaded_file_tool import (
     ReadUploadedFileInput,
     ReadUploadedFileTool,
 )
-from openharness.tools.base import ToolExecutionContext
+from openharness.invest_research.runtime_tools import BudgetedTool
+from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from pydantic import BaseModel
+
+
+class _RetryInput(BaseModel):
+    query: str
+
+
+class _TransientReadOnlyTool(BaseTool):
+    name = "transient_read_only"
+    description = "Test-only read-only tool."
+    input_model = _RetryInput
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def execute(self, arguments, context):
+        del arguments, context
+        self.calls += 1
+        if self.calls == 1:
+            return ToolResult("temporary connection error", is_error=True)
+        return ToolResult("ok")
+
+    def is_read_only(self, arguments):
+        del arguments
+        return True
 
 
 class EvidenceStoreAndToolTests(unittest.TestCase):
@@ -179,6 +205,25 @@ class EvidenceStoreAndToolTests(unittest.TestCase):
         outside.write_text("do not read", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "inside the current Run"):
             self.store.register_uploaded_file("RUN-ONE", outside)
+
+    def test_budgeted_read_only_tool_retries_one_transient_failure(self):
+        delegate = _TransientReadOnlyTool()
+        tool = BudgetedTool(delegate)
+        result = asyncio.run(
+            tool.execute(
+                _RetryInput(query="test"),
+                self.context(
+                    "RUN-ONE",
+                    tool_limits={"transient_read_only": 2},
+                    tool_counts={},
+                ),
+            )
+        )
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.output, "ok")
+        self.assertEqual(delegate.calls, 2)
+        self.assertEqual(result.metadata["retry_count"], 1)
 
 
 if __name__ == "__main__":

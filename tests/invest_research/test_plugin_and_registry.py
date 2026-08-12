@@ -34,7 +34,7 @@ EXPECTED_MAX_TURNS = {
     "market_catalyst": 12,
     "risk": 12,
     "reviewer_arbiter": 10,
-    "report_writer": 8,
+    "report_writer": 2,
 }
 
 EXPECTED_TOOLS = {
@@ -68,7 +68,7 @@ EXPECTED_TOOLS = {
         "calculator",
     ),
     "reviewer_arbiter": ("evidence_query",),
-    "report_writer": ("evidence_query",),
+    "report_writer": (),
 }
 
 
@@ -134,14 +134,15 @@ class PluginAndRegistryTests(unittest.TestCase):
                 self.assertEqual(entry.pending_tools, ())
                 self.assertNotIn("pending_implementation", entry.tool_statuses.values())
 
-    def test_reviewer_and_writer_have_narrow_read_only_evidence_access(self):
+    def test_reviewer_has_read_only_access_and_writer_has_no_tools(self):
         reviewer = AGENT_REGISTRY["reviewer_arbiter"]
         writer = AGENT_REGISTRY["report_writer"]
 
         self.assertEqual(reviewer.allowed_tools, ("evidence_query",))
         self.assertEqual(reviewer.evidence_query_scope, "run_records_read_only")
-        self.assertEqual(writer.allowed_tools, ("evidence_query",))
-        self.assertEqual(writer.evidence_query_scope, "approved_records_only")
+        self.assertEqual(writer.allowed_tools, ())
+        self.assertEqual(writer.evidence_query_scope, "none")
+        self.assertIn("evidence_query", writer.disallowed_tools)
 
         forbidden_external_tools = {
             "tavily_search",

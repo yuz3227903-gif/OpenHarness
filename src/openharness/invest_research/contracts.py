@@ -584,10 +584,7 @@ class ReportResult(AgentResultBase):
     metadata: ReportMetadata | None = None
     sections: list[ReportSection] = Field(default_factory=list)
     section_evidence_map: dict[str, list[str]] = Field(default_factory=dict)
-    three_approved_logics: list[LogicCandidate] = Field(default_factory=list, max_length=3)
-    catalysts: list[CatalystEvent] = Field(default_factory=list)
-    risks: list[RiskItem] = Field(default_factory=list)
-    peer_comparison: list[PeerComparisonRow] = Field(default_factory=list)
+    included_logic_ids: list[LogicId] = Field(default_factory=list, max_length=3)
     tracking_indicators: list[str] = Field(default_factory=list)
     compliance_statement: str | None = None
     report_blockers: list[ReportBlocker] = Field(default_factory=list)
@@ -595,10 +592,41 @@ class ReportResult(AgentResultBase):
     @model_validator(mode="after")
     def validate_completed_report(self) -> "ReportResult":
         if self.status == "completed":
-            if len(self.three_approved_logics) != 3:
+            if len(self.included_logic_ids) != 3:
                 raise ValueError("completed ReportResult requires exactly three approved logics")
-            if self.metadata is None or not self.title or not self.sections:
-                raise ValueError("completed ReportResult requires title, metadata, and sections")
+            required_sections = {
+                "company_overview",
+                "operating_changes",
+                "investment_logics",
+                "peer_comparison",
+                "catalysts",
+                "risks",
+                "tracking_indicators",
+                "limitations",
+            }
+            actual_sections = {item.section_id for item in self.sections}
+            if self.metadata is None or not self.title or actual_sections != required_sections:
+                raise ValueError(
+                    "completed ReportResult requires title, metadata, and exactly eight "
+                    "required sections"
+                )
+            evidence_required = {
+                "operating_changes",
+                "investment_logics",
+                "peer_comparison",
+                "catalysts",
+                "risks",
+            }
+            missing_evidence = sorted(
+                item.section_id
+                for item in self.sections
+                if item.section_id in evidence_required and not item.evidence_ids
+            )
+            if missing_evidence:
+                raise ValueError(
+                    "completed ReportResult core sections require evidence IDs: "
+                    + ", ".join(missing_evidence)
+                )
             if not self.compliance_statement:
                 raise ValueError("completed ReportResult requires compliance_statement")
         return self

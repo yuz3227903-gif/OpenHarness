@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 
 import httpx
@@ -313,6 +315,21 @@ def test_openai_client_init_passes_timeout(monkeypatch):
     OpenAICompatibleClient(api_key="test-key", timeout=45.0)
 
     assert captured["timeout"] == 45.0
+
+
+def test_openai_client_does_not_inherit_shell_proxy_by_default(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _StubAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openharness.api.openai_client.AsyncOpenAI", _StubAsyncOpenAI)
+    OpenAICompatibleClient(api_key="test-key")
+
+    http_client = captured["http_client"]
+    assert http_client._trust_env is False
+    asyncio.run(http_client.aclose())
 
 
 def test_openai_client_uses_bearer_authorization_header():

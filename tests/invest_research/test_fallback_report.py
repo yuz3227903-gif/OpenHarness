@@ -74,7 +74,7 @@ class FallbackReportTests(unittest.TestCase):
         self.assertIn("三个最值得关注的投资逻辑", markdown)
         self.assertIn("风险资料待补充", markdown)
         self.assertIn("不构成投资建议", markdown)
-        self.assertEqual(result["report_quality"], "partial")
+        self.assertEqual(result["report_quality"], "fallback")
         self.assertEqual(result["failed_agents"], ["risk"])
 
     def test_successful_writer_markdown_still_contains_required_headings(self) -> None:

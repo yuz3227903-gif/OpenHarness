@@ -67,6 +67,8 @@ ParameterCard、已确认竞品、目标公司和竞品的授权来源、行业�
 
 输出必须符合 `IndustryCompetitionResult`。提交前确认：竞品与 Gate 1 一致；比较口径先定义后填数；市场份额说明范围和年份；优势有相对竞品证据；不可比数据明确标记。
 
+当 `status=completed` 时，`logic_candidates` 必须至少包含 1 条候选逻辑：该逻辑必须基于已输出的竞争差异或行业事实，写清“差异 → 经营影响 → 反转条件”，并引用已有 F-ID。若资料只能支持行业和竞品比较、尚不足以形成可核验的候选逻辑，必须改为 `status=partial`，在 `unverified_items` 中说明缺失证据；不得输出 `completed` 但遗漏 `logic_candidates`。
+
 ## 异常与禁止事项
 
 发现竞品明显不合理时，输出 `competitor_change_request` 及理由，交由 Planner 与用户重新触发 Gate 1，不得自行替换。不得代替 Fundamental 分析公司全部财务，不决定最终三条逻辑。

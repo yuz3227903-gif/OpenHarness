@@ -12,7 +12,16 @@ FlowStage = Literal[
     "created",
     "planner_running",
     "planner_completed",
-    "fundamental_running",
+    "research_running",
+    "research_completed",
+    "risk_running",
+    "risk_completed",
+    "reviewer_running",
+    "supplement_pending",
+    "supplement_research_running",
+    "supplement_risk_running",
+    "supplement_completed",
+    "final_reviewer_running",
     "completed",
     "failed",
 ]
@@ -43,11 +52,23 @@ class FlowAgentResult(BaseModel):
     model_call_id: str | None = None
     tool_names: list[str] = Field(default_factory=list)
     total_tokens: int = 0
+    source_ids: list[str] = Field(default_factory=list)
+    fact_ids: list[str] = Field(default_factory=list)
+    logic_ids: list[str] = Field(default_factory=list)
+    catalyst_ids: list[str] = Field(default_factory=list)
+    risk_ids: list[str] = Field(default_factory=list)
+    review_id: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    failure_class: str | None = None
+    retry_count: int = 0
+    degraded: bool = False
+    fallback_used: bool = False
     error: str | None = None
 
 
 class ResearchFlowState(BaseModel):
-    """Shared state for the minimal Planner-to-Fundamental CrewAI Flow."""
+    """Shared state for the minimal Planner-to-parallel-research CrewAI Flow."""
 
     id: str = ""
     run_id: str = Field(default_factory=lambda: f"RUN-CREWAI-{uuid4().hex[:12].upper()}")
@@ -57,7 +78,20 @@ class ResearchFlowState(BaseModel):
     pipeline_status: str = "created"
     parameter_card_id: str | None = None
     planner_output: dict[str, Any] | None = None
+    review_output: dict[str, Any] | None = None
+    initial_review_output: dict[str, Any] | None = None
+    final_review_output: dict[str, Any] | None = None
+    report_result: dict[str, Any] | None = None
+    report_path: str | None = None
+    report_quality: Literal["complete", "partial", "fallback"] | None = None
+    report_generated: bool = False
+    review_status: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    total_retry_count: int = 0
+    fallback_used: bool = False
+    supplement_round: int = 0
     agent_results: dict[str, FlowAgentResult] = Field(default_factory=dict)
+    artifact_history: dict[str, list[str]] = Field(default_factory=dict)
     events: list[CollaborationEvent] = Field(default_factory=list)
     orchestrator_llm_calls: int = 0
 

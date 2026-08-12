@@ -27,8 +27,9 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    def __init__(self, response: _FakeResponse) -> None:
+    def __init__(self, response: _FakeResponse, **kwargs) -> None:
         self.response = response
+        self.kwargs = kwargs
         self.requests: list[dict] = []
 
     async def __aenter__(self):
@@ -81,8 +82,14 @@ class TavilyToolTests(unittest.TestCase):
                 ],
             },
         )
-        fake_client = _FakeClient(fake_response)
-        tool = TavilySearchTool(client_factory=lambda **kwargs: fake_client)
+        created: dict[str, _FakeClient] = {}
+
+        def client_factory(**kwargs):
+            fake_client = _FakeClient(fake_response, **kwargs)
+            created["client"] = fake_client
+            return fake_client
+
+        tool = TavilySearchTool(client_factory=client_factory)
         fake_key = "tvly-unit-test-secret"
 
         with patch.dict(os.environ, {"TAVILY_API_KEY": fake_key}, clear=False):
@@ -98,8 +105,10 @@ class TavilyToolTests(unittest.TestCase):
             )
 
         self.assertFalse(result.is_error)
+        fake_client = created["client"]
         self.assertEqual(len(fake_client.requests), 1)
         request = fake_client.requests[0]
+        self.assertFalse(created["client"].kwargs["trust_env"])
         self.assertEqual(request["url"], TAVILY_SEARCH_ENDPOINT)
         self.assertEqual(request["headers"]["Authorization"], f"Bearer {fake_key}")
         self.assertFalse(request["json"]["include_answer"])

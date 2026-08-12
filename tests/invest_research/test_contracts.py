@@ -223,6 +223,95 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             INPUT_MODELS["report_writer"].model_validate(payload)
 
+    def test_completed_report_uses_lightweight_eight_section_contract(self):
+        payload = deepcopy(valid_output_payloads()["report_writer"])
+        payload.update(
+            {
+                "status": "completed",
+                "title": "示例公司研究报告",
+                "metadata": {
+                    "company_name": "示例公司",
+                    "ticker": "000001.SZ",
+                    "as_of_date": "2026-08-11",
+                    "research_period": DATE_RANGE,
+                    "catalyst_window": DATE_RANGE,
+                },
+                "included_logic_ids": ["L-DEMO-001", "L-DEMO-002", "L-DEMO-003"],
+                "sections": [
+                    {
+                        "section_id": section_id,
+                        "title": section_id,
+                        "content": "有依据的示例内容",
+                        "evidence_ids": ["L-DEMO-001"]
+                        if section_id
+                        in {
+                            "operating_changes",
+                            "investment_logics",
+                            "peer_comparison",
+                            "catalysts",
+                            "risks",
+                        }
+                        else [],
+                    }
+                    for section_id in (
+                        "company_overview",
+                        "operating_changes",
+                        "investment_logics",
+                        "peer_comparison",
+                        "catalysts",
+                        "risks",
+                        "tracking_indicators",
+                        "limitations",
+                    )
+                ],
+                "compliance_statement": "本报告不构成投资建议。",
+            }
+        )
+
+        result = OUTPUT_MODELS["report_writer"].model_validate(payload)
+
+        self.assertEqual(len(result.sections), 8)
+        self.assertEqual(len(result.included_logic_ids), 3)
+
+    def test_completed_report_rejects_missing_core_section_evidence(self):
+        payload = deepcopy(valid_output_payloads()["report_writer"])
+        payload.update(
+            {
+                "status": "completed",
+                "title": "示例公司研究报告",
+                "metadata": {
+                    "company_name": "示例公司",
+                    "ticker": "000001.SZ",
+                    "as_of_date": "2026-08-11",
+                    "research_period": DATE_RANGE,
+                    "catalyst_window": DATE_RANGE,
+                },
+                "included_logic_ids": ["L-DEMO-001", "L-DEMO-002", "L-DEMO-003"],
+                "sections": [
+                    {
+                        "section_id": section_id,
+                        "title": section_id,
+                        "content": "示例内容",
+                        "evidence_ids": [],
+                    }
+                    for section_id in (
+                        "company_overview",
+                        "operating_changes",
+                        "investment_logics",
+                        "peer_comparison",
+                        "catalysts",
+                        "risks",
+                        "tracking_indicators",
+                        "limitations",
+                    )
+                ],
+                "compliance_statement": "本报告不构成投资建议。",
+            }
+        )
+
+        with self.assertRaisesRegex(ValidationError, "require evidence IDs"):
+            OUTPUT_MODELS["report_writer"].model_validate(payload)
+
     def test_risk_can_continue_with_one_available_upstream_artifact(self):
         payload = valid_input_payloads()["risk"]
         payload["industry_competition_artifact_id"] = None

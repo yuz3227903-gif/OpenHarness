@@ -10,6 +10,7 @@ import re
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from openai import AsyncOpenAI
 
 from openharness.api.client import (
@@ -268,6 +269,12 @@ class OpenAICompatibleClient:
         kwargs: dict[str, Any] = {
             "api_key": api_key,
             "default_headers": {"Authorization": f"Bearer {api_key}"},
+            # Do not silently inherit HTTP(S)_PROXY from the shell. A stale
+            # local proxy is otherwise indistinguishable from a provider
+            # outage and prevents every Agent from reaching its model. Users
+            # who require a corporate proxy should configure it explicitly at
+            # the application/network layer instead.
+            "http_client": httpx.AsyncClient(trust_env=False),
         }
         normalized_base_url = _normalize_openai_base_url(base_url)
         if normalized_base_url:
