@@ -267,6 +267,80 @@ class GenericRuntimeAdapterTests(unittest.TestCase):
                 self.assertEqual(result.agent_id, agent_id)
                 self.assertIsNotNone(result.artifact_id)
 
+    def test_report_writer_can_use_section_contract_without_persisting_each_chapter(self):
+        section_output = {
+            "protocol_version": "1.0",
+            "status": "completed",
+            "completed_scope": ["investment_logics"],
+            "evidence_refs": ["L-DEMO-001", "L-DEMO-002", "L-DEMO-003"],
+            "unverified_items": [],
+            "limitations": [],
+            "handoff_requests": [],
+            "blocking_reasons": [],
+            "section_id": "investment_logics",
+            "title": "三个最值得关注的投资逻辑",
+            "content": "基于三条已授权候选逻辑形成章节。",
+            "evidence_ids": ["L-DEMO-001", "L-DEMO-002", "L-DEMO-003"],
+            "logic_ids": ["L-DEMO-001", "L-DEMO-002", "L-DEMO-003"],
+            "warnings": [],
+        }
+        payload = {
+            **_inputs()["report_writer"],
+            "section_id": "investment_logics",
+            "allowed_evidence_ids": ["L-DEMO-001", "L-DEMO-002", "L-DEMO-003"],
+            "attempt": 1,
+        }
+        result = asyncio.run(
+            self.adapter(json.dumps(section_output, ensure_ascii=False)).execute_agent(
+                AgentExecutionRequest(
+                    agent_id="report_writer",
+                    input_payload=payload,
+                    output_contract="report_section",
+                    persist_output=False,
+                )
+            )
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(result.structured_output["section_id"], "investment_logics")
+        self.assertIsNone(result.artifact_id)
+        self.assertIsNone(result.report_id)
+
+    def test_reviewer_uses_backend_issued_review_and_audit_metadata(self):
+        audit_id = "ART-EVIDENCE-AUDIT-DEMO-FINAL"
+        self.store.upsert_record(
+            "artifact",
+            audit_id,
+            RUN_ID,
+            {"artifact_id": audit_id, "artifact_type": "evidence_audit"},
+            status="pass_with_warnings",
+            submitted_by="system",
+        )
+        input_payload = _inputs()["reviewer_arbiter"]
+        input_payload.update(
+            {
+                "review_stage": "final",
+                "expected_review_id": "REVIEW-DEMO-FINAL-001",
+                "audit_artifact_id": audit_id,
+                "audit_status": "pass_with_warnings",
+            }
+        )
+
+        result = asyncio.run(
+            self.adapter(_output("reviewer_arbiter")).execute_agent(
+                AgentExecutionRequest(
+                    agent_id="reviewer_arbiter",
+                    input_payload=input_payload,
+                )
+            )
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(result.review_id, "REVIEW-DEMO-FINAL-001")
+        self.assertEqual(result.structured_output["review_stage"], "final")
+        self.assertEqual(result.structured_output["audit_artifact_id"], audit_id)
+        self.assertEqual(result.structured_output["audit_status"], "pass_with_warnings")
+
     def test_unknown_cross_run_input_reference_blocks_before_model(self):
         payload = _inputs()["fundamental"]
         payload["source_ids"] = ["S-DOES-NOT-EXIST"]

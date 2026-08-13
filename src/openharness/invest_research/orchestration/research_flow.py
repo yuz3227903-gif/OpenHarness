@@ -14,6 +14,15 @@ configure_crewai_environment()
 
 from crewai.flow.flow import Flow, listen, start
 
+from openharness.invest_research.delivery_decision import (
+    DeliveryDecisionBuilder,
+    register_recovery_review,
+)
+from openharness.invest_research.evidence_audit import (
+    EvidenceAuditService,
+    review_id_for,
+)
+from openharness.invest_research.fallback_report import write_fallback_report
 from openharness.invest_research.orchestration.flow_state import (
     CollaborationEvent,
     FlowAgentResult,
@@ -22,14 +31,23 @@ from openharness.invest_research.orchestration.flow_state import (
 from openharness.invest_research.orchestration.runtime_gateway import (
     OpenHarnessRuntimeGateway,
 )
-from openharness.invest_research.fallback_report import write_fallback_report
+from openharness.invest_research.planner_recovery import (
+    is_competitor_placeholder,
+    recover_partial_planner_output,
+)
 from openharness.invest_research.report_context import ReportContextBuilder
 from openharness.invest_research.report_delivery import (
     run_output_dir,
     write_report_context,
     write_report_markdown,
 )
+from openharness.invest_research.report_sections import SectionReportOrchestrator
+from openharness.invest_research.research_budget import (
+    DEFAULT_RESEARCH_BUDGET_POLICY,
+    ResearchBudgetPolicy,
+)
 from openharness.invest_research.runtime_adapter import AgentExecutionResult
+from openharness.invest_research.source_catalog import build_shared_source_catalog
 
 
 _REPORT_CONTEXT_MAX_CHARS = 24_000
@@ -43,12 +61,86 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         gateway: OpenHarnessRuntimeGateway | None = None,
         *,
         complete_report: bool = False,
+        budget_policy: ResearchBudgetPolicy | None = None,
     ) -> None:
         super().__init__()
         self.gateway = gateway or OpenHarnessRuntimeGateway()
         self.complete_report = complete_report
+        self.budget_policy = budget_policy or DEFAULT_RESEARCH_BUDGET_POLICY
         self._project_root = Path(__file__).resolve().parents[4]
         self._raw_results: dict[str, AgentExecutionResult] = {}
+
+    def _recover_planner_parameter_card(
+        self, result: AgentExecutionResult
+    ) -> AgentExecutionResult:
+        """Recover a traceable provisional card from a partial Planner output."""
+
+        if result.status != "succeeded" or result.parameter_card_id:
+            return result
+        outcome = recover_partial_planner_output(
+            run_id=self.state.run_id,
+            company_query=self.state.company_query,
+            as_of_date=self.state.as_of_date,
+            output=result.structured_output,
+            source_ids=result.source_ids,
+        )
+        if outcome is None:
+            return result
+
+        store = self.gateway.evidence_store
+        if store is None:
+            return result
+        gate_payload = outcome.payload.get("gate_1_payload") or {}
+        if hasattr(store, "persist_provisional_parameter_card"):
+            store.persist_provisional_parameter_card(
+                run_id=self.state.run_id,
+                parameter_card_id=outcome.parameter_card_id,
+                payload=gate_payload,
+                reason=outcome.reason,
+            )
+        else:
+            store.upsert_record(
+                "parameter_card",
+                outcome.parameter_card_id,
+                self.state.run_id,
+                {
+                    "parameter_card_id": outcome.parameter_card_id,
+                    "version": "1.0",
+                    "run_id": self.state.run_id,
+                    "recovery_used": True,
+                    "recovery_reason": outcome.reason,
+                    **gate_payload,
+                },
+                status="provisional",
+                submitted_by="system",
+            )
+
+        result.structured_output = outcome.payload
+        result.parameter_card_id = outcome.parameter_card_id
+        result.degraded = True
+        warning = (
+            "Planner returned a traceable partial result without a usable parameter card; "
+            "the backend created a provisional card so specialist research could continue."
+        )
+        if outcome.placeholder_competitor_count:
+            warning += (
+                f" IndustryCompetition must identify and replace "
+                f"{outcome.placeholder_competitor_count} competitor placeholder(s)."
+            )
+        result.warnings = list(dict.fromkeys([*result.warnings, warning]))
+        self.state.recovery_used = True
+        if not self.state.recovery_reason:
+            self.state.recovery_reason = outcome.reason
+        self.state.recovery_actions.append(outcome.reason)
+        self._event(
+            "planner_parameter_card_recovered",
+            "system",
+            "Planner 部分结果已恢复为暂定参数卡；缺失竞品交由行业竞品 Agent 核验补齐。",
+            target_agent_ids=["industry_competition"],
+            task_id="TASK-CREWAI-PLANNER-001",
+            artifact_id=result.artifact_id,
+        )
+        return result
 
     def _event(
         self,
@@ -81,6 +173,19 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         output_status = None
         if result.structured_output:
             output_status = str(result.structured_output.get("status") or "") or None
+        cache_hits = sum(
+            1 for item in result.tool_calls if bool((item.metadata or {}).get("cache_hit"))
+        )
+        external_calls = sum(
+            1
+            for item in result.tool_calls
+            if bool((item.metadata or {}).get("external_call"))
+        )
+        budget_exhausted = sum(
+            1
+            for item in result.tool_calls
+            if (item.metadata or {}).get("reason") == "tool_budget_exhausted"
+        )
         self.state.agent_results[result.agent_id] = FlowAgentResult(
             agent_id=result.agent_id,
             execution_status=result.status,
@@ -90,6 +195,10 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             model=result.model,
             model_call_id=result.model_call_id,
             tool_names=[item.tool_name for item in result.tool_calls],
+            tool_invocation_count=len(result.tool_calls),
+            external_tool_call_count=external_calls,
+            cache_hit_count=cache_hits,
+            budget_exhausted_count=budget_exhausted,
             total_tokens=result.usage.total_tokens,
             source_ids=result.source_ids,
             fact_ids=result.fact_ids,
@@ -114,6 +223,7 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
 
     @start()
     async def run_planner(self) -> AgentExecutionResult:
+        budget = self.budget_policy.for_agent("planner")
         self.state.current_stage = "planner_running"
         self.state.pipeline_status = "running"
         task_id = "TASK-CREWAI-PLANNER-001"
@@ -136,14 +246,19 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 "as_of_date": self.state.as_of_date.isoformat(),
             },
             task_prompt=(
+                "执行顺序是硬约束：先核验目标公司，再用尽可能少的搜索同时识别两家主要竞品；"
+                "只有已经得到两家竞品候选后，才使用 web_fetch 核验关键页面。"
+                "不得把全部搜索预算消耗在单一公司或单一竞品上。"
                 "只执行规划职责。使用 tavily_search 核验目标公司和竞品，必要时使用 "
                 "web_fetch 读取公开页面。输出完整 PlannerResult JSON，不撰写研报正文。"
                 "task_plan 必须且只能包含六项，assigned_agent_id 分别为 fundamental、"
                 "industry_competition、market_catalyst、risk、reviewer_arbiter、report_writer。"
             ),
-            max_turns=8,
-            tool_call_limits={"tavily_search": 4, "web_fetch": 4},
+            max_turns=budget.max_turns,
+            max_output_tokens=budget.max_output_tokens,
+            tool_call_limits=budget.tool_call_limits,
         )
+        result = self._recover_planner_parameter_card(result)
         self._store_result(result)
         self.state.parameter_card_id = result.parameter_card_id
         self.state.planner_output = result.structured_output
@@ -186,6 +301,14 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         timeout_seconds: float | None = None,
     ) -> AgentExecutionResult:
         task_id = input_payload["task_id"]
+        budget = self.budget_policy.for_agent(agent_id)
+        effective_limits = {
+            tool_name: min(
+                int(requested_limit),
+                int(budget.tool_call_limits.get(tool_name, 0)),
+            )
+            for tool_name, requested_limit in tool_call_limits.items()
+        }
         started_at = datetime.now(UTC)
         self._event(
             "task_started",
@@ -200,7 +323,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             input_payload=input_payload,
             task_prompt=task_prompt,
             context_package=context_package,
-            tool_call_limits=tool_call_limits,
+            max_turns=budget.max_turns,
+            max_output_tokens=budget.max_output_tokens,
+            tool_call_limits=effective_limits,
             timeout_seconds=timeout_seconds or 300,
         )
         completed_at = datetime.now(UTC)
@@ -226,7 +351,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         if planner_result.status != "succeeded" or not planner_result.parameter_card_id:
             if self.complete_report and not self.state.report_generated:
                 return self._write_fallback_report(
-                    f"Planner did not produce a usable parameter card: {planner_result.error or planner_result.status}"
+                    "Planner did not produce a usable parameter card after bounded recovery: "
+                    f"{planner_result.error or 'structured output was not traceable enough to recover'}",
+                    trigger_stage="planner_parameter_card_missing",
                 )
             return self.summary()
 
@@ -257,9 +384,47 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             "parameter_card_id": planner_result.parameter_card_id,
             "version": "1.0",
         }
+        company_identity = planner_output.get("company_identity") or {}
+        entity_names = [
+            company_identity.get("legal_name"),
+            company_identity.get("short_name"),
+            *[
+                item.get("company_name")
+                for item in competitors
+                if isinstance(item, dict)
+            ],
+        ]
+        source_catalog = (
+            build_shared_source_catalog(
+                self.gateway.evidence_store,
+                self.state.run_id,
+                entities=entity_names,
+            )
+            if self.gateway.evidence_store is not None
+            and hasattr(self.gateway.evidence_store, "source_catalog")
+            else []
+        )
         shared_context = {
             "planner_artifact_id": planner_result.artifact_id,
             "planner_context": planner_context,
+            "shared_source_catalog": source_catalog,
+            "source_reuse_policy": (
+                "Reuse existing S-IDs first. Search only for a clearly identified gap; "
+                "prefer A/B-grade sources and fetch a page only when its existing catalog "
+                "status is not fetched or verified. Search snippets are not financial facts."
+            ),
+            "planner_recovery": {
+                "recovery_used": bool(
+                    self.state.recovery_reason
+                    and self.state.recovery_reason.startswith("planner_")
+                ),
+                "recovery_reason": self.state.recovery_reason,
+                "competitor_placeholders": [
+                    item.get("company_name")
+                    for item in competitors
+                    if is_competitor_placeholder(item)
+                ],
+            },
         }
         specs = {
             "fundamental": {
@@ -289,6 +454,13 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             },
         }
 
+        if shared_context["planner_recovery"]["competitor_placeholders"]:
+            specs["industry_competition"]["prompt"] += (
+                " confirmed_competitors 中名称以‘待 IndustryCompetition 核验’开头的项目"
+                "只是系统占位，不是真实竞品。必须优先搜索并替换为真实、可追溯的主要竞品；"
+                "不能把占位名称写入事实或最终比较表。无法核验时返回 partial 并披露缺口。"
+            )
+
         results = await asyncio.gather(
             *(
                 self._run_research_agent(
@@ -310,7 +482,6 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 for agent_id, spec in specs.items()
             )
         )
-        successful_results = [result for result in results if result.status == "succeeded"]
         failed_results = [result for result in results if result.status != "succeeded"]
         self.state.current_stage = "research_completed"
         self.state.pipeline_status = (
@@ -352,6 +523,7 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             return self.summary()
 
         self.state.current_stage = "risk_running"
+        budget = self.budget_policy.for_agent("risk")
         task_id = "TASK-CREWAI-RISK-001"
         started_at = datetime.now(UTC)
         self._event(
@@ -398,13 +570,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                     ("fundamental", "industry_competition", "market_catalyst")
                 ),
             },
-            max_turns=3,
-            tool_call_limits={
-                "evidence_query": 0,
-                "tavily_search": 0,
-                "web_fetch": 0,
-                "calculator": 0,
-            },
+            max_turns=budget.max_turns,
+            max_output_tokens=budget.max_output_tokens,
+            tool_call_limits=budget.tool_call_limits,
             timeout_seconds=120,
             retry_transient=False,
         )
@@ -435,6 +603,7 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         if self.state.current_stage != "risk_completed":
             return self.summary()
 
+        budget = self.budget_policy.for_agent("reviewer_arbiter", stage="initial")
         upstream_ids = (
             "fundamental",
             "industry_competition",
@@ -449,6 +618,14 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         ]
         self.state.current_stage = "reviewer_running"
         task_id = "TASK-CREWAI-REVIEWER-001"
+        logic_ids = self._collect_limited_ids("logic", upstream_ids, limit=8)
+        audit = EvidenceAuditService(self.gateway.evidence_store).audit(
+            self.state.run_id,
+            "initial",
+            logic_ids=logic_ids,
+        )
+        self.state.initial_evidence_audit = audit.model_dump(mode="json")
+        expected_review_id = review_id_for(self.state.run_id, "initial")
         started_at = datetime.now(UTC)
         self._event(
             "task_handoff",
@@ -465,6 +642,10 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 "task_id": task_id,
                 "objective": "核查来源、统计口径、逻辑冲突与证据缺口，并给出结构化审查路由。",
                 "agent_id": "reviewer_arbiter",
+                "review_stage": "initial",
+                "expected_review_id": expected_review_id,
+                "audit_artifact_id": audit.audit_id,
+                "audit_status": audit.status,
                 "parameter_card": {
                     "parameter_card_id": self.state.parameter_card_id,
                     "version": "1.0",
@@ -472,15 +653,14 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 "research_artifact_ids": artifacts,
                 "source_ids": self._collect_limited_ids("source", upstream_ids, limit=12),
                 "fact_ids": self._collect_limited_ids("fact", upstream_ids, limit=16),
-                "logic_ids": self._collect_limited_ids("logic", upstream_ids, limit=8),
+                "logic_ids": logic_ids,
             },
             task_prompt=(
-                "Do not call tools in this stage unless the compact brief is completely missing. "
-                "Use context_package.compact_research_brief as the primary review package. "
-                "Output ReviewDecision JSON quickly. If there are at least three candidate logic IDs, "
-                "prefer decision=approve_with_warnings and include exactly three approved_logic_ids. "
-                "Record missing modules, source gaps or口径问题 as issues/limitations. "
-                "Limit issues to the 3 most important problems. Do not block and do not perform exhaustive evidence checks."
+                "先读取 context_package.evidence_audit，再使用 evidence_query 定向抽查候选 L-ID、"
+                "关联 F-ID 和 S-ID；最多两次查询，禁止外部搜索。只要三条逻辑均满足最小可追溯"
+                "底线，普通来源等级、角色集中、数据口径和覆盖问题应选择 approve_with_warnings，"
+                "不要阻断报告。只有缺少可修复的关键事实才 request_supplement，高等级冲突才"
+                "require_human_resolution。输出 ReviewDecision JSON，最多记录3个最重要问题。"
             ),
             context_package={
                 "research_artifact_ids": artifacts,
@@ -491,10 +671,16 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                     or not self.state.agent_results[agent_id].artifact_id
                 ),
                 "compact_research_brief": self._compact_research_brief(upstream_ids),
+                "evidence_audit": self.state.initial_evidence_audit,
+                "moderate_review_policy": {
+                    "hard_floor": "three logics; each has at least one current-Run Fact linked to a current-Run Source",
+                    "soft_warnings": "source grade, single-fact support, role concentration, ordinary scope or comparability gaps",
+                },
             },
-            max_turns=3,
-            tool_call_limits={"evidence_query": 0},
-            timeout_seconds=90,
+            max_turns=budget.max_turns,
+            max_output_tokens=budget.max_output_tokens,
+            tool_call_limits=budget.tool_call_limits,
+            timeout_seconds=120,
             retry_transient=False,
         )
         completed_at = datetime.now(UTC)
@@ -613,6 +799,7 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
 
         if issues_by_agent["risk"]:
             self.state.current_stage = "supplement_risk_running"
+            risk_budget = self.budget_policy.for_agent("risk")
             upstream = {
                 agent_id: item.artifact_id
                 for agent_id in ("fundamental", "industry_competition", "market_catalyst")
@@ -659,8 +846,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                         ("fundamental", "industry_competition", "market_catalyst")
                     ),
                 },
-                max_turns=3,
-                tool_call_limits={"evidence_query": 0, "tavily_search": 0, "web_fetch": 0, "calculator": 0},
+                max_turns=risk_budget.max_turns,
+                max_output_tokens=risk_budget.max_output_tokens,
+                tool_call_limits=risk_budget.tool_call_limits,
                 timeout_seconds=120,
                 retry_transient=False,
             )
@@ -697,16 +885,22 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             return self.summary()
 
         # A failed first reviewer should not trigger a second expensive reviewer
-        # call.  The report is still delivered from the collected artifacts and
-        # is explicitly marked as partial/fallback by _write_fallback_report.
+        # call. DeliveryDecisionBuilder will recover three traceable provisional
+        # logics before ReportWriter is considered.
         prior_reviewer = self.state.agent_results.get("reviewer_arbiter")
         if prior_reviewer and prior_reviewer.execution_status != "succeeded":
             self.state.review_status = "failed_with_warnings"
-            return self._write_fallback_report(
-                "ReviewerArbiter failed; skipped duplicate final review and delivered collected artifacts"
+            self.state.final_review_output = self.state.review_output or {}
+            self.state.current_stage = "completed"
+            self.state.pipeline_status = "running_with_warnings"
+            self.state.warnings.append(
+                "ReviewerArbiter failed; skipped duplicate final review and will "
+                "attempt evidence-backed provisional delivery."
             )
+            return self.summary()
 
         self.state.current_stage = "final_reviewer_running"
+        budget = self.budget_policy.for_agent("reviewer_arbiter", stage="final")
         upstream_ids = (
             "fundamental",
             "industry_competition",
@@ -720,6 +914,15 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             and self.state.agent_results[agent_id].artifact_id
         ]
         task_id = "TASK-CREWAI-FINAL-REVIEW-001"
+        logic_ids = self._collect_limited_ids("logic", upstream_ids, limit=8)
+        audit = EvidenceAuditService(self.gateway.evidence_store).audit(
+            self.state.run_id,
+            "final",
+            logic_ids=logic_ids,
+            prior_review=self.state.review_output,
+        )
+        self.state.final_evidence_audit = audit.model_dump(mode="json")
+        expected_review_id = review_id_for(self.state.run_id, "final")
         self._event(
             "task_handoff",
             "system",
@@ -735,6 +938,10 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 "task_id": task_id,
                 "objective": "复核补充后的研究成果，并决定哪些内容可以进入报告。",
                 "agent_id": "reviewer_arbiter",
+                "review_stage": "final",
+                "expected_review_id": expected_review_id,
+                "audit_artifact_id": audit.audit_id,
+                "audit_status": audit.status,
                 "parameter_card": {
                     "parameter_card_id": self.state.parameter_card_id,
                     "version": "1.0",
@@ -742,7 +949,7 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 "research_artifact_ids": artifact_ids,
                 "source_ids": self._collect_limited_ids("source", upstream_ids, limit=12),
                 "fact_ids": self._collect_limited_ids("fact", upstream_ids, limit=16),
-                "logic_ids": self._collect_limited_ids("logic", upstream_ids, limit=8),
+                "logic_ids": logic_ids,
                 "prior_issue_ids": [
                     issue.get("issue_id")
                     for issue in (self.state.review_output or {}).get("issues", [])
@@ -756,19 +963,22 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 ],
             },
             task_prompt=(
-                "Do not call tools. Use context_package.compact_research_brief and initial_review only. "
-                "Output ReviewDecision JSON. Prefer approve_with_warnings when three candidate logic IDs exist; "
-                "include exactly three approved_logic_ids. Keep unresolved issues as warnings instead of blocking report delivery."
+                "使用 context_package.evidence_audit，并可调用 evidence_query 一次抽查补充后的关键"
+                "S/F/L 链。禁止外部搜索。若三条逻辑满足最小可追溯底线，优先"
+                "approve_with_warnings 并保留普通问题；不要因 C 级来源、单条事实支持或角色集中"
+                "阻断报告。只有明确高等级冲突才 require_human_resolution。输出 ReviewDecision JSON。"
             ),
             context_package={
                 "research_artifact_ids": artifact_ids,
                 "initial_review": self.state.review_output or {},
                 "supplement_round": self.state.supplement_round,
                 "compact_research_brief": self._compact_research_brief(upstream_ids),
+                "evidence_audit": self.state.final_evidence_audit,
             },
-                max_turns=3,
-                tool_call_limits={"evidence_query": 0},
-                timeout_seconds=90,
+                max_turns=budget.max_turns,
+                max_output_tokens=budget.max_output_tokens,
+                tool_call_limits=budget.tool_call_limits,
+                timeout_seconds=120,
                 retry_transient=False,
         )
         self._store_result(result, started_at=datetime.now(UTC), completed_at=datetime.now(UTC))
@@ -804,20 +1014,64 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             return self.summary()
 
         review = self.state.final_review_output or self.state.review_output or {}
-        logic_ids = list(review.get("approved_logic_ids") or [])
-        if len(logic_ids) != 3:
-            return self._write_fallback_report(
-                "final review did not approve exactly three logic IDs"
-            )
-
         store = self.gateway.evidence_store
         if store is None:
             return self._write_fallback_report("evidence store is unavailable")
+        reviewer_result = self.state.agent_results.get("reviewer_arbiter")
+        recovery_reason = None
+        if reviewer_result and reviewer_result.execution_status != "succeeded":
+            recovery_reason = (
+                f"reviewer_{reviewer_result.failure_class or reviewer_result.execution_status}"
+            )
+        try:
+            delivery = DeliveryDecisionBuilder(store).build(
+                self.state.run_id,
+                review,
+                recovery_reason=recovery_reason,
+                audit_result=(
+                    self.state.final_evidence_audit
+                    or self.state.initial_evidence_audit
+                ),
+            )
+        except (OSError, ValueError) as exc:
+            return self._write_fallback_report(
+                f"delivery decision could not be built: {type(exc).__name__}: {exc}"
+            )
+        self.state.delivery_decision = delivery.model_dump(mode="json")
+        self.state.delivery_mode = delivery.delivery_mode
+        self.state.recovery_used = delivery.recovery_used
+        self.state.recovery_reason = delivery.recovery_reason
+        if delivery.warnings:
+            self.state.warnings.extend(
+                warning for warning in delivery.warnings if warning not in self.state.warnings
+            )
+        if delivery.delivery_mode == "fallback":
+            return self._write_fallback_report(
+                delivery.recovery_reason
+                or "fewer than three evidence-backed candidate logics are available"
+            )
+        logic_ids = list(delivery.selected_logic_ids)
+        if delivery.delivery_mode == "provisional":
+            register_recovery_review(store, self.state.run_id, delivery, review)
+            action = (
+                "Selected three traceable provisional logics with evidence-quality "
+                "and research-role diversity ranking."
+            )
+            if action not in self.state.recovery_actions:
+                self.state.recovery_actions.append(action)
+            self._event(
+                "delivery_recovered",
+                "system",
+                "Reviewer 未完成正式确认，系统从可追溯证据中暂定三条逻辑并继续生成报告。",
+                target_agent_ids=["report_writer"],
+            )
         try:
             report_context = ReportContextBuilder(
                 store, max_chars=_REPORT_CONTEXT_MAX_CHARS
             ).build(
-                self.state.run_id, review
+                self.state.run_id,
+                review,
+                delivery_decision=self.state.delivery_decision,
             )
             write_report_context(
                 self._project_root, self.state.run_id, report_context
@@ -827,68 +1081,137 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 f"report context could not be built: {type(exc).__name__}: {exc}"
             )
 
-        task_id = "TASK-CREWAI-REPORT-WRITER-001"
-        result = await self.gateway.execute(
-            agent_id="report_writer",
-            input_payload={
-                "protocol_version": "1.0",
-                "run_id": self.state.run_id,
-                "task_id": task_id,
-                "objective": "基于审查结果生成完整上市公司研究报告。",
-                "agent_id": "report_writer",
-                "parameter_card": {
-                    "parameter_card_id": self.state.parameter_card_id,
-                    "version": "1.0",
-                },
-                "review_id": review.get("review_id"),
-                "approved_fact_ids": review.get("approved_fact_ids", []),
-                "approved_logic_ids": logic_ids,
-                "approved_catalyst_ids": review.get("approved_catalyst_ids", []),
-                "approved_risk_ids": review.get("approved_risk_ids", []),
+        task_id = "TASK-CREWAI-REPORT-ASSEMBLE-001"
+        report_input = {
+            "protocol_version": "1.0",
+            "run_id": self.state.run_id,
+            "task_id": task_id,
+            "objective": "根据审查后的证据材料分章节生成上市公司研究报告。",
+            "agent_id": "report_writer",
+            "parameter_card": {
+                "parameter_card_id": self.state.parameter_card_id,
+                "version": "1.0",
             },
-            task_prompt=(
-                "不得调用工具。只使用 context_package.report_context。输出轻量 ReportResult JSON。"
-                "sections 必须恰好包含八个 section_id：company_overview、operating_changes、"
-                "investment_logics、peer_comparison、catalysts、risks、tracking_indicators、"
-                "limitations。included_logic_ids 必须恰好使用材料包中的三条 L-ID。核心章节"
-                "必须填写 evidence_ids。不得新增材料包中不存在的事实或编号。"
+            "review_id": delivery.review_id,
+            "delivery_mode": delivery.delivery_mode,
+            "selected_logic_ids": logic_ids,
+            "approved_fact_ids": review.get("approved_fact_ids", []),
+            "approved_logic_ids": logic_ids if delivery.delivery_mode == "formal" else [],
+            "approved_catalyst_ids": review.get("approved_catalyst_ids", []),
+            "approved_risk_ids": review.get("approved_risk_ids", []),
+        }
+        self.state.current_stage = "report_sections_running"
+        self.state.pipeline_status = "running"
+        orchestrator = SectionReportOrchestrator(
+            gateway=self.gateway,
+            project_root=self._project_root,
+            run_id=self.state.run_id,
+            report_context=report_context,
+            input_base=report_input,
+            event_callback=lambda event_type, section_id, message: self._event(
+                event_type,
+                "report_writer",
+                message,
+                target_agent_ids=["system"],
+                task_id=f"TASK-REPORT-SECTION-{section_id.upper().replace('_', '-')}",
             ),
-            context_package={"report_context": report_context},
-            max_turns=2,
-            tool_call_limits={},
-            timeout_seconds=180,
-            retry_transient=True,
+        )
+        try:
+            outcome = await orchestrator.run()
+        except (OSError, ValueError) as exc:
+            return self._write_fallback_report(
+                f"section report generation could not start: {type(exc).__name__}: {exc}",
+                trigger_stage="report_sections_running",
+            )
+
+        for section_id, record in outcome.section_records.items():
+            self.state.section_statuses[section_id] = record.execution_status
+            self.state.section_retry_counts[section_id] = max(0, record.attempts - 1)
+            self.state.section_artifact_ids[section_id] = record.artifact_id
+            self.state.section_token_usage[section_id] = record.usage.total_tokens
+            self.state.section_durations[section_id] = record.duration_seconds
+        self.state.completed_section_ids = [
+            key for key, value in self.state.section_statuses.items() if value == "completed"
+        ]
+        self.state.partial_section_ids = [
+            key for key, value in self.state.section_statuses.items() if value == "partial"
+        ]
+        self.state.failed_section_ids = [
+            key for key, value in self.state.section_statuses.items() if value == "failed"
+        ]
+        self.state.total_retry_count += sum(self.state.section_retry_counts.values())
+        if outcome.all_model_sections_failed:
+            return self._write_fallback_report(
+                "all six model-written report sections failed",
+                trigger_stage="report_sections_running",
+            )
+
+        self.state.current_stage = "report_assembling"
+        try:
+            persisted = store.persist_agent_output(
+                run_id=self.state.run_id,
+                task_id=task_id,
+                agent_id="report_writer",
+                payload=outcome.report_payload,
+            )
+        except (OSError, ValueError) as exc:
+            return self._write_fallback_report(
+                f"assembled report could not be persisted: {type(exc).__name__}: {exc}",
+                trigger_stage="report_assembling",
+            )
+        result = AgentExecutionResult(
+            status="succeeded",
+            agent_id="report_writer",
+            runtime_agent_name="investment-research:report_writer",
+            model="deepseek-v4-flash",
+            structured_output=outcome.report_payload,
+            raw_output=json.dumps(outcome.report_payload, ensure_ascii=False),
+            usage=outcome.total_usage,
+            artifact_id=persisted.get("artifact_id"),
+            report_id=persisted.get("report_id"),
+            degraded=bool(self.state.partial_section_ids or self.state.failed_section_ids),
+            warnings=[
+                f"Report section {section_id} was delivered as {status}."
+                for section_id, status in self.state.section_statuses.items()
+                if status != "completed"
+            ],
         )
         self._store_result(result, started_at=datetime.now(UTC), completed_at=datetime.now(UTC))
-        if result.status != "succeeded":
-            return self._write_fallback_report(
-                f"ReportWriter failed: {result.error or result.status}"
-            )
-        self.state.report_result = result.structured_output or {}
+        self.state.report_result = outcome.report_payload
         self.state.report_path = self._write_report_markdown(result)
         self.state.report_generated = True
+        self.state.formal_report_succeeded = True
+        self.state.fallback_used = False
         degraded = any(
             item.execution_status != "succeeded"
             for agent_id, item in self.state.agent_results.items()
             if agent_id != "report_writer"
-        ) or self.state.review_status in {
+        ) or delivery.delivery_mode == "provisional" or self.state.review_status in {
             "approve_with_warnings",
             "request_supplement",
             "require_human_resolution",
         }
+        degraded = degraded or bool(
+            self.state.partial_section_ids or self.state.failed_section_ids
+        )
         self.state.report_quality = "partial" if degraded else "complete"
         self.state.pipeline_status = "completed_with_warnings" if degraded else "completed"
         self._event(
             "report_generated",
             "report_writer",
-            "ReportWriter 已生成 Markdown 研究报告。",
+            "ReportWriter 已分章节生成并组装 Markdown 研究报告。",
             target_agent_ids=["system"],
             task_id=task_id,
             artifact_id=result.artifact_id,
         )
         return self.summary()
 
-    def _write_fallback_report(self, reason: str) -> dict[str, Any]:
+    def _write_fallback_report(
+        self,
+        reason: str,
+        *,
+        trigger_stage: str | None = None,
+    ) -> dict[str, Any]:
         if self.state.report_generated:
             self.state.warnings.append(f"fallback report already exists; skipped duplicate: {reason}")
             return self.summary()
@@ -926,6 +1249,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         self.state.report_path = str(output_path)
         self.state.report_generated = True
         self.state.fallback_used = True
+        self.state.formal_report_succeeded = False
+        self.state.delivery_mode = "fallback"
+        self.state.fallback_trigger_stage = trigger_stage or self.state.current_stage
         self.state.current_stage = "completed"
         self.state.pipeline_status = "completed_with_warnings"
         self.state.warnings.append(reason)
@@ -936,10 +1262,14 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         """Promote only explicitly review-approved records for ReportWriter."""
 
         store = self.gateway.evidence_store
-        if store is None or review.get("decision") not in {
+        if (
+            store is None
+            or review.get("audit_status") == "fail"
+            or review.get("decision") not in {
             "approve_for_report",
             "approve_with_warnings",
-        }:
+            }
+        ):
             return
         for record_type, key, status in (
             ("fact", "approved_fact_ids", "verified"),
@@ -968,6 +1298,12 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                 self.state.run_id,
                 result.structured_output or {},
                 review_output=self.state.final_review_output or self.state.review_output,
+                delivery_decision=self.state.delivery_decision,
+                failed_agents=[
+                    agent_id
+                    for agent_id, item in self.state.agent_results.items()
+                    if item.execution_status != "succeeded"
+                ],
             )
         )
 
@@ -1227,9 +1563,98 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             ),
         }
 
+    def _run_metrics(self) -> dict[str, Any]:
+        agent_usage = {
+            agent_id: item.total_tokens
+            for agent_id, item in self.state.agent_results.items()
+        }
+        total_tokens = sum(agent_usage.values())
+        tool_invocations = sum(
+            item.tool_invocation_count for item in self.state.agent_results.values()
+        )
+        external_calls = sum(
+            item.external_tool_call_count for item in self.state.agent_results.values()
+        )
+        cache_hits = sum(
+            item.cache_hit_count for item in self.state.agent_results.values()
+        )
+        cacheable_calls = external_calls + cache_hits
+        source_references = [
+            source_id
+            for item in self.state.agent_results.values()
+            for source_id in item.source_ids
+        ]
+        reused_ids = {
+            source_id
+            for source_id in source_references
+            if source_references.count(source_id) > 1
+        }
+        reused_references = sum(
+            1 for source_id in source_references if source_id in reused_ids
+        )
+        store = self.gateway.evidence_store
+        source_grade_counts = (
+            store.source_grade_counts(self.state.run_id)
+            if store is not None and hasattr(store, "source_grade_counts")
+            else {grade: 0 for grade in ("A", "B", "C", "D")}
+        )
+        return {
+            "total_tokens": total_tokens,
+            "agent_token_usage": agent_usage,
+            "tool_invocation_count": tool_invocations,
+            "external_tool_call_count": external_calls,
+            "cache_hit_count": cache_hits,
+            "cache_hit_rate": round(cache_hits / cacheable_calls, 4)
+            if cacheable_calls
+            else 0.0,
+            "estimated_saved_external_calls": cache_hits,
+            "source_grade_counts": source_grade_counts,
+            "source_reuse_ratio": round(reused_references / len(source_references), 4)
+            if source_references
+            else 0.0,
+            "budget_exhausted_count": sum(
+                item.budget_exhausted_count
+                for item in self.state.agent_results.values()
+            ),
+        }
+
+    def _metric_warnings(self, metrics: dict[str, Any]) -> list[str]:
+        warnings: list[str] = []
+        if int(metrics["total_tokens"]) > self.budget_policy.token_warning_threshold:
+            warnings.append(
+                "Full-chain token usage exceeded the balanced budget warning threshold "
+                f"({metrics['total_tokens']}/{self.budget_policy.token_warning_threshold})."
+            )
+        grades = metrics["source_grade_counts"]
+        if int(grades.get("A", 0)) + int(grades.get("B", 0)) == 0 and sum(
+            int(value) for value in grades.values()
+        ):
+            warnings.append(
+                "No A/B-grade source was registered; delivery may continue with traceable "
+                "C-grade evidence and an explicit quality warning."
+            )
+        if int(metrics["budget_exhausted_count"]):
+            warnings.append(
+                f"Tool budgets were reached {metrics['budget_exhausted_count']} time(s); "
+                "affected Agents should return partial results instead of blocking delivery."
+            )
+        cacheable_calls = int(metrics["external_tool_call_count"]) + int(
+            metrics["cache_hit_count"]
+        )
+        if cacheable_calls >= 4 and float(metrics["cache_hit_rate"]) < 0.1:
+            warnings.append(
+                "Run-scoped search/fetch cache hit rate was below 10%; review whether "
+                "Agents are expressing equivalent research requests with inconsistent queries."
+            )
+        return warnings
+
     def summary(self) -> dict[str, Any]:
         """Return a JSON-safe receipt proving orchestration and runtime boundaries."""
 
+        metrics = self._run_metrics()
+        runtime_warnings = list(
+            dict.fromkeys([*self.state.warnings, *self._metric_warnings(metrics)])
+        )
         payload = {
             "flow_id": self.state.id,
             "run_id": self.state.run_id,
@@ -1246,9 +1671,27 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             "report_quality": self.state.report_quality,
             "report_path": self.state.report_path,
             "review_status": self.state.review_status,
+            "initial_evidence_audit": self.state.initial_evidence_audit,
+            "final_evidence_audit": self.state.final_evidence_audit,
             "fallback_used": self.state.fallback_used,
+            "formal_report_succeeded": self.state.formal_report_succeeded,
+            "delivery_mode": self.state.delivery_mode,
+            "delivery_decision": self.state.delivery_decision,
+            "recovery_used": self.state.recovery_used,
+            "recovery_reason": self.state.recovery_reason,
+            "fallback_trigger_stage": self.state.fallback_trigger_stage,
+            "recovery_actions": self.state.recovery_actions,
+            "section_statuses": self.state.section_statuses,
+            "completed_section_ids": self.state.completed_section_ids,
+            "partial_section_ids": self.state.partial_section_ids,
+            "failed_section_ids": self.state.failed_section_ids,
+            "section_retry_counts": self.state.section_retry_counts,
+            "section_artifact_ids": self.state.section_artifact_ids,
+            "section_token_usage": self.state.section_token_usage,
+            "section_durations": self.state.section_durations,
             "total_retry_count": self.state.total_retry_count,
-            "warnings": self.state.warnings,
+            "warnings": runtime_warnings,
+            **metrics,
             "agent_results": {
                 key: value.model_dump(mode="json")
                 for key, value in self.state.agent_results.items()
@@ -1278,14 +1721,31 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
                         "planner_output": self.state.planner_output,
                         "review_output": self.state.review_output,
                         "final_review_output": self.state.final_review_output,
+                        "initial_evidence_audit": self.state.initial_evidence_audit,
+                        "final_evidence_audit": self.state.final_evidence_audit,
                         "report_quality": self.state.report_quality,
                         "review_status": self.state.review_status,
                         "fallback_used": self.state.fallback_used,
+                        "formal_report_succeeded": self.state.formal_report_succeeded,
+                        "delivery_mode": self.state.delivery_mode,
+                        "delivery_decision": self.state.delivery_decision,
+                        "recovery_used": self.state.recovery_used,
+                        "recovery_reason": self.state.recovery_reason,
+                        "fallback_trigger_stage": self.state.fallback_trigger_stage,
+                        "recovery_actions": self.state.recovery_actions,
+                        "section_statuses": self.state.section_statuses,
+                        "completed_section_ids": self.state.completed_section_ids,
+                        "partial_section_ids": self.state.partial_section_ids,
+                        "failed_section_ids": self.state.failed_section_ids,
+                        "section_retry_counts": self.state.section_retry_counts,
+                        "section_artifact_ids": self.state.section_artifact_ids,
+                        "section_token_usage": self.state.section_token_usage,
+                        "section_durations": self.state.section_durations,
                         "artifact_history": self.state.artifact_history,
                         "agent_results": payload.get("agent_results", {}),
                         "events": payload.get("events", []),
                         "total_retry_count": self.state.total_retry_count,
-                        "warnings": self.state.warnings,
+                        "warnings": payload.get("warnings", []),
                     },
                     ensure_ascii=False,
                     indent=2,

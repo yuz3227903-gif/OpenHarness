@@ -10,6 +10,8 @@ param(
     [switch]$CrewAIFlowSmoke,
     [switch]$CrewAIFullChainValidation,
     [switch]$ReportWriterSmoke,
+    [switch]$ReportSectionsSmoke,
+    [switch]$ReviewerAuditSmoke,
     [string]$RunId,
     [string]$Company = "CATL",
     [string]$AsOfDate = (Get-Date -Format "yyyy-MM-dd"),
@@ -20,6 +22,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
 $projectRoot = Split-Path -Parent $PSCommandPath
 $secretPath = Join-Path $projectRoot ".openharness\secrets\tavily-key.dpapi"
 $openHarnessLauncher = Join-Path $projectRoot "run-openh.ps1"
@@ -33,7 +39,7 @@ if ($needsTavily -and -not (Test-Path -LiteralPath $secretPath)) {
     throw "Tavily is not configured. Run .\setup-tavily-key.ps1 first."
 }
 
-if ($PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $AgentSmoke -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke -or $CrewAIFullChainValidation -or $ReportWriterSmoke) {
+if ($PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $AgentSmoke -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke -or $CrewAIFullChainValidation -or $ReportWriterSmoke -or $ReportSectionsSmoke -or $ReviewerAuditSmoke) {
     if (-not (Test-Path -LiteralPath $pythonExecutable)) {
         throw "Existing Python environment was not found: .venv\Scripts\python.exe"
     }
@@ -174,6 +180,40 @@ try {
         finally {
             [Environment]::SetEnvironmentVariable("CREWAI_STORAGE_DIR", $previousCrewAIStorage, "Process")
             [Environment]::SetEnvironmentVariable("OTEL_SDK_DISABLED", $previousOtelDisabled, "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONUTF8", $previousPythonUtf8, "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", $previousPythonIoEncoding, "Process")
+        }
+    }
+    elseif ($ReviewerAuditSmoke) {
+        if (-not $RunId) {
+            throw "-ReviewerAuditSmoke requires -RunId, for example RUN-CREWAI-XXXXXXXXXXXX."
+        }
+        $previousPythonUtf8 = [Environment]::GetEnvironmentVariable("PYTHONUTF8", "Process")
+        $previousPythonIoEncoding = [Environment]::GetEnvironmentVariable("PYTHONIOENCODING", "Process")
+        try {
+            [Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", "utf-8", "Process")
+            & $pythonExecutable -m openharness.invest_research.run_reviewer_audit_smoke `
+                --run-id $RunId
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable("PYTHONUTF8", $previousPythonUtf8, "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", $previousPythonIoEncoding, "Process")
+        }
+    }
+    elseif ($ReportSectionsSmoke) {
+        if (-not $RunId) {
+            throw "-ReportSectionsSmoke requires -RunId, for example RUN-CREWAI-XXXXXXXXXXXX."
+        }
+        $previousPythonUtf8 = [Environment]::GetEnvironmentVariable("PYTHONUTF8", "Process")
+        $previousPythonIoEncoding = [Environment]::GetEnvironmentVariable("PYTHONIOENCODING", "Process")
+        try {
+            [Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", "utf-8", "Process")
+            & $pythonExecutable -m openharness.invest_research.run_report_sections_smoke `
+                --run-id $RunId
+        }
+        finally {
             [Environment]::SetEnvironmentVariable("PYTHONUTF8", $previousPythonUtf8, "Process")
             [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", $previousPythonIoEncoding, "Process")
         }

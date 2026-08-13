@@ -300,6 +300,18 @@
           "title": "Company Name",
           "type": "string"
         },
+        "exchange": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exchange"
+        },
         "source_ids": {
           "items": {
             "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",

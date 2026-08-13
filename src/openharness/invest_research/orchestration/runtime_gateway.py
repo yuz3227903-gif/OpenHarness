@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from openharness.invest_research.runtime_adapter import (
     AgentExecutionRequest,
@@ -35,9 +35,12 @@ class OpenHarnessRuntimeGateway:
         task_prompt: str,
         context_package: dict[str, Any] | None = None,
         max_turns: int | None = None,
+        max_output_tokens: int | None = None,
         tool_call_limits: dict[str, int] | None = None,
         timeout_seconds: float = 300,
         retry_transient: bool = True,
+        output_contract: Literal["agent_default", "report_section"] = "agent_default",
+        persist_output: bool = True,
     ) -> AgentExecutionResult:
         """Forward one typed request without adding a CrewAI model call."""
 
@@ -47,8 +50,11 @@ class OpenHarnessRuntimeGateway:
             task_prompt=task_prompt,
             context_package=context_package or {},
             max_turns=max_turns,
+            max_output_tokens=max_output_tokens,
             tool_call_limits=tool_call_limits or {},
             timeout_seconds=timeout_seconds,
+            output_contract=output_contract,
+            persist_output=persist_output,
         )
         max_attempts = 2 if retry_transient else 1
         for attempt in range(max_attempts):

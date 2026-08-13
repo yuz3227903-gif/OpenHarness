@@ -148,7 +148,16 @@
           "type": "array"
         },
         "section_id": {
-          "minLength": 1,
+          "enum": [
+            "company_overview",
+            "operating_changes",
+            "investment_logics",
+            "peer_comparison",
+            "catalysts",
+            "risks",
+            "tracking_indicators",
+            "limitations"
+          ],
           "title": "Section Id",
           "type": "string"
         },

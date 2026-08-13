@@ -133,6 +133,22 @@ class EvidenceStore:
                     FOREIGN KEY(run_id) REFERENCES research_runs(run_id)
                 );
                 CREATE INDEX IF NOT EXISTS ix_upload_run ON uploaded_files(run_id);
+
+                CREATE TABLE IF NOT EXISTS tool_result_cache (
+                    run_id TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    cache_key TEXT NOT NULL,
+                    request_json TEXT NOT NULL,
+                    response_text TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    source_ids_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (run_id, tool_name, cache_key),
+                    FOREIGN KEY(run_id) REFERENCES research_runs(run_id)
+                );
+                CREATE INDEX IF NOT EXISTS ix_tool_cache_run
+                    ON tool_result_cache(run_id, tool_name);
                 """
             )
             for table, id_column in generic_tables:
@@ -235,6 +251,115 @@ class EvidenceStore:
                 "SELECT 1 FROM research_runs WHERE run_id=?", (run_id,)
             ).fetchone()
         return row is not None
+
+    def get_cached_tool_result(
+        self,
+        run_id: str,
+        tool_name: str,
+        cache_key: str,
+    ) -> dict[str, Any] | None:
+        """Return one successful, Run-scoped tool result without cross-Run reuse."""
+
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT request_json, response_text, metadata_json,
+                       source_ids_json, created_at, updated_at
+                FROM tool_result_cache
+                WHERE run_id=? AND tool_name=? AND cache_key=?
+                """,
+                (run_id, tool_name, cache_key),
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["request"] = json.loads(item.pop("request_json"))
+        item["metadata"] = json.loads(item.pop("metadata_json"))
+        item["source_ids"] = json.loads(item.pop("source_ids_json"))
+        return item
+
+    def cache_tool_result(
+        self,
+        run_id: str,
+        tool_name: str,
+        cache_key: str,
+        *,
+        request_payload: dict[str, Any],
+        response_text: str,
+        metadata: dict[str, Any] | None = None,
+        source_ids: Iterable[str] = (),
+    ) -> None:
+        """Persist a successful read-only tool response for the current Run."""
+
+        if not self.run_exists(run_id):
+            raise KeyError(f"Unknown run_id: {run_id}")
+        if not response_text.strip():
+            raise ValueError("Empty tool responses cannot be cached")
+        timestamp = _now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO tool_result_cache(
+                    run_id, tool_name, cache_key, request_json, response_text,
+                    metadata_json, source_ids_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, tool_name, cache_key) DO UPDATE SET
+                    request_json=excluded.request_json,
+                    response_text=excluded.response_text,
+                    metadata_json=excluded.metadata_json,
+                    source_ids_json=excluded.source_ids_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    run_id,
+                    tool_name,
+                    cache_key,
+                    _json(request_payload),
+                    response_text,
+                    _json(metadata or {}),
+                    _json(list(dict.fromkeys(source_ids))),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+    def source_catalog(self, run_id: str, *, limit: int = 40) -> list[dict[str, Any]]:
+        """Return compact source rows ordered by quality and verification state."""
+
+        grade_order = "CASE source_grade WHEN 'A' THEN 4 WHEN 'B' THEN 3 WHEN 'C' THEN 2 ELSE 1 END"
+        status_order = "CASE status WHEN 'verified' THEN 3 WHEN 'fetched' THEN 2 ELSE 1 END"
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT source_id, title, publisher, published_at, url_or_file,
+                       source_grade, status, submitted_by, accessed_at
+                FROM source_records
+                WHERE run_id=?
+                ORDER BY {grade_order} DESC, {status_order} DESC, updated_at DESC
+                LIMIT ?
+                """,
+                (run_id, max(1, min(limit, 100))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def source_grade_counts(self, run_id: str) -> dict[str, int]:
+        """Count source records by deterministic quality grade for one Run."""
+
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT source_grade, COUNT(*) AS count
+                FROM source_records
+                WHERE run_id=?
+                GROUP BY source_grade
+                """,
+                (run_id,),
+            ).fetchall()
+        counts = {grade: 0 for grade in ("A", "B", "C", "D")}
+        for row in rows:
+            grade = str(row["source_grade"] or "C")
+            counts[grade if grade in counts else "C"] += int(row["count"])
+        return counts
 
     def upsert_record(
         self,
@@ -527,6 +652,13 @@ class EvidenceStore:
         agent_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        # A partial result can contain useful, source-backed material without
+        # satisfying the full role contract.  Normalize that material before
+        # writing the artifact so downstream audit/reporting can still see a
+        # real S -> F -> L chain.  These records are deliberately marked as
+        # system-recovered candidates and can only lead to provisional
+        # delivery until a Reviewer approves them.
+        recovered = self._recover_partial_evidence(run_id, agent_id, payload)
         parameter_card_id: str | None = None
         if agent_id == "planner" and payload.get("gate_1_payload"):
             parameter_card_id = _stable_id("PC", run_id, "gate-1")
@@ -563,7 +695,12 @@ class EvidenceStore:
         )
 
         fact_ids: list[str] = []
-        for key in ("financial_facts", "operating_facts", "counter_evidence"):
+        for key in (
+            "financial_facts",
+            "operating_facts",
+            "counter_evidence",
+            "_recovered_facts",
+        ):
             for item in payload.get(key, []) or []:
                 if isinstance(item, dict) and item.get("fact_id"):
                     fact_id = str(item["fact_id"])
@@ -624,18 +761,19 @@ class EvidenceStore:
                         status="open",
                         submitted_by=agent_id,
                     )
-            self.update_record_status(
-                run_id, "fact", payload.get("approved_fact_ids", []), "verified"
-            )
-            self.update_record_status(
-                run_id, "logic", payload.get("approved_logic_ids", []), "approved"
-            )
-            self.update_record_status(
-                run_id, "catalyst", payload.get("approved_catalyst_ids", []), "approved"
-            )
-            self.update_record_status(
-                run_id, "risk", payload.get("approved_risk_ids", []), "approved"
-            )
+            if payload.get("audit_status") != "fail":
+                self.update_record_status(
+                    run_id, "fact", payload.get("approved_fact_ids", []), "verified"
+                )
+                self.update_record_status(
+                    run_id, "logic", payload.get("approved_logic_ids", []), "approved"
+                )
+                self.update_record_status(
+                    run_id, "catalyst", payload.get("approved_catalyst_ids", []), "approved"
+                )
+                self.update_record_status(
+                    run_id, "risk", payload.get("approved_risk_ids", []), "approved"
+                )
 
         report_id: str | None = None
         if agent_id == "report_writer":
@@ -658,7 +796,273 @@ class EvidenceStore:
             "risk_ids": sorted(set(risk_ids)),
             "review_id": str(review_id) if review_id else None,
             "report_id": report_id,
+            "recovered_evidence": recovered,
         }
+
+    def _recover_partial_evidence(
+        self,
+        run_id: str,
+        agent_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, list[str]]:
+        """Promote source-backed partial outputs into auditable candidates.
+
+        OpenHarness may return ``status=partial`` after a tool budget is
+        reached.  In that case the model often has already produced a
+        structured comparison row or catalyst event, but has not had enough
+        room to repeat the same information as a ``Fact`` and ``Logic``.
+        Dropping those objects made a usable run look empty and forced the
+        local fallback report.  This recovery only uses IDs already present in
+        the current Run; it never invents numeric values or source IDs.
+        """
+
+        recovered_facts: list[dict[str, Any]] = []
+        recovered_logics: list[dict[str, Any]] = []
+        source_ids_seen: set[str] = set()
+
+        def valid_sources(values: Any) -> list[str]:
+            output: list[str] = []
+            for value in values or []:
+                source_id = str(value)
+                record = self.get_record(run_id, source_id)
+                if record and record.get("record_type") == "source":
+                    if source_id not in output:
+                        output.append(source_id)
+            source_ids_seen.update(output)
+            return output
+
+        if agent_id == "industry_competition":
+            rows = payload.get("peer_comparison") or []
+            for index, row in enumerate(rows, start=1):
+                if not isinstance(row, dict):
+                    continue
+                sources = valid_sources(row.get("source_ids"))
+                values = row.get("values")
+                if not sources or not isinstance(values, dict):
+                    continue
+                comparable_values = {
+                    str(key): value
+                    for key, value in values.items()
+                    if value is not None and str(value).strip() != ""
+                }
+                if not comparable_values:
+                    continue
+                company = str(row.get("company_name") or "unknown company")
+                fact_id = _stable_id(
+                    "F",
+                    run_id,
+                    agent_id,
+                    company,
+                    _json(comparable_values),
+                )
+                recovered_facts.append(
+                    {
+                        "fact_id": fact_id,
+                        "statement": (
+                            f"{company} 的可比指标记录：{_json(comparable_values)}。"
+                            "该记录来自本 Run 已登记来源，具体口径需结合比较字典复核。"
+                        ),
+                        "period": "ParameterCard-defined comparison period",
+                        "source_ids": sources,
+                        "statement_class": "disclosed_fact",
+                        "entity": company,
+                        "metric": "peer_comparison",
+                        "submitted_by": agent_id,
+                        "recovery_used": True,
+                        "recovery_reason": "partial_peer_comparison",
+                    }
+                )
+
+            if not payload.get("logic_candidates") and recovered_facts:
+                strengths = [str(item) for item in payload.get("relative_strengths") or [] if item]
+                weaknesses = [str(item) for item in payload.get("relative_weaknesses") or [] if item]
+                observation = (strengths or weaknesses or [
+                    str(payload.get("competition_structure") or "已登记的三家公司比较结果")
+                ])[0]
+                fact_id = str(recovered_facts[0]["fact_id"])
+                recovered_logics.append(
+                    {
+                        "logic_id": _stable_id("L", run_id, agent_id, fact_id),
+                        "title": "行业与竞争位置的暂定判断",
+                        "mechanism": (
+                            f"{observation}；该判断通过已登记的可比事实影响对公司的相对竞争位置判断，"
+                            "但尚未完成完整 Reviewer 复核。"
+                        ),
+                        "supporting_fact_ids": [fact_id],
+                        "counter_evidence_ids": [],
+                        "falsification_conditions": [
+                            "后续官方披露或统一口径数据否定当前比较结果"
+                        ],
+                        "tracking_indicators": ["三家公司统一口径的业务、规模和盈利指标"],
+                        "submitted_by": agent_id,
+                        "provisional": True,
+                        "recovery_used": True,
+                    }
+                )
+
+        if agent_id == "fundamental":
+            # Fundamental is the most likely role to hit the response-size
+            # limit because it carries many financial fields.  If the model
+            # returned complete fact arrays but a truncated tail, retain those
+            # facts and create one clearly provisional logic candidate.
+            fact_candidates = [
+                item
+                for key in ("financial_facts", "operating_facts")
+                for item in (payload.get(key) or [])
+                if isinstance(item, dict) and item.get("fact_id")
+            ]
+            for item in fact_candidates:
+                sources = valid_sources(item.get("source_ids"))
+                if sources:
+                    item["source_ids"] = sources
+            if not payload.get("logic_candidates") and fact_candidates:
+                fact_id = str(fact_candidates[0]["fact_id"])
+                recovered_logics.append(
+                    {
+                        "logic_id": _stable_id("L", run_id, agent_id, fact_id),
+                        "title": "公司基本面变化的暂定判断",
+                        "mechanism": (
+                            "已登记的财务或经营事实显示公司基本面存在可研究变化；"
+                            "具体驱动和持续性尚待完整审查。"
+                        ),
+                        "supporting_fact_ids": [fact_id],
+                        "counter_evidence_ids": [],
+                        "falsification_conditions": [
+                            "后续定期报告或原始披露无法支持该变化，或变化被证明为一次性因素"
+                        ],
+                        "tracking_indicators": ["后续定期报告中的收入、利润、现金流及经营指标"],
+                        "submitted_by": agent_id,
+                        "provisional": True,
+                        "recovery_used": True,
+                    }
+                )
+
+        if agent_id == "market_catalyst":
+            events = payload.get("events") or []
+            event_fact_ids: list[str] = []
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                sources = valid_sources(event.get("source_ids"))
+                if not sources:
+                    continue
+                title = str(event.get("title") or "未命名催化事件")
+                catalyst_id = str(event.get("catalyst_id") or title)
+                fact_id = _stable_id("F", run_id, agent_id, catalyst_id)
+                event_fact_ids.append(fact_id)
+                event["related_fact_ids"] = [fact_id]
+                recovered_facts.append(
+                    {
+                        "fact_id": fact_id,
+                        "statement": (
+                            f"未来半年候选事件：{title}；事件类型={event.get('event_type') or '未说明'}；"
+                            f"证据分类={event.get('evidence_class') or '未说明'}；"
+                            f"传导路径={event.get('transmission_path') or '未说明'}。"
+                        ),
+                        "period": "未来半年催化窗口",
+                        "source_ids": sources,
+                        "statement_class": str(event.get("evidence_class") or "market_expectation"),
+                        "entity": "target_company",
+                        "metric": "catalyst_event",
+                        "submitted_by": agent_id,
+                        "recovery_used": True,
+                        "recovery_reason": "partial_catalyst_event",
+                    }
+                )
+
+            if not payload.get("logic_candidates"):
+                for event, fact_id in zip(events, event_fact_ids):
+                    if not isinstance(event, dict):
+                        continue
+                    title = str(event.get("title") or "未命名催化事件")
+                    signals = [
+                        str(item)
+                        for item in event.get("failure_signals") or []
+                        if item
+                    ]
+                    metrics = [
+                        str(item)
+                        for item in event.get("affected_metrics") or []
+                        if item
+                    ]
+                    recovered_logics.append(
+                        {
+                            "logic_id": _stable_id("L", run_id, agent_id, title, fact_id),
+                            "title": f"{title}带来的暂定催化逻辑",
+                            "mechanism": (
+                                f"若该事件在研究窗口内落地，可通过"
+                                f"{event.get('transmission_path') or '公司经营或市场预期'}"
+                                "影响相关表现；该判断仅作为候选逻辑。"
+                            ),
+                            "supporting_fact_ids": [fact_id],
+                            "counter_evidence_ids": [],
+                            "falsification_conditions": signals[:3]
+                            or ["事件延期、落空或实际影响低于预期"],
+                            "tracking_indicators": metrics[:3]
+                            or ["事件是否按窗口落地及后续公告验证"],
+                            "submitted_by": agent_id,
+                            "provisional": True,
+                            "recovery_used": True,
+                        }
+                    )
+
+            # Keep the recovery bounded.  Three catalysts are enough to unlock
+            # provisional delivery; the remaining events stay available in the
+            # catalyst records and report context.
+            recovered_logics = recovered_logics[:3]
+
+        if recovered_facts:
+            existing = payload.setdefault("_recovered_facts", [])
+            existing.extend(recovered_facts)
+        if recovered_logics:
+            existing = payload.setdefault("logic_candidates", [])
+            existing.extend(recovered_logics)
+            payload.setdefault("unverified_items", []).append(
+                {
+                    "item": f"{len(recovered_logics)} 条逻辑由系统从部分成功结果暂定恢复",
+                    "reason": "原始研究结果包含已登记来源支持的比较行或催化事件，但未完成完整逻辑字段输出。",
+                    "required_evidence": "由 Reviewer 或人工复核暂定逻辑及其来源口径。",
+                }
+            )
+
+        return {
+            "fact_ids": [str(item["fact_id"]) for item in recovered_facts],
+            "logic_ids": [str(item["logic_id"]) for item in recovered_logics],
+            "source_ids": sorted(source_ids_seen),
+        }
+
+    def persist_provisional_parameter_card(
+        self,
+        *,
+        run_id: str,
+        parameter_card_id: str,
+        payload: dict[str, Any],
+        reason: str,
+    ) -> str:
+        """Persist a backend-recovered Planner card without hiding recovery.
+
+        The record remains provisional and carries the recovery reason.  It is
+        therefore usable for downstream task routing but cannot be mistaken
+        for a normal Gate 1 confirmation.
+        """
+
+        parameter_payload = {
+            "parameter_card_id": parameter_card_id,
+            "version": "1.0",
+            "run_id": run_id,
+            "recovery_used": True,
+            "recovery_reason": reason,
+            **dict(payload),
+        }
+        self.upsert_record(
+            "parameter_card",
+            parameter_card_id,
+            run_id,
+            parameter_payload,
+            status="provisional",
+            submitted_by="system",
+        )
+        return parameter_card_id
 
     def append_event(
         self,

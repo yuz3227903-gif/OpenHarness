@@ -65,6 +65,7 @@
     }
   },
   "additionalProperties": false,
+  "description": "One bounded chapter-writing task executed by the existing ReportWriter.",
   "properties": {
     "agent_id": {
       "const": "report_writer",
@@ -183,24 +184,16 @@
       "type": "string"
     },
     "section_id": {
-      "anyOf": [
-        {
-          "enum": [
-            "company_overview",
-            "operating_changes",
-            "investment_logics",
-            "peer_comparison",
-            "catalysts",
-            "risks"
-          ],
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
+      "enum": [
+        "company_overview",
+        "operating_changes",
+        "investment_logics",
+        "peer_comparison",
+        "catalysts",
+        "risks"
       ],
-      "default": null,
-      "title": "Section Id"
+      "title": "Section Id",
+      "type": "string"
     },
     "selected_logic_ids": {
       "items": {
@@ -234,8 +227,9 @@
     "objective",
     "agent_id",
     "parameter_card",
-    "review_id"
+    "review_id",
+    "section_id"
   ],
-  "title": "ReportWriterInput",
+  "title": "ReportSectionRequest",
   "type": "object"
 }

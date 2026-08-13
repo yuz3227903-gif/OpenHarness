@@ -24,6 +24,7 @@ from openharness.engine.stream_events import (
 )
 from openharness.invest_research.agent_registry import PLUGIN_NAME, get_agent_entry
 from openharness.invest_research.calculator_tool import CalculatorTool
+from openharness.invest_research.contracts import ReportSectionResult
 from openharness.invest_research.evidence_query_tool import EvidenceQueryTool
 from openharness.invest_research.evidence_store import EvidenceStore
 from openharness.invest_research.prompt_assembler import PromptAssembler, PromptLayers
@@ -104,7 +105,10 @@ class AgentExecutionRequest(AdapterModel):
     timeout_seconds: float = Field(default=300.0, ge=10.0, le=1200.0)
     max_repair_attempts: int = Field(default=1, ge=0, le=1)
     max_turns: int | None = Field(default=None, ge=1, le=30)
+    max_output_tokens: int | None = Field(default=None, ge=512, le=16_000)
     tool_call_limits: dict[str, int] = Field(default_factory=dict)
+    output_contract: Literal["agent_default", "report_section"] = "agent_default"
+    persist_output: bool = True
 
 
 class ToolCallTrace(AdapterModel):
@@ -272,6 +276,15 @@ class InvestmentResearchRuntimeAdapter:
         """Run one Agent, validate its JSON and persist its structured artifact."""
 
         entry = get_agent_entry(request.agent_id)
+        output_model: type[BaseModel] = entry.output_model
+        output_contract_name = entry.output_contract_name
+        if request.output_contract == "report_section":
+            if entry.agent_id != "report_writer":
+                raise ValueError(
+                    "report_section output contract is only valid for report_writer"
+                )
+            output_model = ReportSectionResult
+            output_contract_name = ReportSectionResult.__name__
         try:
             validated_input = entry.input_model.model_validate(request.input_payload)
         except ValidationError as exc:
@@ -287,6 +300,10 @@ class InvestmentResearchRuntimeAdapter:
 
         input_payload = validated_input.model_dump(mode="json")
         input_refs = _collect_record_ids(input_payload)
+        if entry.agent_id == "reviewer_arbiter" and input_payload.get("expected_review_id"):
+            # The backend-issued Review ID identifies the record this execution
+            # is about to create, so it must not be treated as a pre-existing ref.
+            input_refs.discard(str(input_payload["expected_review_id"]))
         missing_input_refs = sorted(
             record_id
             for record_id in input_refs
@@ -344,7 +361,7 @@ class InvestmentResearchRuntimeAdapter:
                 role_prompt=agent_definition.system_prompt or "",
                 task_prompt=request.task_prompt,
                 context_package=json.dumps(context_package, ensure_ascii=False, indent=2),
-                output_contract=assembler.render_output_contract(entry.agent_id),
+                output_contract=assembler.render_model_output_contract(output_model),
             )
         )
 
@@ -376,7 +393,11 @@ class InvestmentResearchRuntimeAdapter:
             cwd=self._project_root,
             model=settings.model,
             system_prompt=system_prompt,
-            max_tokens=min(settings.max_tokens, 16_000),
+            max_tokens=min(
+                request.max_output_tokens or settings.max_tokens,
+                settings.max_tokens,
+                16_000,
+            ),
             max_turns=min(request.max_turns or entry.max_turns, entry.max_turns),
             tool_metadata=tool_metadata,
             settings=None,
@@ -447,12 +468,20 @@ class InvestmentResearchRuntimeAdapter:
                 "若资料不足，返回 status=partial 并如实写明限制；不要输出空内容、Markdown 或解释文字。"
             )
 
+        compact_output_instruction = (
+            "Keep the response compact: return one complete JSON object, not a long narrative. "
+            "For research roles, include only the highest-value 6 financial/operating facts, "
+            "3 logic candidates, 6 catalyst events, or 5 risks as applicable. "
+            "Keep each explanation under 400 characters. Never repeat tool output verbatim. "
+            "If the tool budget is exhausted, stop calling tools and return status=partial "
+            "with the evidence already obtained; always close the JSON object before answering."
+        )
         initial_prompt = (
             f"执行系统提示中的当前 {entry.display_name} 任务。按需调用允许的工具。"
             "来源、事实、逻辑、风险和审查编号只能使用工具返回或授权上下文中存在的编号。"
             "最终回复只能包含一个符合 OUTPUT CONTRACT 的 JSON 对象；"
             "不要使用 Markdown 代码块，不要补充解释。"
-        )
+        ) + compact_output_instruction
         try:
             async with asyncio.timeout(request.timeout_seconds):
                 raw_output, execution_error = await run_turn_with_empty_response_retry(
@@ -463,7 +492,7 @@ class InvestmentResearchRuntimeAdapter:
                     parsed, validation_error = self._validate_output(
                         raw_output,
                         entry.agent_id,
-                        entry.output_model,
+                        output_model,
                         run_id,
                     )
                 repair_count = 0
@@ -479,7 +508,7 @@ class InvestmentResearchRuntimeAdapter:
                         f"{repair_count}."
                     )
                     raw_output, execution_error = await run_turn_with_empty_response_retry(
-                        f"上一条输出未通过 {entry.output_contract_name} 校验。"
+                        f"上一条输出未通过 {output_contract_name} 校验。"
                         "不要重新调研或调用新工具，只修复 JSON；只能返回一个 JSON 对象。"
                         "保留上一条已经有依据的内容，不能为了通过校验而编造来源、事实或编号。"
                         "如果校验错误要求 completed 结果具备某项内容，而现有证据无法支持该项内容，"
@@ -494,7 +523,7 @@ class InvestmentResearchRuntimeAdapter:
                     parsed, validation_error = self._validate_output(
                         raw_output,
                         entry.agent_id,
-                        entry.output_model,
+                        output_model,
                         run_id,
                     )
         except TimeoutError:
@@ -532,6 +561,53 @@ class InvestmentResearchRuntimeAdapter:
             self._record_execution_event(run_id, task_id, result)
             return result
         if parsed is None:
+            salvaged = (
+                _salvage_partial_json(raw_output, entry.agent_id)
+                if request.persist_output
+                else None
+            )
+            if salvaged is not None:
+                salvaged_warning = (
+                    f"{entry.display_name} returned malformed JSON; complete arrays were "
+                    "salvaged as a partial artifact without inventing missing fields."
+                )
+                warnings.append(salvaged_warning)
+                persisted = self._evidence_store.persist_agent_output(
+                    run_id=run_id,
+                    task_id=task_id,
+                    agent_id=entry.agent_id,
+                    payload=salvaged,
+                )
+                result = AgentExecutionResult(
+                    status="invalid_output",
+                    agent_id=entry.agent_id,
+                    runtime_agent_name=entry.runtime_agent_name,
+                    model=settings.model,
+                    structured_output=salvaged,
+                    raw_output=_sanitize_text(raw_output),
+                    model_call_id=model_call_id,
+                    tool_calls=tool_calls,
+                    usage=usage,
+                    artifact_id=persisted.get("artifact_id"),
+                    source_ids=sorted(
+                        record_id
+                        for record_id in _collect_record_ids(salvaged)
+                        if record_id.startswith("S-")
+                    ),
+                    fact_ids=persisted.get("fact_ids", []),
+                    logic_ids=persisted.get("logic_ids", []),
+                    catalyst_ids=persisted.get("catalyst_ids", []),
+                    risk_ids=persisted.get("risk_ids", []),
+                    warnings=warnings,
+                    failure_class=_classify_failure(validation_error, tool_calls),
+                    retry_count=1 if repair_count else 0,
+                    degraded=True,
+                    error=_sanitize_text(
+                        validation_error or f"{entry.display_name} returned invalid JSON."
+                    ),
+                )
+                self._record_execution_event(run_id, task_id, result)
+                return result
             result = AgentExecutionResult(
                 status="invalid_output",
                 agent_id=entry.agent_id,
@@ -552,12 +628,21 @@ class InvestmentResearchRuntimeAdapter:
             self._record_execution_event(run_id, task_id, result)
             return result
 
-        persisted = self._evidence_store.persist_agent_output(
-            run_id=run_id,
-            task_id=task_id,
-            agent_id=entry.agent_id,
-            payload=parsed,
-        )
+        if entry.agent_id == "reviewer_arbiter":
+            parsed = _normalize_reviewer_metadata(
+                parsed,
+                request.input_payload,
+                output_model,
+            )
+
+        persisted: dict[str, Any] = {}
+        if request.persist_output:
+            persisted = self._evidence_store.persist_agent_output(
+                run_id=run_id,
+                task_id=task_id,
+                agent_id=entry.agent_id,
+                payload=parsed,
+            )
         source_ids = sorted(
             record_id for record_id in _collect_record_ids(parsed) if record_id.startswith("S-")
         )
@@ -744,6 +829,25 @@ class PlannerRuntimeAdapter(InvestmentResearchRuntimeAdapter):
         return await super().execute_agent(request)
 
 
+def _normalize_reviewer_metadata(
+    payload: dict[str, Any],
+    input_payload: dict[str, Any],
+    output_model: type[BaseModel],
+) -> dict[str, Any]:
+    """Bind model review output to backend-issued stage and audit identifiers."""
+
+    normalized = dict(payload)
+    expected_review_id = input_payload.get("expected_review_id")
+    if expected_review_id:
+        normalized["review_id"] = str(expected_review_id)
+    normalized["review_stage"] = str(input_payload.get("review_stage") or "initial")
+    if input_payload.get("audit_artifact_id"):
+        normalized["audit_artifact_id"] = str(input_payload["audit_artifact_id"])
+    if input_payload.get("audit_status"):
+        normalized["audit_status"] = str(input_payload["audit_status"])
+    return output_model.model_validate(normalized).model_dump(mode="json")
+
+
 def _collect_record_ids(payload: Any) -> set[str]:
     found: set[str] = set()
     if isinstance(payload, dict):
@@ -812,6 +916,110 @@ def _extract_json_object(raw_output: str) -> dict[str, Any]:
             return parsed
         last_error = ValueError("top-level JSON value must be an object")
     raise ValueError(f"could not parse one JSON object: {last_error}")
+
+
+def _salvage_partial_json(raw_output: str, agent_id: str) -> dict[str, Any] | None:
+    """Recover complete top-level arrays from an otherwise truncated JSON object.
+
+    This is intentionally conservative: it only loads arrays whose brackets
+    are balanced and never guesses a missing value, comma, source, or fact.
+    The returned payload is always ``partial`` and is still subject to the
+    evidence-store recovery rules before it can affect report delivery.
+    """
+
+    text = raw_output.strip()
+    if not text or "{" not in text:
+        return None
+    allowed_by_agent = {
+        "fundamental": (
+            "financial_facts",
+            "operating_facts",
+            "period_comparisons",
+            "management_statements",
+            "calculated_metrics",
+            "change_drivers",
+            "logic_candidates",
+        ),
+        "industry_competition": (
+            "peer_comparison",
+            "not_comparable_fields",
+            "relative_strengths",
+            "relative_weaknesses",
+            "logic_candidates",
+        ),
+        "market_catalyst": ("events", "logic_candidates", "unverified_events"),
+        "risk": (
+            "risk_items",
+            "counter_evidence",
+            "assumption_matrix",
+            "falsification_indicators",
+        ),
+    }
+    keys = allowed_by_agent.get(agent_id, ())
+    recovered: dict[str, Any] = {
+        "protocol_version": "1.0",
+        "status": "partial",
+        "completed_scope": ["部分 JSON 输出恢复"],
+        "evidence_refs": [],
+        "unverified_items": [
+            {
+                "item": "原始模型输出未能完整通过 JSON 校验",
+                "reason": "系统仅保留括号完整的结构化数组。",
+                "required_evidence": "重新运行角色或人工核验剩余字段。",
+            }
+        ],
+        "limitations": ["模型原始 JSON 尾部不完整，恢复结果只代表部分交付。"],
+        "handoff_requests": [],
+        "blocking_reasons": [],
+    }
+    for key in keys:
+        value = _extract_balanced_array_for_key(text, key)
+        if value is not None:
+            recovered[key] = value
+    if not any(key in recovered for key in keys):
+        return None
+    source_ids = sorted(
+        record_id
+        for record_id in _collect_record_ids(recovered)
+        if record_id.startswith("S-")
+    )
+    recovered["evidence_refs"] = source_ids
+    return recovered
+
+
+def _extract_balanced_array_for_key(text: str, key: str) -> list[Any] | None:
+    """Find and parse one balanced JSON array following a named key."""
+
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*\[', text)
+    if match is None:
+        return None
+    start = text.find("[", match.start())
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        character = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "[":
+            depth += 1
+        elif character == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(text[start : index + 1])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    return None
+                return parsed if isinstance(parsed, list) else None
+    return None
 
 
 def _sanitize_text(text: str) -> str:

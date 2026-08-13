@@ -287,6 +287,36 @@
       "title": "Approved Risk Ids",
       "type": "array"
     },
+    "audit_artifact_id": {
+      "anyOf": [
+        {
+          "pattern": "^ART-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audit Artifact Id"
+    },
+    "audit_status": {
+      "anyOf": [
+        {
+          "enum": [
+            "pass",
+            "pass_with_warnings",
+            "fail"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audit Status"
+    },
     "blocking_reasons": {
       "items": {
         "type": "string"
@@ -378,6 +408,15 @@
     "review_id": {
       "pattern": "^REVIEW-[A-Za-z0-9][A-Za-z0-9_-]*$",
       "title": "Review Id",
+      "type": "string"
+    },
+    "review_stage": {
+      "default": "initial",
+      "enum": [
+        "initial",
+        "final"
+      ],
+      "title": "Review Stage",
       "type": "string"
     },
     "status": {

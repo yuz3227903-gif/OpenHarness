@@ -9,6 +9,7 @@ from uuid import uuid4
 from openharness.invest_research.orchestration.research_flow import (
     InvestmentResearchSmokeFlow,
 )
+from openharness.invest_research.orchestration.flow_state import FlowAgentResult
 from openharness.invest_research.orchestration.runtime_gateway import (
     OpenHarnessRuntimeGateway,
 )
@@ -26,11 +27,13 @@ class _FakeRuntime:
         failed_agent_ids: set[str] | None = None,
         report_writer_success: bool = True,
         risk_failure_class: str | None = None,
+        reviewer_failure_class: str | None = None,
     ) -> None:
         self.planner_success = planner_success
         self.failed_agent_ids = failed_agent_ids or set()
         self.report_writer_success = report_writer_success
         self.risk_failure_class = risk_failure_class
+        self.reviewer_failure_class = reviewer_failure_class
         self.requests: list[Any] = []
         self.active_research = 0
         self.peak_active_research = 0
@@ -47,6 +50,48 @@ class _FakeRuntime:
                     model="deepseek-v4-flash",
                     failure_class="network",
                     error="offline writer failure",
+                )
+            if request.output_contract == "report_section":
+                context = request.context_package["report_section_context"]
+                section_id = context["section_id"]
+                allowed_ids = list(context.get("allowed_evidence_ids") or [])
+                logic_ids = (
+                    list(request.input_payload["selected_logic_ids"])
+                    if section_id == "investment_logics"
+                    else []
+                )
+                evidence_ids = logic_ids or allowed_ids[:1]
+                competitors = "、".join(
+                    str(item.get("company_name") or item.get("name") or "")
+                    for item in context.get("competitors") or []
+                )
+                section_status = "completed" if evidence_ids else "partial"
+                return AgentExecutionResult(
+                    status="succeeded",
+                    agent_id="report_writer",
+                    runtime_agent_name="investment-research:report_writer",
+                    model="deepseek-v4-flash",
+                    model_call_id=f"MODEL-WRITER-{section_id.upper()}",
+                    structured_output={
+                        "status": section_status,
+                        "completed_scope": [section_id] if evidence_ids else [],
+                        "evidence_refs": evidence_ids,
+                        "unverified_items": (
+                            []
+                            if evidence_ids
+                            else [{"item": section_id, "reason": "fixture has no evidence"}]
+                        ),
+                        "limitations": [] if evidence_ids else ["fixture evidence gap"],
+                        "handoff_requests": [],
+                        "blocking_reasons": [],
+                        "section_id": section_id,
+                        "title": section_id,
+                        "content": f"演示章节内容。{competitors}",
+                        "evidence_ids": evidence_ids,
+                        "logic_ids": logic_ids,
+                        "warnings": [],
+                    },
+                    usage=UsageRecord(input_tokens=100, output_tokens=30, total_tokens=130),
                 )
             return AgentExecutionResult(
                 status="succeeded",
@@ -159,6 +204,16 @@ class _FakeRuntime:
                 model="deepseek-v4-flash",
                 model_call_id=f"MODEL-{agent_id.upper()}-INVALID-001",
                 error=f"offline {agent_id} schema validation failure",
+            )
+        if agent_id == "reviewer_arbiter" and self.reviewer_failure_class:
+            return AgentExecutionResult(
+                status="failed",
+                agent_id=agent_id,
+                runtime_agent_name=f"investment-research:{agent_id}",
+                model="deepseek-v4-flash",
+                model_call_id="MODEL-REVIEWER-FAILED-001",
+                failure_class=self.reviewer_failure_class,
+                error="offline reviewer failure",
             )
         if agent_id == "reviewer_arbiter" and request.input_payload.get("task_id") == "TASK-CREWAI-FINAL-REVIEW-001":
             return AgentExecutionResult(
@@ -305,6 +360,20 @@ class _FakeEvidenceStore:
             "risk_ids": risk_ids,
         }
 
+    def upsert_record(
+        self, record_type, record_id, run_id, payload, *, status, submitted_by
+    ):
+        self.records.append(
+            {
+                "record_type": record_type,
+                "record_id": record_id,
+                "run_id": run_id,
+                "status": status,
+                "submitted_by": submitted_by,
+                "payload": payload,
+            }
+        )
+
     def run_exists(self, run_id):
         return bool(run_id)
 
@@ -313,6 +382,7 @@ class _FakeEvidenceStore:
             if record.get("run_id") == run_id and record.get("record_id") == record_id:
                 return record
         if record_id.startswith("L-"):
+            suffix = record_id.removeprefix("L-")
             return {
                 "record_type": "logic",
                 "record_id": record_id,
@@ -322,8 +392,37 @@ class _FakeEvidenceStore:
                     "logic_id": record_id,
                     "title": record_id,
                     "mechanism": "offline fixture",
-                    "supporting_fact_ids": [],
+                    "supporting_fact_ids": [f"F-{suffix}"],
                     "source_ids": [],
+                    "counter_evidence_ids": [],
+                },
+            }
+        if record_id.startswith("F-"):
+            suffix = record_id.removeprefix("F-")
+            return {
+                "record_type": "fact",
+                "record_id": record_id,
+                "run_id": run_id,
+                "status": "verified",
+                "payload": {
+                    "fact_id": record_id,
+                    "metric_name": record_id,
+                    "value": 1,
+                    "source_ids": [f"S-{suffix}"],
+                },
+            }
+        if record_id.startswith("S-"):
+            return {
+                "record_type": "source",
+                "record_id": record_id,
+                "run_id": run_id,
+                "status": "verified",
+                "source_grade": "A",
+                "payload": {
+                    "source_id": record_id,
+                    "title": record_id,
+                    "source_grade": "A",
+                    "url_or_file": "https://example.com/source",
                 },
             }
         return None
@@ -348,6 +447,26 @@ class _FakeEvidenceStore:
             and (not record_types or record.get("record_type") in record_types)
             and (not submitted_by or record.get("submitted_by") in submitted_by)
         ]
+        if record_types and "logic" in record_types and not selected:
+            for role in ("fundamental", "industry_competition", "market_catalyst"):
+                logic_id = f"L-{role.upper()}-001"
+                selected.append(
+                    {
+                        "record_type": "logic",
+                        "record_id": logic_id,
+                        "run_id": run_id,
+                        "submitted_by": role,
+                        "status": "candidate",
+                        "payload": {
+                            "logic_id": logic_id,
+                            "title": logic_id,
+                            "mechanism": "offline fixture",
+                            "supporting_fact_ids": [f"F-{role.upper()}-001"],
+                            "counter_evidence_ids": [],
+                            "submitted_by": role,
+                        },
+                    }
+                )
         if record_types and "parameter_card" in record_types and not selected:
             selected.append(
                 {
@@ -401,6 +520,65 @@ class _RetryRuntime:
             agent_id=request.agent_id,
             runtime_agent_name=f"investment-research:{request.agent_id}",
             model="deepseek-v4-flash",
+        )
+
+
+class _PartialPlannerRuntime(_FakeRuntime):
+    async def execute_agent(self, request):
+        if request.agent_id != "planner":
+            return await super().execute_agent(request)
+        self.requests.append(request)
+        return AgentExecutionResult(
+            status="succeeded",
+            agent_id="planner",
+            runtime_agent_name="investment-research:planner",
+            model="deepseek-v4-flash",
+            model_call_id="MODEL-PLANNER-PARTIAL-001",
+            structured_output={
+                "protocol_version": "1.0",
+                "status": "partial",
+                "completed_scope": ["company", "windows"],
+                "evidence_refs": ["S-PLANNER-PARTIAL-001"],
+                "unverified_items": [],
+                "limitations": ["second competitor missing"],
+                "handoff_requests": [],
+                "blocking_reasons": [],
+                "company_identity": {
+                    "legal_name": "科大讯飞股份有限公司",
+                    "short_name": "科大讯飞",
+                    "ticker": "002230",
+                    "exchange": "深圳证券交易所",
+                    "primary_business": "人工智能",
+                    "source_ids": ["S-PLANNER-PARTIAL-001"],
+                },
+                "research_period": {
+                    "start_date": "2025-08-13",
+                    "end_date": "2026-08-13",
+                },
+                "catalyst_window": {
+                    "start_date": "2026-08-13",
+                    "end_date": "2027-02-13",
+                },
+                "competitor_candidates": [],
+                "recommended_competitors": [
+                    {
+                        "company_name": "百度集团",
+                        "ticker": "9888.HK",
+                        "exchange": "香港交易所",
+                        "selection_reasons": ["大模型业务可比"],
+                        "comparability_limits": ["上市市场不同"],
+                        "source_ids": ["S-PLANNER-PARTIAL-001"],
+                    }
+                ],
+                "task_plan": [],
+                "dependency_graph": {},
+                "available_materials": [],
+                "material_gaps": [],
+                "gate_1_payload": None,
+            },
+            artifact_id="ART-PLANNER-PARTIAL-001",
+            source_ids=["S-PLANNER-PARTIAL-001"],
+            usage=UsageRecord(input_tokens=100, output_tokens=20, total_tokens=120),
         )
 
 
@@ -485,9 +663,16 @@ def test_flow_dispatches_parallel_research_risk_then_reviewer():
         "ART-MARKET_CATALYST-CREWAI-001",
         "ART-RISK-CREWAI-001",
     }
-    assert reviewer_request.max_turns == 3
-    assert reviewer_request.tool_call_limits["evidence_query"] == 0
+    assert reviewer_request.max_turns == 4
+    assert reviewer_request.tool_call_limits["evidence_query"] == 2
     assert "compact_research_brief" in reviewer_request.context_package
+    assert reviewer_request.input_payload["review_stage"] == "initial"
+    assert reviewer_request.input_payload["audit_status"] in {
+        "pass",
+        "pass_with_warnings",
+        "fail",
+    }
+    assert "evidence_audit" in reviewer_request.context_package
     supplement_request = runtime.requests[-2]
     assert supplement_request.agent_id == "fundamental"
     assert supplement_request.context_package["review_issues"][0]["issue_id"] == (
@@ -547,6 +732,44 @@ def test_planner_failure_stops_before_parallel_research():
     assert gateway.execution_count == 1
     assert [request.agent_id for request in runtime.requests] == ["planner"]
     assert flow.state.current_stage == "failed"
+
+
+def test_partial_planner_card_is_recovered_before_parallel_research():
+    runtime = _PartialPlannerRuntime()
+    gateway = OpenHarnessRuntimeGateway(runtime)
+    flow = InvestmentResearchSmokeFlow(gateway)
+    result = asyncio.run(
+        flow.kickoff_async(
+            inputs={
+                "run_id": "RUN-CREWAI-PLANNER-RECOVERY-001",
+                "company_query": "科大讯飞",
+                "as_of_date": "2026-08-13",
+            }
+        )
+    )
+
+    assert result["parameter_card_id"].startswith("PC-")
+    assert result["pipeline_status"] == "awaiting_reviewer_recheck"
+    assert result["recovery_used"] is True
+    assert result["recovery_reason"].startswith("planner_partial_parameter_card_recovered")
+    assert result["fallback_used"] is False
+    assert gateway.execution_count > 1
+    industry_request = next(
+        request
+        for request in runtime.requests
+        if request.agent_id == "industry_competition"
+    )
+    competitors = industry_request.input_payload["confirmed_competitors"]
+    assert len(competitors) == 2
+    assert any(
+        item["company_name"].startswith("待 IndustryCompetition 核验")
+        for item in competitors
+    )
+    assert "系统占位" in industry_request.task_prompt
+    assert any(
+        event["event_type"] == "planner_parameter_card_recovered"
+        for event in result["events"]
+    )
 
 
 def test_one_parallel_research_failure_continues_to_risk_and_reviewer():
@@ -635,17 +858,36 @@ def test_complete_flow_generates_report_after_final_review():
     assert result["pipeline_status"] in {"completed", "completed_with_warnings"}
     assert result["report_path"].endswith("report.md")
     assert result["run_id"] in result["report_path"]
-    assert [request.agent_id for request in runtime.requests][-2:] == [
-        "reviewer_arbiter",
-        "report_writer",
-    ]
+    assert runtime.requests[-7].agent_id == "reviewer_arbiter"
+    assert [request.agent_id for request in runtime.requests[-6:]] == [
+        "report_writer"
+    ] * 6
+    initial_reviewer_request = next(
+        request
+        for request in runtime.requests
+        if request.input_payload.get("task_id") == "TASK-CREWAI-REVIEWER-001"
+    )
+    final_reviewer_request = runtime.requests[-7]
+    assert final_reviewer_request.tool_call_limits["evidence_query"] == 1
+    assert final_reviewer_request.input_payload["review_stage"] == "final"
+    assert (
+        initial_reviewer_request.input_payload["expected_review_id"]
+        != final_reviewer_request.input_payload["expected_review_id"]
+    )
+    assert result["initial_evidence_audit"] is not None
+    assert result["final_evidence_audit"] is not None
     writer_request = runtime.requests[-1]
     assert writer_request.max_turns == 2
+    assert writer_request.max_output_tokens == 6_000
+    assert writer_request.timeout_seconds == 180
     assert writer_request.tool_call_limits == {}
-    assert "report_context" in writer_request.context_package
-    assert writer_request.context_package["report_context"]["run_id"] == result["run_id"]
+    assert writer_request.output_contract == "report_section"
+    assert writer_request.persist_output is False
+    assert "report_section_context" in writer_request.context_package
+    assert writer_request.context_package["report_section_context"]["run_id"] == result["run_id"]
     assert flow.state.fallback_used is False
-    assert gateway.execution_count == 10
+    assert gateway.execution_count == 15
+    assert len(result["section_statuses"]) == 8
 
 
 def test_complete_flow_falls_back_when_report_writer_fails():
@@ -679,6 +921,21 @@ def test_complete_flow_falls_back_when_report_writer_fails():
         assert (flow._project_root / ".openharness" / "validation" / "full-chain-report.md").is_file()
     finally:
         shutil.rmtree(temporary_root, ignore_errors=True)
+
+
+def test_reviewer_failure_recovers_provisional_logics_and_runs_writer():
+    runtime = _FakeRuntime(reviewer_failure_class="timeout")
+    flow, _, result = _run_flow(runtime, complete_report=True)
+
+    assert result["report_generated"] is True
+    assert result["formal_report_succeeded"] is True
+    assert result["fallback_used"] is False
+    assert result["delivery_mode"] == "provisional"
+    assert result["report_quality"] == "partial"
+    assert result["recovery_used"] is True
+    assert len(result["delivery_decision"]["selected_logic_ids"]) == 3
+    assert [request.agent_id for request in runtime.requests][-1] == "report_writer"
+    assert flow.state.delivery_decision["delivery_mode"] == "provisional"
 
 
 def test_gateway_retries_one_transient_network_failure():
@@ -715,3 +972,41 @@ def test_gateway_can_disable_transient_retry_for_bounded_flow_steps():
     assert result.failure_class == "network"
     assert runtime.calls == 1
     assert gateway.execution_count == 1
+
+
+def test_flow_summary_metrics_include_tokens_cache_and_source_reuse():
+    runtime = _FakeRuntime()
+    flow = InvestmentResearchSmokeFlow(OpenHarnessRuntimeGateway(runtime))
+    flow.state.agent_results = {
+        "planner": FlowAgentResult(
+            agent_id="planner",
+            execution_status="succeeded",
+            total_tokens=120,
+            tool_invocation_count=2,
+            external_tool_call_count=1,
+            cache_hit_count=1,
+            source_ids=["S-001", "S-002"],
+        ),
+        "fundamental": FlowAgentResult(
+            agent_id="fundamental",
+            execution_status="succeeded",
+            total_tokens=300,
+            tool_invocation_count=1,
+            external_tool_call_count=0,
+            cache_hit_count=1,
+            budget_exhausted_count=1,
+            source_ids=["S-001"],
+        ),
+    }
+
+    metrics = flow._run_metrics()
+
+    assert metrics["total_tokens"] == 420
+    assert metrics["agent_token_usage"] == {"planner": 120, "fundamental": 300}
+    assert metrics["tool_invocation_count"] == 3
+    assert metrics["external_tool_call_count"] == 1
+    assert metrics["cache_hit_count"] == 2
+    assert metrics["cache_hit_rate"] == 0.6667
+    assert metrics["estimated_saved_external_calls"] == 2
+    assert metrics["source_reuse_ratio"] == 0.6667
+    assert metrics["budget_exhausted_count"] == 1

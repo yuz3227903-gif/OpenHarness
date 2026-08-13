@@ -22,6 +22,8 @@ FlowStage = Literal[
     "supplement_risk_running",
     "supplement_completed",
     "final_reviewer_running",
+    "report_sections_running",
+    "report_assembling",
     "completed",
     "failed",
 ]
@@ -51,6 +53,10 @@ class FlowAgentResult(BaseModel):
     model: str | None = None
     model_call_id: str | None = None
     tool_names: list[str] = Field(default_factory=list)
+    tool_invocation_count: int = 0
+    external_tool_call_count: int = 0
+    cache_hit_count: int = 0
+    budget_exhausted_count: int = 0
     total_tokens: int = 0
     source_ids: list[str] = Field(default_factory=list)
     fact_ids: list[str] = Field(default_factory=list)
@@ -81,6 +87,9 @@ class ResearchFlowState(BaseModel):
     review_output: dict[str, Any] | None = None
     initial_review_output: dict[str, Any] | None = None
     final_review_output: dict[str, Any] | None = None
+    initial_evidence_audit: dict[str, Any] | None = None
+    final_evidence_audit: dict[str, Any] | None = None
+    delivery_decision: dict[str, Any] | None = None
     report_result: dict[str, Any] | None = None
     report_path: str | None = None
     report_quality: Literal["complete", "partial", "fallback"] | None = None
@@ -89,6 +98,20 @@ class ResearchFlowState(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     total_retry_count: int = 0
     fallback_used: bool = False
+    formal_report_succeeded: bool = False
+    delivery_mode: Literal["formal", "provisional", "fallback"] | None = None
+    recovery_used: bool = False
+    recovery_reason: str | None = None
+    fallback_trigger_stage: str | None = None
+    recovery_actions: list[str] = Field(default_factory=list)
+    section_statuses: dict[str, str] = Field(default_factory=dict)
+    completed_section_ids: list[str] = Field(default_factory=list)
+    partial_section_ids: list[str] = Field(default_factory=list)
+    failed_section_ids: list[str] = Field(default_factory=list)
+    section_retry_counts: dict[str, int] = Field(default_factory=dict)
+    section_artifact_ids: dict[str, str] = Field(default_factory=dict)
+    section_token_usage: dict[str, int] = Field(default_factory=dict)
+    section_durations: dict[str, float] = Field(default_factory=dict)
     supplement_round: int = 0
     agent_results: dict[str, FlowAgentResult] = Field(default_factory=dict)
     artifact_history: dict[str, list[str]] = Field(default_factory=dict)

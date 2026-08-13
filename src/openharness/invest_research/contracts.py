@@ -33,6 +33,26 @@ ReviewRoute = Literal[
     "request_supplement",
     "require_human_resolution",
 ]
+AuditStatus = Literal["pass", "pass_with_warnings", "fail"]
+ReviewStage = Literal["initial", "final"]
+ReportModelSectionId = Literal[
+    "company_overview",
+    "operating_changes",
+    "investment_logics",
+    "peer_comparison",
+    "catalysts",
+    "risks",
+]
+ReportSectionId = Literal[
+    "company_overview",
+    "operating_changes",
+    "investment_logics",
+    "peer_comparison",
+    "catalysts",
+    "risks",
+    "tracking_indicators",
+    "limitations",
+]
 
 RunId = Annotated[str, Field(pattern=r"^RUN-[A-Za-z0-9][A-Za-z0-9_-]*$")]
 TaskId = Annotated[str, Field(pattern=r"^TASK-[A-Za-z0-9][A-Za-z0-9_-]*$")]
@@ -299,6 +319,7 @@ class ComparisonMetricDefinition(ContractModel):
 class PeerComparisonRow(ContractModel):
     company_name: str = Field(min_length=1)
     ticker: str | None = None
+    exchange: str | None = None
     values: dict[str, float | str | None]
     source_ids: list[SourceId] = Field(default_factory=list)
 
@@ -511,6 +532,10 @@ class Gate2Payload(ContractModel):
 
 class ReviewerArbiterInput(AgentInputBase):
     agent_id: Literal["reviewer_arbiter"]
+    review_stage: ReviewStage = "initial"
+    expected_review_id: ReviewId | None = None
+    audit_artifact_id: ArtifactId | None = None
+    audit_status: AuditStatus | None = None
     parameter_card: ParameterCardRef
     research_artifact_ids: list[ArtifactId] = Field(min_length=1)
     source_ids: list[SourceId] = Field(default_factory=list)
@@ -522,6 +547,9 @@ class ReviewerArbiterInput(AgentInputBase):
 
 class ReviewDecision(AgentResultBase):
     review_id: ReviewId
+    review_stage: ReviewStage = "initial"
+    audit_artifact_id: ArtifactId | None = None
+    audit_status: AuditStatus | None = None
     decision: ReviewRoute
     approved_fact_ids: list[FactId] = Field(default_factory=list)
     approved_logic_ids: list[LogicId] = Field(default_factory=list, max_length=3)
@@ -550,11 +578,57 @@ class ReportWriterInput(AgentInputBase):
     agent_id: Literal["report_writer"]
     parameter_card: ParameterCardRef
     review_id: ReviewId
+    delivery_mode: Literal["formal", "provisional"] = "formal"
+    selected_logic_ids: list[LogicId] = Field(default_factory=list, max_length=3)
     approved_fact_ids: list[FactId] = Field(default_factory=list)
-    approved_logic_ids: list[LogicId] = Field(min_length=3, max_length=3)
+    approved_logic_ids: list[LogicId] = Field(default_factory=list, max_length=3)
     approved_catalyst_ids: list[CatalystId] = Field(default_factory=list)
     approved_risk_ids: list[RiskId] = Field(default_factory=list)
     gate_2_decision_id: str | None = None
+    section_id: ReportModelSectionId | None = None
+    allowed_evidence_ids: list[str] = Field(default_factory=list)
+    attempt: int = Field(default=1, ge=1, le=2)
+
+    @model_validator(mode="after")
+    def validate_delivery_logics(self) -> "ReportWriterInput":
+        selected = self.selected_logic_ids or self.approved_logic_ids
+        if len(selected) != 3:
+            raise ValueError("ReportWriterInput requires exactly three selected logic IDs")
+        if self.delivery_mode == "formal" and set(self.approved_logic_ids) != set(selected):
+            raise ValueError("formal ReportWriterInput requires the selected logics to be approved")
+        self.selected_logic_ids = list(selected)
+        return self
+
+
+class ReportSectionRequest(ReportWriterInput):
+    """One bounded chapter-writing task executed by the existing ReportWriter."""
+
+    section_id: ReportModelSectionId
+
+
+class ReportSectionResult(AgentResultBase):
+    """Structured output for one independently generated report chapter."""
+
+    # Model calls are still restricted by ReportSectionRequest to the six
+    # model-written chapters.  The wider result type lets the deterministic
+    # backend serialize tracking_indicators and limitations consistently.
+    section_id: ReportSectionId
+    title: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    logic_ids: list[LogicId] = Field(default_factory=list, max_length=3)
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_completed_section(self) -> "ReportSectionResult":
+        if self.status == "completed" and not self.evidence_ids:
+            raise ValueError("completed ReportSectionResult requires evidence_ids")
+        if self.section_id == "investment_logics" and self.status == "completed":
+            if len(self.logic_ids) != 3:
+                raise ValueError(
+                    "completed investment_logics section requires exactly three logic_ids"
+                )
+        return self
 
 
 class ReportMetadata(ContractModel):
@@ -567,7 +641,7 @@ class ReportMetadata(ContractModel):
 
 
 class ReportSection(ContractModel):
-    section_id: str = Field(min_length=1)
+    section_id: ReportSectionId
     title: str = Field(min_length=1)
     content: str = Field(min_length=1)
     evidence_ids: list[str] = Field(default_factory=list)

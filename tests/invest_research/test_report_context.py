@@ -164,3 +164,87 @@ def test_context_rejects_cross_run():
             ReportContextBuilder(store).build("RUN-REPORT-CONTEXT-OTHER", _review(run_id))
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_context_accepts_traceable_candidate_logics_for_provisional_delivery():
+    root, store, run_id = _store()
+    try:
+        for index in range(1, 4):
+            store.update_record_status(
+                run_id, "logic", [f"L-REPORT-00{index}"], "candidate"
+            )
+            store.update_record_status(
+                run_id, "fact", [f"F-REPORT-00{index}"], "candidate"
+            )
+        delivery = {
+            "delivery_mode": "provisional",
+            "selected_logic_ids": [
+                "L-REPORT-001",
+                "L-REPORT-002",
+                "L-REPORT-003",
+            ],
+            "review_id": "REVIEW-RECOVERY-001",
+            "recovery_used": True,
+            "recovery_reason": "reviewer_timeout",
+            "warnings": ["待人工复核"],
+        }
+
+        context = ReportContextBuilder(store).build(
+            run_id, {}, delivery_decision=delivery
+        )
+
+        assert context["delivery"]["delivery_mode"] == "provisional"
+        assert context["delivery"]["recovery_used"] is True
+        assert context["authorized_record_ids"]["logic_ids"] == delivery[
+            "selected_logic_ids"
+        ]
+        assert all(
+            item["delivery_status"] == "provisional"
+            for item in context["investment_logics"]
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_context_replaces_planner_placeholder_with_industry_peer_result():
+    root, store, run_id = _store()
+    try:
+        parameter = store.get_record(run_id, "PC-REPORT-001")["payload"]
+        target_name = parameter["company_identity"]["short_name"]
+        parameter["recommended_competitors"] = [
+            {"company_name": "真实竞品甲"},
+            {"company_name": "待 IndustryCompetition 核验的竞品 1"},
+        ]
+        store.upsert_record(
+            "parameter_card",
+            "PC-REPORT-001",
+            run_id,
+            parameter,
+            status="provisional",
+            submitted_by="system",
+        )
+        store.upsert_record(
+            "artifact",
+            "ART-INDUSTRY-REPORT-001",
+            run_id,
+            {
+                "artifact_id": "ART-INDUSTRY-REPORT-001",
+                "output": {
+                    "peer_comparison": [
+                        {"company_name": target_name, "values": {}},
+                        {"company_name": "真实竞品甲", "values": {}},
+                        {"company_name": "真实竞品乙", "values": {}},
+                    ]
+                },
+            },
+            status="partial",
+            submitted_by="industry_competition",
+        )
+
+        context = ReportContextBuilder(store).build(run_id, _review(run_id))
+
+        names = [item["company_name"] for item in context["competitors"]]
+        assert names == ["真实竞品甲", "真实竞品乙"]
+        assert all("待 IndustryCompetition 核验" not in name for name in names)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

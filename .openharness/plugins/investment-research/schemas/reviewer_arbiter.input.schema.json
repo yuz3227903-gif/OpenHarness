@@ -71,6 +71,49 @@
       "title": "Agent Id",
       "type": "string"
     },
+    "audit_artifact_id": {
+      "anyOf": [
+        {
+          "pattern": "^ART-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audit Artifact Id"
+    },
+    "audit_status": {
+      "anyOf": [
+        {
+          "enum": [
+            "pass",
+            "pass_with_warnings",
+            "fail"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audit Status"
+    },
+    "expected_review_id": {
+      "anyOf": [
+        {
+          "pattern": "^REVIEW-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Review Id"
+    },
     "fact_ids": {
       "items": {
         "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
@@ -136,6 +179,15 @@
       "minItems": 1,
       "title": "Research Artifact Ids",
       "type": "array"
+    },
+    "review_stage": {
+      "default": "initial",
+      "enum": [
+        "initial",
+        "final"
+      ],
+      "title": "Review Stage",
+      "type": "string"
     },
     "run_id": {
       "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9_-]*$",

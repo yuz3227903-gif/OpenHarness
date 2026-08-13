@@ -41,6 +41,12 @@ class PromptAssembler:
     def render_output_contract(self, agent_id: str) -> str:
         return render_output_contract(agent_id)
 
+    def render_model_output_contract(self, model: type[BaseModel]) -> str:
+        """Render an explicitly selected contract for a bounded sub-task."""
+
+        validate_contract_model(model)
+        return json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2)
+
 
 def assemble_prompt(layers: PromptLayers) -> str:
     """Assemble all required layers in fixed precedence order.

@@ -7,6 +7,10 @@ import json
 from pathlib import Path
 
 from openharness.invest_research.agent_registry import iter_agent_entries
+from openharness.invest_research.contracts import (
+    ReportSectionRequest,
+    ReportSectionResult,
+)
 
 
 def default_plugin_root() -> Path:
@@ -32,6 +36,16 @@ def export_contract_schemas(plugin_root: Path | None = None) -> list[Path]:
                 encoding="utf-8",
             )
             written.append(path)
+    for filename, schema in (
+        ("report_section.input.schema.json", ReportSectionRequest.model_json_schema()),
+        ("report_section.output.schema.json", ReportSectionResult.model_json_schema()),
+    ):
+        path = schema_dir / filename
+        path.write_text(
+            json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        written.append(path)
     return written
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from openharness.invest_research.evidence_store import EvidenceStore
-
+from openharness.invest_research.planner_recovery import is_competitor_placeholder
 
 DEFAULT_MAX_CHARS = 48_000
 
@@ -26,23 +26,52 @@ class ReportContextBuilder:
         self._store = store
         self._max_chars = max_chars
 
-    def build(self, run_id: str, review_output: dict[str, Any]) -> dict[str, Any]:
+    def build(
+        self,
+        run_id: str,
+        review_output: dict[str, Any],
+        *,
+        delivery_decision: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if not self._store.run_exists(run_id):
             raise ReportContextError(f"unknown research Run: {run_id}")
         decision = str(review_output.get("decision") or "")
-        if decision not in {"approve_for_report", "approve_with_warnings"}:
+        delivery = dict(delivery_decision or {})
+        delivery_mode = str(delivery.get("delivery_mode") or "formal")
+        if delivery_mode not in {"formal", "provisional"}:
+            raise ReportContextError("report context requires a formal or provisional delivery")
+        if delivery_mode == "formal" and decision not in {
+            "approve_for_report",
+            "approve_with_warnings",
+        }:
             raise ReportContextError(
                 "ReportWriter context requires approve_for_report or approve_with_warnings"
             )
 
-        approved_logic_ids = _unique_strings(review_output.get("approved_logic_ids"))
-        if len(approved_logic_ids) != 3:
-            raise ReportContextError("report context requires exactly three approved logic IDs")
+        selected_logic_ids = _unique_strings(
+            delivery.get("selected_logic_ids") or review_output.get("approved_logic_ids")
+        )
+        if len(selected_logic_ids) != 3:
+            raise ReportContextError("report context requires exactly three selected logic IDs")
 
         parameter = self._first_payload(run_id, "parameter_card")
-        logics = self._approved_records(run_id, "logic", approved_logic_ids, {"approved"})
+        logic_statuses = {"approved"} if delivery_mode == "formal" else {
+            "candidate",
+            "provisional",
+            "approved",
+        }
+        fact_statuses = {"verified", "approved"} if delivery_mode == "formal" else {
+            "candidate",
+            "verified",
+            "approved",
+        }
+        logics = self._approved_records(
+            run_id, "logic", selected_logic_ids, logic_statuses
+        )
         if len(logics) != 3:
-            raise ReportContextError("one or more approved logic records are missing")
+            if delivery_mode == "formal":
+                raise ReportContextError("one or more approved logic records are missing")
+            raise ReportContextError("one or more selected logic records are missing")
 
         supporting_fact_ids = _unique_strings(
             fact_id
@@ -55,23 +84,34 @@ class ReportContextBuilder:
             run_id,
             "fact",
             selected_fact_ids,
-            {"verified", "approved"},
+            fact_statuses,
         )
-        catalysts = self._approved_records(
+        catalysts = self._delivery_records(
             run_id,
             "catalyst",
             _unique_strings(review_output.get("approved_catalyst_ids"))[:8],
-            {"approved"},
+            delivery_mode=delivery_mode,
+            limit=8,
         )
-        risks = self._approved_records(
+        risks = self._delivery_records(
             run_id,
             "risk",
             _unique_strings(review_output.get("approved_risk_ids"))[:6],
-            {"approved"},
+            delivery_mode=delivery_mode,
+            limit=6,
         )
         peer_comparison, peer_limitations, peer_refs = self._peer_material(
             run_id, review_output
         )
+        report_competitors = _resolved_report_competitors(parameter, peer_comparison)
+        if len(report_competitors) < 2:
+            peer_limitations = [
+                *peer_limitations,
+                (
+                    "Planner 暂定参数卡中的竞品占位项未被行业竞品 Agent 完整替换；"
+                    "报告不得把占位名称当作真实竞争对手。"
+                ),
+            ]
 
         source_ids = _collect_source_ids(
             [*facts, *logics, *catalysts, *risks, *peer_comparison]
@@ -89,14 +129,32 @@ class ReportContextBuilder:
                 "Only the records in this package may be used. Missing information must be "
                 "labelled as unverified; no new fact or source ID may be created."
             ),
+            "delivery": {
+                "delivery_mode": delivery_mode,
+                "recovery_used": bool(delivery.get("recovery_used")),
+                "recovery_reason": delivery.get("recovery_reason"),
+                "warnings": list(delivery.get("warnings") or [])[:12],
+                "provisional_notice": (
+                    "System-selected evidence-backed logics; not fully confirmed by Reviewer. "
+                    "Human review is still required."
+                    if delivery_mode == "provisional"
+                    else None
+                ),
+            },
             "company": parameter.get("company_identity") or {},
             "research_period": parameter.get("research_period"),
             "catalyst_window": parameter.get("catalyst_window"),
-            "competitors": parameter.get("recommended_competitors") or [],
+            "competitors": report_competitors,
             "operating_changes": facts,
             "investment_logics": [
                 {
                     **logic,
+                    "delivery_status": delivery_mode,
+                    "provisional_notice": (
+                        "系统暂定，未经 Reviewer 完整确认，待人工复核"
+                        if delivery_mode == "provisional"
+                        else None
+                    ),
                     "supporting_facts": [
                         fact
                         for fact in facts
@@ -121,11 +179,12 @@ class ReportContextBuilder:
                 "unverified_items": list(review_output.get("unverified_items") or [])[:8],
                 "limitations": list(review_output.get("limitations") or [])[:8],
                 "rejected_items": list(review_output.get("rejected_items") or [])[:8],
+                "delivery_warnings": list(delivery.get("warnings") or [])[:12],
             },
             "sources": sources,
             "authorized_record_ids": {
                 "fact_ids": [item.get("fact_id") for item in facts],
-                "logic_ids": approved_logic_ids,
+                "logic_ids": selected_logic_ids,
                 "catalyst_ids": [item.get("catalyst_id") for item in catalysts],
                 "risk_ids": [item.get("risk_id") for item in risks],
                 "source_ids": [item.get("source_id") for item in sources],
@@ -133,6 +192,33 @@ class ReportContextBuilder:
             },
         }
         return self._fit_budget(context)
+
+    def _delivery_records(
+        self,
+        run_id: str,
+        record_type: str,
+        approved_ids: list[str],
+        *,
+        delivery_mode: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if approved_ids:
+            allowed = {"approved"} if delivery_mode == "formal" else {
+                "candidate",
+                "approved",
+            }
+            return self._approved_records(
+                run_id, record_type, approved_ids[:limit], allowed
+            )
+        if delivery_mode != "provisional":
+            return []
+        records = self._store.query_records(
+            run_id,
+            record_types=(record_type,),
+            statuses=("candidate", "approved"),
+            limit=limit,
+        )
+        return [dict(item.get("payload") or {}) for item in records[:limit]]
 
     def write(self, context: dict[str, Any], output_path: Path) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,10 +326,44 @@ class ReportContextBuilder:
 
         serialized = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         if len(serialized) > self._max_chars:
+            for key in (
+                "competitors",
+                "operating_changes",
+                "investment_logics",
+                "peer_comparison",
+                "peer_comparison_limitations",
+                "catalysts",
+                "risks",
+                "sources",
+            ):
+                context[key] = _compact_value(
+                    context.get(key), max_text=420, max_list=6
+                )
+            context["review"] = _compact_value(
+                context.get("review"), max_text=420, max_list=8
+            )
+            serialized = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        if len(serialized) > self._max_chars:
             context["peer_comparison_limitations"] = context[
                 "peer_comparison_limitations"
             ][:4]
             context["review"]["issues"] = context["review"]["issues"][:4]
+            context["sources"] = context["sources"][:10]
+            context["catalysts"] = context["catalysts"][:4]
+            context["risks"] = context["risks"][:4]
+            for key in (
+                "competitors",
+                "operating_changes",
+                "investment_logics",
+                "peer_comparison",
+                "peer_comparison_limitations",
+                "catalysts",
+                "risks",
+                "sources",
+            ):
+                context[key] = _compact_value(
+                    context.get(key), max_text=260, max_list=4
+                )
             serialized = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         if len(serialized) > self._max_chars:
             raise ReportContextError(
@@ -287,12 +407,74 @@ def _source_refs(values: Any) -> list[str]:
     return [item for item in _unique_strings(values) if item.startswith("S-")]
 
 
+def _resolved_report_competitors(
+    parameter: dict[str, Any],
+    peer_comparison: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return real competitor names only; Planner placeholders never reach Writer."""
+
+    company = dict(parameter.get("company_identity") or {})
+    target_names = {
+        str(value).strip().casefold()
+        for value in (company.get("legal_name"), company.get("short_name"))
+        if value
+    }
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in parameter.get("recommended_competitors") or []:
+        if not isinstance(item, dict) or is_competitor_placeholder(item):
+            continue
+        name = str(item.get("company_name") or "").strip()
+        if not name or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        output.append(dict(item))
+    for row in peer_comparison:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("company_name") or row.get("company") or "").strip()
+        key = name.casefold()
+        if not name or key in target_names or key in seen:
+            continue
+        seen.add(key)
+        output.append(
+            {
+                "company_name": name,
+                "ticker": row.get("ticker"),
+                "exchange": row.get("exchange"),
+                "source_ids": list(row.get("source_ids") or []),
+                "resolved_by": "industry_competition",
+            }
+        )
+    return output[:2]
+
+
 def _compact_dicts(values: Any, fields: tuple[str, ...], *, limit: int) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for value in list(values or [])[:limit]:
         if isinstance(value, dict):
             output.append({field: value.get(field) for field in fields if field in value})
     return output
+
+
+def _compact_value(value: Any, *, max_text: int, max_list: int) -> Any:
+    """Bound verbose model fields while preserving IDs, keys, and source URLs."""
+
+    if isinstance(value, str):
+        if len(value) <= max_text:
+            return value
+        return value[: max_text - 1].rstrip() + "…"
+    if isinstance(value, list):
+        return [
+            _compact_value(item, max_text=max_text, max_list=max_list)
+            for item in value[:max_list]
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _compact_value(item, max_text=max_text, max_list=max_list)
+            for key, item in value.items()
+        }
+    return value
 
 
 __all__ = ["DEFAULT_MAX_CHARS", "ReportContextBuilder", "ReportContextError"]
