@@ -75,9 +75,14 @@ class OpenHarnessRuntimeGateway:
                 if attempt:
                     result.retry_count += attempt
                     result.degraded = True
-                    result.warnings.append(
-                        f"{agent_id} runtime retry attempts: {attempt}."
-                    )
+                    if result.failure_class == "empty_response":
+                        result.warnings.append(
+                            f"{agent_id} empty-response recovery retried once in a fresh runtime session."
+                        )
+                    else:
+                        result.warnings.append(
+                            f"{agent_id} runtime retry attempts: {attempt}."
+                        )
                 return result
             await asyncio.sleep(0.5 * (attempt + 1))
         raise RuntimeError("Agent runtime did not return a result")
@@ -88,6 +93,7 @@ def _retryable_result(result: AgentExecutionResult) -> bool:
         "network",
         "rate_limit",
         "timeout",
+        "empty_response",
     }
 
 

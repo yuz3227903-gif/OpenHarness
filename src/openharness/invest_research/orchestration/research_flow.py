@@ -6,7 +6,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from openharness.invest_research.orchestration import configure_crewai_environment
 
@@ -53,6 +53,105 @@ from openharness.invest_research.source_catalog import build_shared_source_catal
 _REPORT_CONTEXT_MAX_CHARS = 24_000
 
 
+def _compact_text(value: Any, *, limit: int = 110) -> str:
+    """Return a channel-safe one-line preview without exposing raw model traces."""
+
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1]}…"
+
+
+def _named_items(items: Any, *keys: str, limit: int = 2) -> list[str]:
+    previews: list[str] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            value = next((item.get(key) for key in keys if item.get(key)), None)
+        else:
+            value = item
+        preview = _compact_text(value)
+        if preview and preview not in previews:
+            previews.append(preview)
+        if len(previews) >= limit:
+            break
+    return previews
+
+
+def build_agent_delivery_message(result: AgentExecutionResult) -> str:
+    """Build a useful, auditable handoff message from validated Agent output.
+
+    The message intentionally exposes conclusions, tool names and evidence counts,
+    but never raw prompts, hidden reasoning or full tool responses.
+    """
+
+    output = result.structured_output or {}
+    details: list[str] = []
+    if result.agent_id == "planner":
+        company = output.get("company_identity") or {}
+        company_name = company.get("short_name") or company.get("legal_name")
+        competitors = _named_items(
+            output.get("recommended_competitors"), "company_name", "short_name", limit=2
+        )
+        if company_name:
+            details.append(f"目标公司已核验为 {_compact_text(company_name)}")
+        if competitors:
+            details.append(f"竞品候选为 {'、'.join(competitors)}")
+    elif result.agent_id == "fundamental":
+        details.extend(_named_items(output.get("change_drivers"), limit=2))
+        details.extend(_named_items(output.get("logic_candidates"), "title", limit=1))
+    elif result.agent_id == "industry_competition":
+        details.extend(_named_items(output.get("relative_strengths"), limit=1))
+        details.extend(_named_items(output.get("logic_candidates"), "title", limit=1))
+    elif result.agent_id == "market_catalyst":
+        details.extend(_named_items(output.get("events"), "title", limit=2))
+        details.extend(_named_items(output.get("logic_candidates"), "title", limit=1))
+    elif result.agent_id == "risk":
+        details.extend(_named_items(output.get("risk_items"), "title", limit=3))
+    elif result.agent_id == "reviewer_arbiter":
+        decision = output.get("decision")
+        rationale = _compact_text(output.get("decision_rationale"), limit=150)
+        if decision:
+            details.append(f"审查结论为 {decision}")
+        if rationale:
+            details.append(rationale)
+    elif result.agent_id == "report_writer":
+        details.extend(_named_items(output.get("sections"), "title", "section_id", limit=2))
+
+    evidence_parts = []
+    for label, values in (
+        ("来源", result.source_ids),
+        ("事实", result.fact_ids),
+        ("逻辑", result.logic_ids),
+        ("催化", result.catalyst_ids),
+        ("风险", result.risk_ids),
+    ):
+        if values:
+            evidence_parts.append(f"{label}{len(values)}条")
+
+    tools = list(dict.fromkeys(call.tool_name for call in result.tool_calls))
+    unverified_count = len(output.get("unverified_items") or []) + len(
+        output.get("unverified_events") or []
+    )
+    limitation_count = len(output.get("limitations") or []) + len(
+        output.get("source_limitations") or []
+    )
+    issue_count = len(output.get("issues") or [])
+
+    sentences = ["本轮工作已完成。"]
+    if tools:
+        sentences.append(f"调用工具：{'、'.join(tools)}。")
+    else:
+        sentences.append("本轮基于上游已交付材料完成，未调用外部工具。")
+    if evidence_parts:
+        sentences.append(f"已登记{'、'.join(evidence_parts)}。")
+    if details:
+        sentences.append(f"核心交付：{'；'.join(details[:3])}。")
+    pending = unverified_count + limitation_count + issue_count
+    if pending:
+        sentences.append(f"另有{pending}项待验证、限制或审查问题，已随成果一并移交。")
+    return "".join(sentences)
+
+
 class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
     """CrewAI controls order; OpenHarness executes the seven research roles."""
 
@@ -62,11 +161,15 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         *,
         complete_report: bool = False,
         budget_policy: ResearchBudgetPolicy | None = None,
+        pause_callback: Callable[[], None] | None = None,
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         super().__init__()
         self.gateway = gateway or OpenHarnessRuntimeGateway()
         self.complete_report = complete_report
         self.budget_policy = budget_policy or DEFAULT_RESEARCH_BUDGET_POLICY
+        self.pause_callback = pause_callback
+        self.event_callback = event_callback
         self._project_root = Path(__file__).resolve().parents[4]
         self._raw_results: dict[str, AgentExecutionResult] = {}
 
@@ -152,16 +255,45 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         task_id: str | None = None,
         artifact_id: str | None = None,
     ) -> None:
-        self.state.events.append(
-            CollaborationEvent(
-                event_type=event_type,
-                actor_id=actor_id,
-                target_agent_ids=target_agent_ids or [],
-                message=message,
-                task_id=task_id,
-                artifact_id=artifact_id,
-            )
+        if self.pause_callback is not None:
+            self.pause_callback()
+        event = CollaborationEvent(
+            event_type=event_type,
+            actor_id=actor_id,
+            target_agent_ids=target_agent_ids or [],
+            message=message,
+            task_id=task_id,
+            artifact_id=artifact_id,
         )
+        self.state.events.append(event)
+        if self.event_callback is not None:
+            try:
+                payload = event.model_dump(mode="json")
+                payload["run_id"] = self.state.run_id
+                result = self._raw_results.get(actor_id)
+                if result is not None and (
+                    artifact_id is None or result.artifact_id == artifact_id
+                ):
+                    payload["result_projection"] = {
+                        "execution_status": result.status,
+                        "output_status": (
+                            (result.structured_output or {}).get("status")
+                        ),
+                        "tool_names": list(
+                            dict.fromkeys(call.tool_name for call in result.tool_calls)
+                        ),
+                        "total_tokens": result.usage.total_tokens,
+                        "source_ids": result.source_ids,
+                        "fact_ids": result.fact_ids,
+                        "logic_ids": result.logic_ids,
+                        "catalyst_ids": result.catalyst_ids,
+                        "risk_ids": result.risk_ids,
+                        "warnings": result.warnings[:3],
+                    }
+                self.event_callback(payload)
+            except Exception:
+                # UI projection must never break the research flow.
+                pass
 
     def _store_result(
         self,
@@ -257,6 +389,7 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             max_turns=budget.max_turns,
             max_output_tokens=budget.max_output_tokens,
             tool_call_limits=budget.tool_call_limits,
+            timeout_seconds=150,
         )
         result = self._recover_planner_parameter_card(result)
         self._store_result(result)
@@ -267,7 +400,8 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             self._event(
                 "artifact_delivered",
                 "planner",
-                "参数卡已生成，现将规划结果交给三个并行研究 Agent。",
+                build_agent_delivery_message(result)
+                + " 现将参数卡和任务计划交给三个并行研究 Agent。",
                 target_agent_ids=[
                     "fundamental",
                     "industry_competition",
@@ -313,8 +447,35 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         self._event(
             "task_started",
             actor_id,
-            dispatch_message or f"并行派发研究任务给 @{agent_id}。",
+            dispatch_message
+            or (
+                f"请执行：{input_payload.get('objective') or '完成专业研究任务'}。"
+                "输入包括 Planner 参数卡、共享来源目录及已授权证据；"
+                "完成后请提交核心结论、证据编号和待验证事项。"
+            ),
             target_agent_ids=[agent_id],
+            task_id=task_id,
+            artifact_id=context_package.get("planner_artifact_id"),
+        )
+        planned_tools = [
+            tool_name
+            for tool_name, allowed_count in effective_limits.items()
+            if allowed_count > 0
+        ]
+        sender = actor_id if actor_id in {
+            "planner", "reviewer_arbiter", "risk", "report_writer"
+        } else "planner"
+        tool_plan = (
+            f"计划按需使用 {'、'.join(planned_tools)}"
+            if planned_tools
+            else "本轮只读取已授权的上游材料，不调用外部工具"
+        )
+        self._event(
+            "agent_acknowledged",
+            agent_id,
+            f"@{sender} 已收到任务。{tool_plan}；我会把结论、证据编号、"
+            "不可比项和待验证问题分别写清楚，再提交结构化成果。",
+            target_agent_ids=[sender],
             task_id=task_id,
             artifact_id=context_package.get("planner_artifact_id"),
         )
@@ -337,7 +498,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         self._event(
             "artifact_delivered" if result.status == "succeeded" else "task_failed",
             agent_id,
-            "研究成果已提交。" if result.status == "succeeded" else result.error or "研究任务失败。",
+            build_agent_delivery_message(result)
+            if result.status == "succeeded"
+            else result.error or "研究任务失败。",
             target_agent_ids=[return_target_agent_id],
             task_id=task_id,
             artifact_id=result.artifact_id,
@@ -533,6 +696,14 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             target_agent_ids=["risk"],
             task_id=task_id,
         )
+        self._event(
+            "agent_acknowledged",
+            "risk",
+            f"@planner 已收到{len(upstream)}份上游成果。我将逐条挑战候选逻辑，"
+            "重点整理风险标题、触发条件、影响路径、证伪指标和持续监测方法。",
+            target_agent_ids=["planner"],
+            task_id=task_id,
+        )
         result = await self.gateway.execute(
             agent_id="risk",
             input_payload={
@@ -591,7 +762,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         self._event(
             "artifact_delivered" if succeeded else "task_failed",
             "risk",
-            "风险诊断成果已提交。" if succeeded else result.error or "风险诊断失败。",
+            build_agent_delivery_message(result)
+            if succeeded
+            else result.error or "风险诊断失败。",
             target_agent_ids=["system"],
             task_id=task_id,
             artifact_id=result.artifact_id,
@@ -632,6 +805,14 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             "system",
                 "风险诊断已完成，现将可用上游产物交给 @reviewer_arbiter 审查，并记录缺失模块。",
             target_agent_ids=["reviewer_arbiter"],
+            task_id=task_id,
+        )
+        self._event(
+            "agent_acknowledged",
+            "reviewer_arbiter",
+            f"@risk 已收到{len(artifacts)}份研究交付。我会先执行轻量证据审计，"
+            "再抽查三条候选逻辑的 S/F/L 链；普通质量问题只记录警告，不无限阻断交付。",
+            target_agent_ids=["risk"],
             task_id=task_id,
         )
         result = await self.gateway.execute(
@@ -713,7 +894,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         self._event(
             "artifact_delivered" if succeeded else "task_failed",
             "reviewer_arbiter",
-            "结构化审查结果已提交。" if succeeded else result.error or "审查失败。",
+            build_agent_delivery_message(result)
+            if succeeded
+            else result.error or "审查失败。",
             target_agent_ids=["system"],
             task_id=task_id,
             artifact_id=result.artifact_id,
@@ -859,7 +1042,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
             self._event(
                 "artifact_delivered" if result.status == "succeeded" else "task_failed",
                 "risk",
-                "风险补充成果已提交。" if result.status == "succeeded" else result.error or "风险补充失败。",
+                build_agent_delivery_message(result)
+                if result.status == "succeeded"
+                else result.error or "风险补充失败。",
                 target_agent_ids=["reviewer_arbiter"],
                 task_id=task_id,
                 artifact_id=result.artifact_id,
@@ -997,7 +1182,8 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         self._event(
             "artifact_delivered" if result.status == "succeeded" else "task_failed",
             "reviewer_arbiter",
-            "最终复审已完成，问题将随报告一并披露。"
+            build_agent_delivery_message(result)
+            + " 审查问题将随报告一并披露。"
             if result.status == "succeeded"
             else "最终复审失败，使用现有材料继续交付。",
             target_agent_ids=["report_writer"],
@@ -1199,7 +1385,9 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         self._event(
             "report_generated",
             "report_writer",
-            "ReportWriter 已分章节生成并组装 Markdown 研究报告。",
+            build_agent_delivery_message(result)
+            + f" 已完成{len(self.state.completed_section_ids)}个正式章节、"
+            f"{len(self.state.partial_section_ids)}个带警告章节，Markdown 报告已组装。",
             target_agent_ids=["system"],
             task_id=task_id,
             artifact_id=result.artifact_id,

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from openharness.invest_research.orchestration.research_flow import (
     InvestmentResearchSmokeFlow,
+    build_agent_delivery_message,
 )
 from openharness.invest_research.orchestration.flow_state import FlowAgentResult
 from openharness.invest_research.orchestration.runtime_gateway import (
@@ -15,8 +16,42 @@ from openharness.invest_research.orchestration.runtime_gateway import (
 )
 from openharness.invest_research.runtime_adapter import (
     AgentExecutionResult,
+    ToolCallTrace,
     UsageRecord,
 )
+
+
+def test_agent_delivery_message_exposes_handoff_not_hidden_reasoning():
+    result = AgentExecutionResult(
+        status="succeeded",
+        agent_id="fundamental",
+        runtime_agent_name="investment-research:fundamental",
+        structured_output={
+            "status": "completed",
+            "change_drivers": ["收入增长主要来自核心业务需求改善"],
+            "logic_candidates": [{"title": "产品结构改善带动盈利质量提升"}],
+            "unverified_items": [{"item": "分部毛利率", "reason": "口径待核验"}],
+        },
+        tool_calls=[
+            ToolCallTrace(
+                tool_name="tavily_search",
+                tool_input={"query": "测试"},
+                output="不应进入频道的完整工具输出",
+            )
+        ],
+        source_ids=["S-001", "S-002"],
+        fact_ids=["F-001"],
+        logic_ids=["L-001"],
+    )
+
+    message = build_agent_delivery_message(result)
+
+    assert "tavily_search" in message
+    assert "来源2条" in message
+    assert "事实1条" in message
+    assert "产品结构改善" in message
+    assert "1项待验证" in message
+    assert "不应进入频道的完整工具输出" not in message
 
 
 class _FakeRuntime:
@@ -940,6 +975,43 @@ def test_reviewer_failure_recovers_provisional_logics_and_runs_writer():
 
 def test_gateway_retries_one_transient_network_failure():
     runtime = _RetryRuntime()
+    gateway = OpenHarnessRuntimeGateway(runtime)
+    result = asyncio.run(
+        gateway.execute(
+            agent_id="planner",
+            input_payload={},
+            task_prompt="test",
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert runtime.calls == 2
+    assert gateway.execution_count == 2
+    assert result.retry_count == 1
+
+
+def test_gateway_retries_one_empty_response_in_a_fresh_runtime_session():
+    class _EmptyThenSuccessRuntime:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute_agent(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                return AgentExecutionResult(
+                    status="failed",
+                    agent_id=request.agent_id,
+                    runtime_agent_name=f"investment-research:{request.agent_id}",
+                    failure_class="empty_response",
+                    error="Model returned an empty assistant message.",
+                )
+            return AgentExecutionResult(
+                status="succeeded",
+                agent_id=request.agent_id,
+                runtime_agent_name=f"investment-research:{request.agent_id}",
+            )
+
+    runtime = _EmptyThenSuccessRuntime()
     gateway = OpenHarnessRuntimeGateway(runtime)
     result = asyncio.run(
         gateway.execute(

@@ -103,6 +103,31 @@ class _EmptyThenJsonApiClient:
         self.closed = True
 
 
+class _EmptyCompleteThenJsonApiClient(_EmptyThenJsonApiClient):
+    """Simulate a stream that completes with an empty assistant text."""
+
+    async def stream_message(self, request):
+        self.call_count += 1
+        if self.call_count == 1:
+            yield ApiMessageCompleteEvent(
+                message=ConversationMessage(
+                    role="assistant",
+                    content=[TextBlock(text="")],
+                ),
+                usage=UsageSnapshot(input_tokens=12, output_tokens=0),
+                stop_reason="stop",
+            )
+            return
+        yield ApiMessageCompleteEvent(
+            message=ConversationMessage(
+                role="assistant",
+                content=[TextBlock(text=self.text)],
+            ),
+            usage=UsageSnapshot(input_tokens=12, output_tokens=8),
+            stop_reason=None,
+        )
+
+
 def _common_input(agent_id: str) -> dict:
     return {
         "protocol_version": "1.0",
@@ -438,6 +463,28 @@ class GenericRuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(client.call_count, 2)
         self.assertTrue(any("empty model response" in warning for warning in result.warnings))
         self.assertTrue(client.closed)
+
+    def test_empty_completed_assistant_turn_is_retried_once(self):
+        client = _EmptyCompleteThenJsonApiClient(_output("planner"))
+        adapter = InvestmentResearchRuntimeAdapter(
+            evidence_store=self.store,
+            settings_loader=lambda: Settings(),
+            api_client_factory=lambda settings: client,
+            require_search_configuration=False,
+        )
+
+        result = asyncio.run(
+            adapter.execute_agent(
+                AgentExecutionRequest(
+                    agent_id="planner",
+                    input_payload=_inputs()["planner"],
+                )
+            )
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(client.call_count, 2)
+        self.assertTrue(any("empty model response" in warning for warning in result.warnings))
 
     def test_execution_exceeded_is_classified_as_timeout_before_tool_error(self):
         failure_class = _classify_failure(

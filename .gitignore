@@ -40,6 +40,7 @@ frontend/terminal/node_modules/
 .openharness/plugins/investment-research/**/__pycache__/
 .openharness/plugins/investment-research/**/*.py[cod]
 pytest-cache-files-*/
+.test-workbench/
 react_tui_smoke.txt
 
 # OS

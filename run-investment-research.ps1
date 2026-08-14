@@ -3,6 +3,7 @@ param(
     [switch]$PlannerSmoke,
     [switch]$PlannerWeb,
     [switch]$ResearchWeb,
+    [switch]$Workbench,
     [ValidateSet("planner", "fundamental", "industry_competition", "market_catalyst", "risk", "reviewer_arbiter", "report_writer")]
     [string]$AgentSmoke,
     [switch]$ValidateAllAgents,
@@ -31,7 +32,7 @@ $secretPath = Join-Path $projectRoot ".openharness\secrets\tavily-key.dpapi"
 $openHarnessLauncher = Join-Path $projectRoot "run-openh.ps1"
 $pythonExecutable = Join-Path $projectRoot ".venv\Scripts\python.exe"
 
-$needsTavily = $PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke -or $CrewAIFullChainValidation
+$needsTavily = $PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $Workbench -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke -or $CrewAIFullChainValidation
 if ($AgentSmoke -and $AgentSmoke -notin @("reviewer_arbiter", "report_writer")) {
     $needsTavily = $true
 }
@@ -39,7 +40,7 @@ if ($needsTavily -and -not (Test-Path -LiteralPath $secretPath)) {
     throw "Tavily is not configured. Run .\setup-tavily-key.ps1 first."
 }
 
-if ($PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $AgentSmoke -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke -or $CrewAIFullChainValidation -or $ReportWriterSmoke -or $ReportSectionsSmoke -or $ReviewerAuditSmoke) {
+if ($PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $Workbench -or $AgentSmoke -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke -or $CrewAIFullChainValidation -or $ReportWriterSmoke -or $ReportSectionsSmoke -or $ReviewerAuditSmoke) {
     if (-not (Test-Path -LiteralPath $pythonExecutable)) {
         throw "Existing Python environment was not found: .venv\Scripts\python.exe"
     }
@@ -80,7 +81,26 @@ try {
         $plainTextKey = $null
     }
 
-    if ($PlannerWeb -or $ResearchWeb) {
+    if ($Workbench) {
+        $previousCrewAIStorage = [Environment]::GetEnvironmentVariable("CREWAI_STORAGE_DIR", "Process")
+        $previousOtelDisabled = [Environment]::GetEnvironmentVariable("OTEL_SDK_DISABLED", "Process")
+        $previousPythonUtf8 = [Environment]::GetEnvironmentVariable("PYTHONUTF8", "Process")
+        $previousPythonIoEncoding = [Environment]::GetEnvironmentVariable("PYTHONIOENCODING", "Process")
+        try {
+            [Environment]::SetEnvironmentVariable("CREWAI_STORAGE_DIR", (Join-Path $projectRoot ".openharness\data\crewai"), "Process")
+            [Environment]::SetEnvironmentVariable("OTEL_SDK_DISABLED", "true", "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", "utf-8", "Process")
+            & $pythonExecutable -m openharness.invest_research.workbench_server --port $Port --open-browser
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable("CREWAI_STORAGE_DIR", $previousCrewAIStorage, "Process")
+            [Environment]::SetEnvironmentVariable("OTEL_SDK_DISABLED", $previousOtelDisabled, "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONUTF8", $previousPythonUtf8, "Process")
+            [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", $previousPythonIoEncoding, "Process")
+        }
+    }
+    elseif ($PlannerWeb -or $ResearchWeb) {
         & $pythonExecutable -m openharness.invest_research.demo_web `
             --port $Port `
             --open-browser

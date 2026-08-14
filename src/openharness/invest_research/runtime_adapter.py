@@ -445,6 +445,15 @@ class InvestmentResearchRuntimeAdapter:
                         "The turn was ignored to keep the session healthy."
                     )
                 raise
+            # Some provider/stream implementations emit a completed turn with
+            # an empty text field instead of raising the more explicit
+            # "without a final message" error. Treat both forms identically so
+            # the bounded empty-response retry can actually run.
+            if not final_text.strip() and turn_error is None:
+                turn_error = (
+                    "Model returned an empty assistant message. "
+                    "The turn was ignored to keep the session healthy."
+                )
             return final_text, turn_error
 
         async def run_turn_with_empty_response_retry(

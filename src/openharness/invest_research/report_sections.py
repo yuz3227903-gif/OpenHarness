@@ -337,10 +337,10 @@ class SectionReportOrchestrator:
                 task_prompt=_section_task_prompt(section_id, allowed_ids, attempt),
                 context_package={"report_section_context": context},
                 max_turns=2,
-                # deepseek-v4-flash may consume several thousand reasoning
-                # tokens before emitting the JSON.  A 6k cap caused otherwise
-                # valid real section runs to end as empty assistant messages.
-                max_output_tokens=12_000,
+                # Keep each chapter bounded.  The whole-report writer used a
+                # larger budget, but chapter generation must remain cheap and
+                # independently retryable.
+                max_output_tokens=6_000,
                 tool_call_limits={},
                 timeout_seconds=180,
                 retry_transient=False,
