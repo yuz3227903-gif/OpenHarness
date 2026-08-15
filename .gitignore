@@ -42,6 +42,9 @@ frontend/terminal/node_modules/
 pytest-cache-files-*/
 .test-workbench/
 react_tui_smoke.txt
+.superpowers/
+tmp/
+.npm-cache/
 
 # OS
 .DS_Store
