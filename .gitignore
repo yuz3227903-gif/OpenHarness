@@ -43,6 +43,7 @@ pytest-cache-files-*/
 .test-workbench/
 react_tui_smoke.txt
 .superpowers/
+.worktrees/
 tmp/
 .npm-cache/
 
