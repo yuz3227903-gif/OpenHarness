@@ -115,6 +115,38 @@ html,body{height:100%;overflow:hidden}
 .attachment-file{display:inline-flex;flex-direction:column;border:1px solid var(--line);border-left:3px solid #C8102E;border-radius:7px;padding:7px 11px;text-decoration:none;color:var(--ink);background:#fff7f8}
 .attachment-file b{font-size:12px}.attachment-file small{color:var(--muted);font-size:10px}
 
+/* Lucide icon sprite. Strokes inherit the text colour so an icon always matches
+   the label beside it, and no rule here changes the existing palette. */
+.icon-sprite{position:absolute;width:0;height:0;overflow:hidden}
+/* The display rules below are more specific than the [hidden] UA rule, so
+   restate it with priority or a hidden button would render anyway. */
+[hidden]{display:none!important}
+.icon{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
+.rail-btn .icon{width:20px;height:20px;stroke-width:1.75;vertical-align:0}
+.rail-btn{display:grid;place-items:center}
+.head-actions button,.pane-tab,.file-download,.attach-btn,.send,.secondary[data-message-detail],#graph-refresh{display:inline-flex;align-items:center;gap:6px}
+.graph-entry{gap:7px}
+.message-meta button{display:inline-flex;align-items:center;gap:5px}
+.message-meta .icon,.file-row .icon{width:14px;height:14px}
+.channel{display:flex;align-items:center;gap:8px}
+.channel .channel-icon{width:14px;height:14px;color:var(--muted)}
+.channel.active .channel-icon,.channel:hover .channel-icon{color:#C8102E}
+.file-name{display:flex;align-items:center;gap:7px}
+.file-glyph{color:#c07f8e}
+.attachment-file{flex-direction:row;align-items:center;gap:8px}
+.attachment-file .icon{color:#C8102E}
+.workspace-head button,.section-title button{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;color:var(--green)}
+.workspace-head button:hover,.section-title button:hover{background:#fde8ed}
+.context-head span{display:inline-flex;align-items:center;gap:7px}
+.context-head button{display:grid;place-items:center;width:26px;height:26px;border-radius:6px}
+.context-head button:hover{background:#fde8ed;color:#C8102E}
+.dialog-head button{display:grid;place-items:center;width:30px;height:30px;border-radius:7px;color:var(--muted)}
+.dialog-head button:hover{background:#fde8ed;color:#C8102E}
+.context-icon .icon{width:40px;height:40px;stroke-width:1.5}
+.attach-btn{gap:4px}
+.attach-btn .icon{width:15px;height:15px}
+
 /* Relationship graph: entry point in the sidebar, canvas in the centre pane. */
 .graph-entry{display:flex;align-items:center;gap:7px;width:100%;border:1px solid #f1b2bf;background:#fde8ed;color:#9f102b;border-radius:8px;padding:9px 11px;margin-bottom:18px;font:inherit;font-weight:650;cursor:pointer}
 .graph-entry:hover{background:#f9dfe5;border-color:#C8102E}
