@@ -411,9 +411,11 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .graph-entry{display:flex;align-items:center;gap:7px;width:100%;border:1px solid #f1b2bf;background:#fde8ed;color:#9f102b;border-radius:8px;padding:9px 11px;margin-bottom:18px;font:inherit;font-weight:650;cursor:pointer}
 .graph-entry:hover{background:#f9dfe5;border-color:#C8102E}
 .graph-entry em{font-style:normal;font-size:9px;letter-spacing:.06em;background:#fff;border:1px solid #f1b2bf;border-radius:4px;padding:1px 5px;margin-left:auto;color:#9f102b}
-/* The graph is a whole-window view: rail plus canvas, no sidebar, no context. */
-.app-shell.full-bleed{grid-template-columns:64px minmax(0,1fr)}
-@media(max-width:1300px){.app-shell.full-bleed{grid-template-columns:58px minmax(0,1fr)}}
+/* The graph is a whole-window view: rail plus canvas, no sidebar, no context.
+   The rail keeps whatever width it is currently at — hard-coding the collapsed
+   width here used to crush an expanded rail back to icon size and clip its
+   labels the moment you opened this view. */
+.app-shell.full-bleed{grid-template-columns:var(--rail-w) minmax(0,1fr)}
 .graph-board{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px;padding:16px 20px 18px;overflow:hidden}
 .graph-toolbar{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
 .graph-title{display:inline-flex;align-items:center;gap:7px;font-size:15px;font-weight:650}
