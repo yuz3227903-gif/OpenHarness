@@ -528,7 +528,14 @@ function taskCardHtml(task){
   const assignee=labels[task.assignee_id]||task.assignee_id||'未指派';
   const elapsed=metadata.elapsed_seconds!=null?`<small>已运行 ${esc(formatElapsed(metadata.elapsed_seconds))}</small>`:'';
   const phase=metadata.phase?`<small>阶段：${esc(metadata.phase)}</small>`:'';
-  return `<article class="board-card" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><div class="board-card-id">${esc(task.task_id)}</div><strong>${esc(task.title)}</strong><div class="board-card-foot"><span class="board-assignee">${esc(assignee)}</span><span class="board-status">${esc(taskStatusText(task.status))}</span></div>${phase}${elapsed}</article>`;
+  // An Agent works its queue one job at a time, so a waiting task says where it sits.
+  const queued=task.status==='queued' && metadata.queue_position
+    ? `<small>队列第 ${esc(metadata.queue_position)} 位${metadata.queue_waiting!=null?`（前面还有 ${esc(metadata.queue_waiting)} 个）`:''}</small>`
+    : '';
+  const handoff=metadata.handoff_depth
+    ? `<small>由 ${esc(labels[task.created_by]||task.created_by)} 转派</small>`
+    : '';
+  return `<article class="board-card" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><div class="board-card-id">${esc(task.task_id)}</div><strong>${esc(task.title)}</strong><div class="board-card-foot"><span class="board-assignee">${esc(assignee)}</span><span class="board-status">${esc(taskStatusText(task.status))}</span></div>${phase}${queued}${handoff}${elapsed}</article>`;
 }
 function memberOptions(selected, placeholder, ids){
   return `<option value="">${esc(placeholder)}</option>`+[...new Set(ids)].filter(Boolean).map(id=>`<option value="${esc(id)}" ${id===selected?'selected':''}>${esc(labels[id]||id)}</option>`).join('');

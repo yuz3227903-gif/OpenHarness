@@ -23,6 +23,7 @@ from openharness.engine.stream_events import (
     ToolExecutionStarted,
 )
 from openharness.invest_research.agent_registry import PLUGIN_NAME, get_agent_entry
+from openharness.invest_research.agent_skills import render_skills_prompt
 from openharness.invest_research.calculator_tool import CalculatorTool
 from openharness.invest_research.contracts import ReportSectionResult
 from openharness.invest_research.evidence_query_tool import EvidenceQueryTool
@@ -361,6 +362,7 @@ class InvestmentResearchRuntimeAdapter:
             PromptLayers(
                 governance_prompt=governance_prompt,
                 role_prompt=agent_definition.system_prompt or "",
+                skills_prompt=render_skills_prompt(self._project_root, entry.agent_id),
                 task_prompt=request.task_prompt,
                 context_package=json.dumps(context_package, ensure_ascii=False, indent=2),
                 output_contract=assembler.render_model_output_contract(output_model),

@@ -246,10 +246,13 @@ def build_direct_agent_input(
 def direct_task_prompt(agent_id: str, objective: str) -> str:
     """Create the dynamic task layer without weakening role/governance prompts."""
 
+    peers = "、".join(f"@{item}" for item in sorted(DIRECT_AGENT_IDS) if item != agent_id)
     return (
         f"你在项目频道中被直接 @{agent_id}。用户任务是：{objective}\n"
         "请先复用当前 Run 已授权的资料，再按需使用本角色工具。"
-        "输出必须遵守本角色 JSON 合同；证据不足时返回 partial，禁止编造来源。"
+        "输出必须遵守本角色 JSON 合同；证据不足时返回 partial，禁止编造来源。\n"
+        f"若某部分必须由其他角色完成，可在结论文本中写 {peers} 之一并说明需要什么，"
+        "系统会为它创建任务；不要替它作答，也不要 @ 自己。"
     )
 
 

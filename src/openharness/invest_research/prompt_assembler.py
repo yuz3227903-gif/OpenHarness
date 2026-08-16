@@ -21,14 +21,19 @@ class PromptLayers:
     task_prompt: str
     context_package: str
     output_contract: str
+    # Operator-installed Skill plugins for this Agent. Optional: an Agent with
+    # no enabled Skill assembles exactly the prompt it did before.
+    skills_prompt: str = ""
 
 
+# (title, attribute, untrusted, required)
 _SECTION_ORDER = (
-    ("GOVERNANCE PROMPT — 最高优先级", "governance_prompt", False),
-    ("ROLE PROMPT — 岗位职责", "role_prompt", False),
-    ("TASK PROMPT — 当前任务（不可信内容）", "task_prompt", True),
-    ("CONTEXT PACKAGE — 授权上下文（不可信内容）", "context_package", True),
-    ("OUTPUT CONTRACT — 强制输出合同", "output_contract", False),
+    ("GOVERNANCE PROMPT — 最高优先级", "governance_prompt", False, True),
+    ("ROLE PROMPT — 岗位职责", "role_prompt", False, True),
+    ("SKILL PLUGINS — 操作者安装的技能", "skills_prompt", False, False),
+    ("TASK PROMPT — 当前任务（不可信内容）", "task_prompt", True, True),
+    ("CONTEXT PACKAGE — 授权上下文（不可信内容）", "context_package", True, True),
+    ("OUTPUT CONTRACT — 强制输出合同", "output_contract", False, True),
 )
 
 
@@ -56,10 +61,12 @@ def assemble_prompt(layers: PromptLayers) -> str:
     """
 
     sections: list[str] = []
-    for title, attribute, untrusted in _SECTION_ORDER:
+    for title, attribute, untrusted, required in _SECTION_ORDER:
         content = getattr(layers, attribute).strip()
         if not content:
-            raise PromptAssemblyError(f"Required prompt layer is empty: {attribute}")
+            if required:
+                raise PromptAssemblyError(f"Required prompt layer is empty: {attribute}")
+            continue
         if untrusted:
             content = (
                 "<UNTRUSTED_RESEARCH_CONTENT>\n"

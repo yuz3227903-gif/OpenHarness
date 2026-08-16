@@ -12,7 +12,9 @@ import asyncio
 import base64
 import binascii
 import json
+import logging
 import os
+import queue
 import re
 import threading
 import time
@@ -42,6 +44,8 @@ from openharness.invest_research.workbench_models import (
 )
 
 
+log = logging.getLogger(__name__)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 WEB_ROOT = PROJECT_ROOT / ".openharness" / "plugins" / "investment-research" / "workbench"
 MAX_REQUEST_BYTES = 3 * 1024 * 1024
@@ -63,7 +67,14 @@ EVIDENCE_STORE = EvidenceStore.for_project(PROJECT_ROOT)
 RUN_LOCK = threading.Lock()
 RUN_STATE_LOCK = threading.RLock()
 DIRECT_TASK_LOCK = threading.RLock()
-DIRECT_TASK_THREADS: dict[str, threading.Thread] = {}
+# One FIFO queue and one worker per Agent. A thread-per-task would let the same
+# Agent run several jobs at once; replies to it are a queue it works through in
+# order, so a second request waits for the first to finish.
+AGENT_QUEUES: dict[str, queue.Queue[dict[str, Any]]] = {}
+AGENT_WORKERS: dict[str, threading.Thread] = {}
+# How many times work may be handed on Agent to Agent before the chain stops.
+# Without a ceiling two Agents could @ each other indefinitely.
+MAX_AGENT_HANDOFF_DEPTH = 2
 RUN_RESUME_EVENT = threading.Event()
 RUN_RESUME_EVENT.set()
 RUN_STATE: dict[str, Any] = {
@@ -872,6 +883,85 @@ def _replay_flow_events(
         STORE.add_event(channel_id=channel_id, event_type="flow_event", payload={"message": message, "flow_event": flow_event})
 
 
+def _agent_handoff_targets(body: str, from_agent_id: str) -> list[str]:
+    """Return the Agents this delivery hands work to.
+
+    Only an Agent that accepts direct tasks qualifies, and an Agent never hands
+    work to itself.
+    """
+
+    return [
+        agent_id
+        for agent_id in _parse_mentions(body, None)
+        if agent_id in DIRECT_AGENT_IDS and agent_id != from_agent_id
+    ]
+
+
+def _dispatch_agent_handoffs(
+    *,
+    channel_id: str,
+    root_message: dict[str, Any],
+    from_agent_id: str,
+    targets: list[str],
+    objective: str,
+    as_of_date: date,
+    handoff_depth: int,
+) -> None:
+    """Turn one Agent's @mentions into queued tasks for those Agents.
+
+    The chain stops at ``MAX_AGENT_HANDOFF_DEPTH``. When it does, the refusal is
+    posted to the channel rather than dropped, so a truncated chain is visible
+    instead of looking like the Agent simply never replied.
+    """
+
+    if not targets:
+        return
+    if handoff_depth >= MAX_AGENT_HANDOFF_DEPTH:
+        blocked = STORE.add_message(
+            channel_id=channel_id,
+            thread_id=root_message.get("thread_id") or root_message["message_id"],
+            author_id="system", author_type="system", message_kind="task_update",
+            body=(
+                f"{from_agent_id} 想继续转派给 {'、'.join(targets)}，但本次交接已达上限"
+                f"（{MAX_AGENT_HANDOFF_DEPTH} 层），没有再创建任务。需要继续请手动 @。"
+            ),
+            metadata={"handoff_blocked": True, "targets": targets},
+        )
+        STORE.add_event(
+            channel_id=channel_id, event_type="handoff_blocked",
+            payload={"message": blocked, "targets": targets},
+        )
+        return
+
+    tasks = _start_direct_agent_tasks(
+        channel_id=channel_id,
+        root_message=root_message,
+        agent_ids=targets,
+        objective=objective,
+        as_of_date=as_of_date,
+        created_by=from_agent_id,
+        handoff_depth=handoff_depth + 1,
+    )
+    if not tasks:
+        return
+    dispatched = STORE.add_message(
+        channel_id=channel_id,
+        thread_id=root_message.get("thread_id") or root_message["message_id"],
+        author_id=from_agent_id, author_type="agent", message_kind="task_dispatch",
+        body=" ".join(f"@{item}" for item in targets) + " 已按上面的结论为你们创建任务。",
+        mentions=targets,
+        metadata={
+            "agent_handoff": True, "from_agent_id": from_agent_id,
+            "task_ids": [task["task_id"] for task in tasks],
+            "handoff_depth": handoff_depth + 1,
+        },
+    )
+    STORE.add_event(
+        channel_id=channel_id, event_type="agent_handoff",
+        payload={"message": dispatched, "tasks": tasks, "from_agent_id": from_agent_id},
+    )
+
+
 def _run_direct_agent_task(
     *,
     channel_id: str,
@@ -881,6 +971,7 @@ def _run_direct_agent_task(
     objective: str,
     as_of_date: date,
     summary: dict[str, Any] | None,
+    handoff_depth: int = 0,
 ) -> None:
     """Execute one non-Planner Agent without starting the full CrewAI flow."""
 
@@ -1022,13 +1113,16 @@ def _run_direct_agent_task(
                     },
                 )
             STORE.update_task(task_id, "completed", run_id=run_id)
+            delivery_body = build_agent_delivery_message(result)
+            handoffs = _agent_handoff_targets(delivery_body, agent_id)
             delivered = STORE.add_message(
                 channel_id=channel_id,
                 thread_id=root_message_id,
                 author_id=agent_id,
                 author_type="agent",
                 message_kind="artifact_delivery",
-                body=build_agent_delivery_message(result),
+                body=delivery_body,
+                mentions=handoffs,
                 metadata={
                     "task_id": task_id,
                     "run_id": run_id,
@@ -1042,6 +1136,15 @@ def _run_direct_agent_task(
                 channel_id=channel_id,
                 event_type="direct_agent_completed",
                 payload={"message": delivered, "task_id": task_id, "agent_id": agent_id},
+            )
+            _dispatch_agent_handoffs(
+                channel_id=channel_id,
+                root_message=delivered,
+                from_agent_id=agent_id,
+                targets=handoffs,
+                objective=delivery_body,
+                as_of_date=as_of_date,
+                handoff_depth=handoff_depth,
             )
         else:
             STORE.update_task(
@@ -1161,8 +1264,14 @@ def _start_direct_agent_tasks(
     agent_ids: list[str],
     objective: str,
     as_of_date: date,
+    created_by: str = "owner",
+    handoff_depth: int = 0,
 ) -> list[dict[str, Any]]:
-    """Create and asynchronously start one task for every mentioned Agent."""
+    """Queue one task for every mentioned Agent.
+
+    ``created_by`` is the requester — the human, or another Agent handing work
+    on. ``handoff_depth`` counts Agent-to-Agent hops so a chain terminates.
+    """
 
     summary = _snapshot().get("summary")
     tasks: list[dict[str, Any]] = []
@@ -1171,7 +1280,7 @@ def _start_direct_agent_tasks(
             continue
         task = STORE.create_task(
             channel_id=channel_id,
-            created_by="owner",
+            created_by=created_by,
             assignee_id=agent_id,
             title=objective[:160] or f"直接 @{agent_id} 任务",
             status="queued",
@@ -1179,11 +1288,12 @@ def _start_direct_agent_tasks(
                 "direct_agent_task": True,
                 "root_message_id": root_message["message_id"],
                 "objective": objective,
+                "handoff_depth": handoff_depth,
             },
         )
-        thread = threading.Thread(
-            target=_run_direct_agent_task,
-            kwargs={
+        position = _enqueue_agent_task(
+            agent_id=agent_id,
+            job={
                 "channel_id": channel_id,
                 "root_message_id": root_message["message_id"],
                 "task_id": task["task_id"],
@@ -1191,15 +1301,75 @@ def _start_direct_agent_tasks(
                 "objective": objective,
                 "as_of_date": as_of_date,
                 "summary": summary,
+                "handoff_depth": handoff_depth,
             },
-            daemon=True,
-            name=f"workbench-{agent_id}-{task['task_id']}",
         )
-        with DIRECT_TASK_LOCK:
-            DIRECT_TASK_THREADS[task["task_id"]] = thread
-        thread.start()
-        tasks.append(task)
+        STORE.update_task(
+            task["task_id"],
+            "queued",
+            metadata_json=json.dumps(
+                {**(task.get("metadata") or {}), "queue_position": position},
+                ensure_ascii=False,
+            ),
+        )
+        STORE.add_event(
+            channel_id=channel_id,
+            event_type="direct_agent_queued",
+            payload={
+                "task_id": task["task_id"], "agent_id": agent_id,
+                "queue_position": position, "created_by": created_by,
+            },
+        )
+        tasks.append(STORE.get_task(task["task_id"]) or task)
     return tasks
+
+
+def _enqueue_agent_task(*, agent_id: str, job: dict[str, Any]) -> int:
+    """Queue one job for an Agent and return its 1-based place in that queue."""
+
+    with DIRECT_TASK_LOCK:
+        pending = AGENT_QUEUES.setdefault(agent_id, queue.Queue())
+        worker = AGENT_WORKERS.get(agent_id)
+        if worker is None or not worker.is_alive():
+            worker = threading.Thread(
+                target=_agent_worker, args=(agent_id,), daemon=True,
+                name=f"workbench-agent-{agent_id}",
+            )
+            AGENT_WORKERS[agent_id] = worker
+            worker.start()
+        pending.put(job)
+        return pending.qsize()
+
+
+def _agent_worker(agent_id: str) -> None:
+    """Run one Agent's queued jobs strictly one at a time."""
+
+    pending = AGENT_QUEUES[agent_id]
+    while True:
+        job = pending.get()
+        try:
+            _run_direct_agent_task(**job)
+        except Exception:  # noqa: BLE001 - one bad job must not kill the worker
+            log.exception("direct agent task failed outside its own handler")
+        finally:
+            pending.task_done()
+            _publish_queue_positions(agent_id)
+
+
+def _publish_queue_positions(agent_id: str) -> None:
+    """Refresh the waiting count so the UI does not show a stale position."""
+
+    with DIRECT_TASK_LOCK:
+        pending = AGENT_QUEUES.get(agent_id)
+        waiting = pending.qsize() if pending else 0
+    for task in STORE.list_tasks():
+        if task.get("assignee_id") != agent_id or task.get("status") != "queued":
+            continue
+        metadata = {**(task.get("metadata") or {}), "queue_waiting": waiting}
+        STORE.update_task(
+            task["task_id"], "queued",
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+        )
 
 
 def _run_background(
