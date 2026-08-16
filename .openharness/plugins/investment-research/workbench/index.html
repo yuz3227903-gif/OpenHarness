@@ -32,6 +32,7 @@
     <symbol id="i-report" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
     <symbol id="i-reply" viewBox="0 0 24 24"><path d="m9 17-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 0 10h-1"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.66V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.66"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></symbol>
     <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.17 2.83a3.12 3.12 0 0 0-4.42 0L3 16.59V21h4.41L21.17 7.25a3.12 3.12 0 0 0 0-4.42z"/><path d="m15.5 4.5 4 4"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
@@ -42,11 +43,12 @@
   <div class="app-shell">
     <aside class="rail">
       <div class="brand-mark">研</div>
-      <button class="rail-btn" data-pane="search" title="搜索 (Ctrl+K)"><svg class="icon"><use href="#i-search"/></svg></button>
-      <button class="rail-btn active" data-pane="chat" title="协作频道"><svg class="icon"><use href="#i-message"/></svg></button>
-      <button class="rail-btn" data-pane="tasks" title="任务"><svg class="icon"><use href="#i-check-square"/></svg></button>
-      <button class="rail-btn" data-pane="files" title="文件"><svg class="icon"><use href="#i-paperclip"/></svg></button>
-      <button class="rail-btn" data-pane="graph" title="关系图"><svg class="icon"><use href="#i-graph"/></svg></button>
+      <button class="rail-toggle" id="rail-toggle" type="button" title="展开菜单" aria-expanded="false"><svg class="icon"><use href="#i-panel"/></svg><span class="rail-label">收起菜单</span></button>
+      <button class="rail-btn" data-pane="search" title="搜索 (Ctrl+K)"><svg class="icon"><use href="#i-search"/></svg><span class="rail-label">搜索</span></button>
+      <button class="rail-btn active" data-pane="chat" title="协作频道"><svg class="icon"><use href="#i-message"/></svg><span class="rail-label">聊天</span></button>
+      <button class="rail-btn" data-pane="tasks" title="任务"><svg class="icon"><use href="#i-check-square"/></svg><span class="rail-label">任务</span></button>
+      <button class="rail-btn" data-pane="files" title="文件"><svg class="icon"><use href="#i-paperclip"/></svg><span class="rail-label">文件</span></button>
+      <button class="rail-btn" data-pane="graph" title="关系图"><svg class="icon"><use href="#i-graph"/></svg><span class="rail-label">关系图</span></button>
       <div class="rail-spacer"></div>
       <div class="rail-avatar">ZY</div>
     </aside>

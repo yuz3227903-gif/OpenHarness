@@ -115,6 +115,35 @@ html,body{height:100%;overflow:hidden}
 .attachment-file{display:inline-flex;flex-direction:column;border:1px solid var(--line);border-left:3px solid #C8102E;border-radius:7px;padding:7px 11px;text-decoration:none;color:var(--ink);background:#fff7f8}
 .attachment-file b{font-size:12px}.attachment-file small{color:var(--muted);font-size:10px}
 
+/* Collapsible rail. One variable drives the first grid column so every layout
+   variant follows without restating its columns. */
+.app-shell{--rail-w:64px;grid-template-columns:var(--rail-w) 240px minmax(560px,1fr) 330px}
+.app-shell.no-sidebar{grid-template-columns:var(--rail-w) minmax(560px,1fr) 330px}
+.app-shell.full-bleed{grid-template-columns:var(--rail-w) minmax(0,1fr)}
+.app-shell.rail-expanded{--rail-w:172px}
+@media(max-width:1300px){
+  .app-shell{--rail-w:58px;grid-template-columns:var(--rail-w) 215px minmax(520px,1fr) 290px}
+  .app-shell.no-sidebar{grid-template-columns:var(--rail-w) minmax(520px,1fr) 290px}
+  .app-shell.full-bleed{grid-template-columns:var(--rail-w) minmax(0,1fr)}
+  .app-shell.rail-expanded{--rail-w:164px}
+}
+/* An earlier icon rule set `.rail-btn{display:grid}` and sits later in this
+   sheet, which stacked the icon above its label. Same specificity, so the rail
+   rules are scoped one level deeper to win. */
+.rail{align-items:stretch;padding:18px 8px;gap:4px;transition:padding .12s ease}
+.brand-mark{align-self:center;margin-bottom:10px}
+.rail-toggle{display:flex;align-items:center;gap:10px;border:0;background:transparent;color:#f4bbc7;border-radius:9px;padding:9px;font:inherit;font-size:12px;cursor:pointer;margin-bottom:6px}
+.rail-toggle:hover{background:#9f102b;color:#fff}
+.rail .rail-btn{display:flex;align-items:center;gap:10px;width:100%;height:auto;padding:9px;border-radius:9px;text-align:left;font:inherit;font-size:13px}
+.rail .rail-btn .icon,.rail .rail-toggle .icon{flex:0 0 auto;margin:0 auto}
+/* Collapsed: icons only, centred. Expanded: icon then label, left aligned. */
+.rail-label{display:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rail-expanded .rail-label{display:inline}
+.rail-expanded .rail .rail-btn .icon,.rail-expanded .rail .rail-toggle .icon{margin:0}
+.rail-expanded .brand-mark{align-self:flex-start;margin-left:5px}
+.rail-avatar{align-self:center}
+.rail-expanded .rail-avatar{align-self:flex-start;margin-left:5px}
+
 /* Inline comments. Commenting under an Agent queues it a task, so the thread
    and the work are the same object — no separate thread pane, no task chips. */
 .message-meta{margin-top:4px}

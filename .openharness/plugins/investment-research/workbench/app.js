@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, railExpanded: false };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -582,6 +582,36 @@ function setPane(pane){
   if(pane==='graph') loadGraph();
   if(pane==='search'){ runSearch(); $('search-input')?.focus(); }
 }
+// The rail starts collapsed to icons. Expanding shows each label, which is
+// clearer for anyone who does not already know the glyphs. The choice is
+// remembered so it does not reset on every reload.
+const RAIL_KEY='workbench.railExpanded';
+function applyRail(){
+  const shell=document.querySelector('.app-shell');
+  const toggle=$('rail-toggle');
+  const expanded=state.railExpanded;
+  if(shell) shell.classList.toggle('rail-expanded',expanded);
+  if(toggle){
+    toggle.setAttribute('aria-expanded',String(expanded));
+    toggle.title=expanded?'收起菜单':'展开菜单';
+    const label=toggle.querySelector('.rail-label');
+    if(label) label.textContent='收起菜单';
+  }
+}
+function setupRail(){
+  try{ state.railExpanded=localStorage.getItem(RAIL_KEY)==='1'; }
+  catch(_error){ state.railExpanded=false; }
+  applyRail();
+  $('rail-toggle')?.addEventListener('click',()=>{
+    state.railExpanded=!state.railExpanded;
+    try{ localStorage.setItem(RAIL_KEY, state.railExpanded?'1':'0'); }catch(_error){ /* private mode */ }
+    applyRail();
+    // The graph sizes its canvas from the container, so re-layout after the
+    // column width changes.
+    if(state.activePane==='graph') setTimeout(()=>renderGraphBoard(),160);
+  });
+}
+
 function setupPaneTabs(){
   document.querySelectorAll('.pane-tab').forEach(tab=>tab.addEventListener('click',()=>setPane(tab.dataset.pane)));
   // The rail declares its target pane, so inserting a button never shifts the
@@ -1434,7 +1464,7 @@ function setupCreationDialogs(){
 document.addEventListener('DOMContentLoaded',setupCreationDialogs);
 // Load the graph once at startup so its tab count is real before the pane is
 // ever opened, matching how the task and file counts behave.
-document.addEventListener('DOMContentLoaded',()=>{ setupPaneTabs(); setupAttachments(); setupSearch(); loadGraph(); });
+document.addEventListener('DOMContentLoaded',()=>{ setupRail(); setupPaneTabs(); setupAttachments(); setupSearch(); loadGraph(); });
 
 // Attachments belong to the message they were sent with, so they render in the
 // timeline instead of only appearing in the files tab.
