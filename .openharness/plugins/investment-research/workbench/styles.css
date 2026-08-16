@@ -185,6 +185,38 @@ html,body{height:100%;overflow:hidden}
 .detect-hint{color:var(--muted);font-size:11px}
 .runtime-badge{margin-left:6px;font-size:10px;color:#5a4880;background:#efeafa;border-radius:4px;padding:1px 6px}
 .kv-path{font-size:11px;word-break:break-all;text-align:right;max-width:62%}
+
+.roster-filter{display:flex;gap:5px;padding:1px 2px 7px}
+.filter-chip{border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:999px;padding:3px 10px;font-size:11px;cursor:pointer;transition:.15s}
+.filter-chip:hover{border-color:#d8c6cc;color:var(--ink)}
+.filter-chip.active{background:var(--green);border-color:var(--green);color:#fff}
+
+/* Local Agent chat. One activity component per event type, so the timeline
+   reads the same whichever CLI produced it. */
+.local-intro{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px dashed #d8cbe8;border-radius:9px;background:#faf8fe;padding:11px 13px;margin-bottom:12px;font-size:12px;color:#5a4880}
+.local-intro-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.local-intro small{color:var(--muted);font-size:11px;word-break:break-all}
+.local-stream{display:flex;flex-direction:column;gap:7px}
+.local-turn{border-top:1px solid #f0e6ea;padding-top:11px;margin-top:4px}
+.local-user{font-size:13px;font-weight:650;margin-bottom:6px}
+.local-answer{margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}
+.activity{font-size:11px;border-radius:7px;padding:6px 9px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.activity code{font:11px/1.5 Consolas,monospace;word-break:break-all}
+.activity small{color:var(--muted)}
+.activity-command{background:#f4f1fa;color:#4a3b6b}
+.activity-end{background:#f6f7f6;color:var(--muted)}
+.activity-tool,.activity-file{background:#fff0f3;color:#9f102b}
+.activity-outside{background:#fff6e6;color:#8a5f00;border:1px solid #eedcae}
+.outside-flag{background:#c88a18;color:#fff;border-radius:4px;padding:1px 6px;font-size:10px}
+.activity-thinking{background:#fffaf0;color:#8a5f00;font-style:italic}
+.activity-status{background:#f2f7f4;color:#1c6b4a}
+.activity-error{background:#fff2f3;color:#9f102b}
+.activity-output{margin:0;background:#1f1a1c;color:#e8dfe2;border-radius:7px;padding:8px 10px;font:11px/1.55 Consolas,monospace;white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto}
+.approval{border:1px solid #e8c878;border-left:3px solid #c88a18;border-radius:9px;background:#fffaf0;padding:11px 13px;display:grid;gap:7px}
+.approval strong{display:flex;align-items:center;gap:6px;font-size:13px;color:#8a5f00}
+.approval code{font:11px/1.5 Consolas,monospace;background:#fff;border:1px solid #eedcae;border-radius:5px;padding:6px 8px;word-break:break-all}
+.approval small{color:var(--muted);font-size:11px}
+.approval-actions{display:flex;gap:7px;justify-content:flex-end;flex-wrap:wrap}
 .agent-row[data-runtime="local"] .status-dot{background:#7257a8}
 .agent-row[data-runtime="local"][data-status="online"] .status-dot{background:#1c6b4a}
 .agent-row[data-runtime="local"][data-status="offline"] .status-dot,

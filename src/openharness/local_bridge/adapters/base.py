@@ -11,7 +11,10 @@ import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from openharness.local_bridge.events import AgentEvent
 
 DetectionStatus = Literal["available", "not_installed", "error"]
 
@@ -91,6 +94,50 @@ class LocalAgentAdapter(ABC):
     @abstractmethod
     def capabilities(self) -> AgentCapabilities:
         """Declare what this Agent supports."""
+
+    # ------------------------------------------------------------- conversation
+
+    def build_command(self, *, prompt: str, workspace: str, session_ref: str | None) -> list[str]:
+        """The argv that runs one turn.
+
+        Returned as a list and executed without a shell, so neither the prompt
+        nor the workspace can be interpreted as a command. ``session_ref`` is
+        whatever :meth:`session_reference` returned earlier, letting a CLI that
+        supports it continue its own conversation.
+        """
+
+        executable = self.find_executable()
+        if executable is None:
+            raise FileNotFoundError(f"{self.display_name} 未安装或不在 PATH 中")
+        return [executable, *self.run_args(session_ref=session_ref), prompt]
+
+    def run_args(self, *, session_ref: str | None) -> list[str]:
+        """Arguments between the executable and the prompt."""
+
+        return []
+
+    def translate(self, line: str, session_id: str) -> list[AgentEvent]:
+        """Turn one line of Agent output into protocol events.
+
+        The default treats output as assistant text, which is right for a CLI
+        that simply prints its answer. An Agent with a structured protocol
+        overrides this and emits tool, command and file events instead.
+        """
+
+        from openharness.local_bridge.events import message_delta
+
+        if not line:
+            return []
+        return [message_delta(session_id, line)]
+
+    def session_reference(self, events: list[AgentEvent]) -> str | None:
+        """Extract the CLI's own session id from a completed turn, if any.
+
+        Storing it is what lets :meth:`build_command` resume rather than start
+        over. Returning ``None`` means this Agent has no resumable session.
+        """
+
+        return None
 
     def parse_version(self, output: str) -> str | None:
         """Pull a version out of the probe output.

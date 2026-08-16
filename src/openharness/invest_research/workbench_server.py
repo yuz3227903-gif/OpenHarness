@@ -2097,6 +2097,47 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             status, payload = _start_research(str(body.get("company") or "").strip(), str(body.get("as_of_date") or "").strip(), str(body.get("channel_id") or "research-room"), "owner")
             self._send(status, payload)
             return
+        if path.startswith("/api/agents/") and path.endswith("/sessions"):
+            # The browser runs the session against the bridge; this records the
+            # metadata needed to manage it. The conversation itself stays on
+            # the user's machine.
+            agent_id = path.split("/")[3]
+            agent = STORE.get_agent(agent_id)
+            if agent is None or agent.get("runtime") != "local":
+                self._send(404, {"error": "local Agent not found"})
+                return
+            session_id = str(body.get("session_id") or "").strip()
+            if not session_id:
+                self._send(400, {"error": "session_id is required"})
+                return
+            record = STORE.record_local_session(
+                session_id=session_id,
+                agent_id=agent_id,
+                provider=str(agent.get("provider") or ""),
+                bridge_id=agent.get("bridge_id"),
+                workspace=agent.get("workspace"),
+                channel_id=str(body.get("channel_id") or "") or None,
+                status=str(body.get("status") or "idle"),
+                local_session_ref=str(body.get("local_session_ref") or "") or None,
+            )
+            self._send(200, record)
+            return
+        if path.startswith("/api/agents/") and path.endswith("/status"):
+            agent_id = path.split("/")[3]
+            status = str(body.get("status") or "").strip()
+            allowed = {
+                "online", "offline", "bridge_offline", "agent_not_found",
+                "connecting", "busy", "error", "unknown",
+            }
+            if status not in allowed:
+                self._send(400, {"error": f"status 必须是：{'、'.join(sorted(allowed))}"})
+                return
+            updated = STORE.set_agent_connection_status(agent_id, status)
+            if updated is None:
+                self._send(404, {"error": "local Agent not found"})
+                return
+            self._send(200, updated)
+            return
         if path.startswith("/api/agents/") and path.endswith("/restore"):
             agent_id = path.split("/")[3]
             if not STORE.set_builtin_agent_removed(agent_id, False):

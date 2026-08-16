@@ -167,6 +167,95 @@ class TestPairedAccess:
         assert token not in json.dumps(body)
 
 
+class TestSessionRoutes:
+    def test_sessions_require_pairing(self, bridge):
+        base, _ = bridge
+        assert call(base, "/sessions")[0] == 401
+        assert call(base, "/sessions", method="POST", payload={})[0] == 401
+
+    def test_creating_a_session_needs_a_known_provider(self, bridge, capsys):
+        base, _ = bridge
+        token = pair(base, capsys)
+        status, body, _ = call(base, "/sessions", method="POST", token=token,
+                               payload={"provider": "not-real", "workspace": "."})
+        assert status == 400
+        assert "未知" in body["error"]
+
+    def test_creating_a_session_needs_a_real_workspace(self, bridge, capsys, tmp_path):
+        base, _ = bridge
+        token = pair(base, capsys)
+        status, body, _ = call(base, "/sessions", method="POST", token=token,
+                               payload={"provider": "codex", "agent_id": "a",
+                                        "workspace": str(tmp_path / "missing")})
+        assert status == 400
+        assert "工作目录" in body["error"]
+
+    def test_a_session_can_be_created_and_listed(self, bridge, capsys, tmp_path):
+        base, _ = bridge
+        token = pair(base, capsys)
+        status, session, _ = call(base, "/sessions", method="POST", token=token,
+                                  payload={"provider": "codex", "agent_id": "agent-1",
+                                           "workspace": str(tmp_path)})
+        assert status == 201
+        assert session["status"] == "idle"
+        listed = call(base, "/sessions?agent_id=agent-1", token=token)[1]["sessions"]
+        assert [item["session_id"] for item in listed] == [session["session_id"]]
+
+    def test_messaging_an_unknown_session_is_refused(self, bridge, capsys):
+        base, _ = bridge
+        token = pair(base, capsys)
+        status, _, _ = call(base, "/sessions/S-NOPE/messages", method="POST",
+                            token=token, payload={"prompt": "hi"})
+        assert status == 409
+
+    def test_the_event_stream_needs_the_token(self, bridge, capsys, tmp_path):
+        base, _ = bridge
+        token = pair(base, capsys)
+        session = call(base, "/sessions", method="POST", token=token,
+                       payload={"provider": "codex", "agent_id": "a",
+                                "workspace": str(tmp_path)})[1]
+        # EventSource cannot send headers, so the token rides the query string —
+        # but it is still required.
+        request = urllib.request.Request(
+            f"{base}/sessions/{session['session_id']}/events",
+            headers={"Origin": ORIGIN},
+        )
+        try:
+            urllib.request.urlopen(request, timeout=5)
+            raise AssertionError("expected a rejection")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+
+    def test_the_event_stream_accepts_a_query_token(self, bridge, capsys, tmp_path):
+        base, _ = bridge
+        token = pair(base, capsys)
+        session = call(base, "/sessions", method="POST", token=token,
+                       payload={"provider": "codex", "agent_id": "a",
+                                "workspace": str(tmp_path)})[1]
+        request = urllib.request.Request(
+            f"{base}/sessions/{session['session_id']}/events?token={token}",
+            headers={"Origin": ORIGIN},
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            assert response.status == 200
+            assert response.headers["Content-Type"].startswith("text/event-stream")
+            # The session.created event is replayed from the buffer.
+            chunk = response.read(400).decode("utf-8", "replace")
+        assert "session.created" in chunk
+
+    def test_a_query_token_does_not_unlock_other_routes(self, bridge, capsys):
+        base, _ = bridge
+        token = pair(base, capsys)
+        request = urllib.request.Request(
+            f"{base}/agents/detect?token={token}", headers={"Origin": ORIGIN},
+        )
+        try:
+            urllib.request.urlopen(request, timeout=5)
+            raise AssertionError("expected a rejection")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+
+
 class TestMalformedRequests:
     def test_an_unknown_route_is_a_404(self, bridge):
         base, _ = bridge

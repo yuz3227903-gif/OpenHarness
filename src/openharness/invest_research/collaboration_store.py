@@ -113,6 +113,17 @@ class CollaborationStore:
                 );
                 CREATE INDEX IF NOT EXISTS ix_workbench_agent_skills_agent
                     ON workbench_agent_skills(agent_id, created_at);
+                -- Only what managing a local session needs. The conversation
+                -- itself stays on the user's machine; copying it here would
+                -- move their code and files onto the platform.
+                CREATE TABLE IF NOT EXISTS workbench_local_sessions (
+                    session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL,
+                    provider TEXT NOT NULL, bridge_id TEXT, workspace TEXT,
+                    local_session_ref TEXT, channel_id TEXT, status TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_workbench_local_sessions_agent
+                    ON workbench_local_sessions(agent_id, updated_at);
                 """
             )
             channel_columns = {
@@ -437,6 +448,46 @@ class CollaborationStore:
                  "unknown" if agent_type == "local" else None),
             )
         return self.get_agent(agent_id) or {}
+
+    def record_local_session(
+        self, *, session_id: str, agent_id: str, provider: str, bridge_id: str | None,
+        workspace: str | None, channel_id: str | None = None, status: str = "idle",
+        local_session_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Track one local session's metadata, not its contents."""
+
+        timestamp = _now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT INTO workbench_local_sessions(
+                    session_id, agent_id, provider, bridge_id, workspace,
+                    local_session_ref, channel_id, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    status=excluded.status,
+                    local_session_ref=COALESCE(excluded.local_session_ref, local_session_ref),
+                    updated_at=excluded.updated_at""",
+                (session_id, agent_id, provider, bridge_id, workspace,
+                 local_session_ref, channel_id, status, timestamp, timestamp),
+            )
+        return self.get_local_session(session_id) or {}
+
+    def get_local_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workbench_local_sessions WHERE session_id=?", (session_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_local_sessions(self, agent_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM workbench_local_sessions"
+        values: tuple[Any, ...] = ()
+        if agent_id:
+            query += " WHERE agent_id=?"
+            values = (agent_id,)
+        query += " ORDER BY updated_at DESC LIMIT 100"
+        with self._lock, self._connect() as connection:
+            return [dict(row) for row in connection.execute(query, values).fetchall()]
 
     def set_agent_connection_status(self, agent_id: str, status: str) -> dict[str, Any] | None:
         """Record what the bridge last said about a local Agent."""

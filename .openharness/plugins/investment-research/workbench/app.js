@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, railExpanded: false, bridgePort: 18789 };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, railExpanded: false, bridgePort: 18789, agentFilter: 'all' };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -33,6 +33,19 @@ function renderAgents(){ $('agent-count').textContent=state.agents.length; $('ag
 // there is no separate thread view or task chip to chase.
 function renderMessages(){
   const list=$('message-list');
+  // A local Agent's transcript lives on the user's machine, so its channel
+  // streams into this container instead of replaying stored messages.
+  const localAgent=typeof localAgentFor==='function' ? localAgentFor(state.channelId) : null;
+  if(localAgent){
+    // Keep the streamed transcript across re-renders, but only while it belongs
+    // to the Agent on screen — switching Agents starts a fresh one.
+    const existing=document.getElementById('local-stream');
+    if(!existing || existing.dataset.localAgent!==localAgent.agent_id){
+      list.innerHTML=`<div class="local-intro"><div class="local-intro-copy">${icon('monitor')} 与本机 <strong>${esc(localAgent.name)}</strong>（${esc(localAgent.provider)}）对话<small>工作目录：${esc(localAgent.workspace||'')}</small></div><button type="button" class="secondary" id="local-cancel">中止当前任务</button></div><div id="local-stream" class="local-stream" data-local-agent="${esc(localAgent.agent_id)}"></div>`;
+      $('local-cancel')?.addEventListener('click',()=>cancelLocalTurn());
+    }
+    return;
+  }
   list.innerHTML=state.messages.map(m=>{
     const name=labels[m.author_id] || m.author_id;
     const body=esc(m.body).replace(/(@[A-Za-z_]+)/g,'<span class="mention">$1</span>');
@@ -244,6 +257,15 @@ function setupComposer(){
     const body=input.value.trim();
     const attachmentIds=state.pendingAttachments.map(item=>item.file_id);
     if(!body && !attachmentIds.length)return;
+    // A local Agent's turn runs on the user's machine, so the same composer
+    // sends it to the bridge instead of to this server. The page below is the
+    // same chat page either way.
+    const localAgent=typeof localAgentFor==='function' ? localAgentFor(state.channelId) : null;
+    if(localAgent){
+      input.value='';
+      await sendToLocalAgent(localAgent, body);
+      return;
+    }
     // The研究标的 comes from the open channel's topic, not a hard-coded name.
     const company=currentCompany();
     const res=await fetch(`/api/channels/${state.channelId}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,company,as_of_date:new Date().toISOString().slice(0,10),attachment_ids:attachmentIds})});
@@ -266,7 +288,10 @@ function setupComposer(){
 }
 // A research run is started by @Planner in the channel, so the old
 // start-a-run buttons and their handler are gone with the panels that held them.
-document.addEventListener('DOMContentLoaded',async()=>{ await loadWorkspace(); await loadMessages(); setupComposer(); connectEvents(); $('refresh')?.addEventListener('click',()=>{loadWorkspace();loadMessages();}); $('report-btn')?.addEventListener('click',openReport); });
+document.addEventListener('DOMContentLoaded',async()=>{ await loadWorkspace(); await loadMessages(); setupComposer(); connectEvents(); $('refresh')?.addEventListener('click',()=>{loadWorkspace();loadMessages();}); $('report-btn')?.addEventListener('click',openReport);
+  // Local Agents live on the user's machine, so their reachability is checked
+  // rather than assumed — but only once the roster is known.
+  if(typeof startLocalStatusPolling==='function') startLocalStatusPolling(); });
 
 function showTask(taskId){ const task=state.tasks.find(item=>item.task_id===taskId); if(!task)return; $('context-content').innerHTML=`<div class="context-card"><h2>任务详情</h2><p>${esc(task.title)}</p><div class="kv"><span>任务 ID</span><strong>${esc(task.task_id)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[task.assignee_id]||task.assignee_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(task.status)}</strong></div><div class="kv"><span>运行 ID</span><strong>${esc(task.run_id||'等待运行')}</strong></div><h3>任务说明</h3><p>这是由频道消息触发的研究任务。任务状态来自本地 SQLite 协作记录，不是静态图片。</p></div>`; }
 function showArtifact(artifactId){ const artifact=state.artifacts.find(item=>item.artifact_id===artifactId); if(!artifact)return; $('context-content').innerHTML=`<div class="context-card"><h2>交付成果</h2><p>${esc(artifact.title)}</p><div class="kv"><span>成果 ID</span><strong>${esc(artifact.artifact_id)}</strong></div><div class="kv"><span>提交 Agent</span><strong>${esc(labels[artifact.agent_id]||artifact.agent_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(artifact.status)}</strong></div><h3>成果摘要</h3><p>${esc(artifact.summary)}</p><h3>关联编号</h3><div>${(artifact.refs||[]).map(item=>`<span class="tool-tag">${esc(item)}</span>`).join('')||'<span class="muted">暂未记录</span>'}</div></div>`; }
@@ -1140,6 +1165,21 @@ function agentRowHtml(agent){
   // to save a line — CSS picks one of the two from data-status.
   return `<div class="row-wrap"><div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" data-runtime="${esc(agent.runtime||'hosted')}" title="${esc(name)} · ${esc(role)}｜${esc(detail)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(name)}</strong><span class="agent-role-label">${esc(role)}${localBadge}</span><small class="agent-status-label">${esc(detail)}${localBadge}</small></div><i class="status-dot"></i></div>${actions}</div>`;
 }
+// Hosted and local Agents share one roster — the filter narrows it rather than
+// splitting them into separate lists, so "how many Agents do I have" has one
+// answer. It only appears once both kinds exist; before that it is noise.
+const AGENT_FILTERS=[['all','全部'],['hosted','普通'],['local','本地']];
+function agentFilterHtml(agents){
+  if(!agents.some(agent=>agent.runtime==='local')) return '';
+  const current=state.agentFilter || 'all';
+  return `<div class="roster-filter">${AGENT_FILTERS.map(([key,label])=>
+    `<button type="button" class="filter-chip${key===current?' active':''}" data-agent-filter="${key}">${esc(label)}</button>`).join('')}</div>`;
+}
+function filterAgents(agents){
+  const current=state.agentFilter || 'all';
+  if(current==='all') return agents;
+  return agents.filter(agent=>(agent.runtime||'hosted')===current);
+}
 function renderSidebar(){
   const shell=document.querySelector('.app-shell');
   const sidebar=$('sidebar');
@@ -1169,7 +1209,18 @@ function renderSidebar(){
   body.innerHTML=
     sectionHtml('channels','频道',projects.length,projects.map(channelButtonHtml).join(''),plus('create-channel'))+
     sectionHtml('dms','私信',directs.length,directs.map(dmButtonHtml).join('') || '<p class="sidebar-hint">还没有私信。点右上角 + 发起一条。</p>',plus('create-dm'))+
-    sectionHtml('agents','Agent',state.agents.length,state.agents.map(agentRowHtml).join(''),plus('create-agent'))+
+    (()=>{
+      // While filtered, the count describes the list on screen — a "9" over one
+      // visible row reads as a rendering bug.
+      const visible=filterAgents(state.agents);
+      const count=visible.length===state.agents.length
+        ? state.agents.length : `${visible.length}/${state.agents.length}`;
+      return sectionHtml('agents','Agent',count,
+        agentFilterHtml(state.agents)+
+        (visible.map(agentRowHtml).join('') ||
+          '<p class="sidebar-hint">没有这一类的 Agent。</p>'),
+        plus('create-agent'));
+    })()+
     (removed.length ? sectionHtml('removedAgents','已移除',removed.length,removedRows) : '');
   bindSidebar();
 }
@@ -1181,6 +1232,10 @@ function bindSidebar(){
   }));
   document.querySelectorAll('[data-agent]').forEach(el=>el.addEventListener('click',()=>{
     if(el.dataset.agent!=='owner') showAgent(el.dataset.agent);
+  }));
+  document.querySelectorAll('[data-agent-filter]').forEach(button=>button.addEventListener('click',()=>{
+    state.agentFilter=button.dataset.agentFilter;
+    renderSidebar();
   }));
   document.querySelectorAll('[data-file-channel]').forEach(button=>button.addEventListener('click',()=>{
     state.fileChannel=button.dataset.fileChannel;

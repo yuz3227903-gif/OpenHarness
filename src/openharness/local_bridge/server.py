@@ -17,23 +17,38 @@ import argparse
 import json
 import logging
 import threading
+import time
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from openharness.local_bridge.adapters.registry import available_providers, detect_all
+from openharness.local_bridge.adapters.registry import (
+    available_providers,
+    detect_all,
+    get_adapter,
+)
 from openharness.local_bridge.pairing import (
     PAIR_CODE_TTL_SECONDS,
     PairingError,
     PairingStore,
 )
+from openharness.local_bridge.sessions import SessionError, get_session_manager
 
 log = logging.getLogger(__name__)
 
 DEFAULT_PORT = 18789
 BRIDGE_VERSION = "1"
 MAX_REQUEST_BYTES = 64 * 1024
+#: An oversized body is refused, but a bounded amount of it is still drained
+#: first. Without that the connection is closed mid-upload and the caller sees a
+#: socket abort instead of the 400 explaining what went wrong. The cap stops a
+#: hostile client from making the bridge read forever.
+MAX_DRAIN_BYTES = 4 * 1024 * 1024
+#: How long one SSE connection is held before the page reconnects with its
+#: cursor. Bounded so a dropped client cannot pin a thread forever.
+SSE_WINDOW_SECONDS = 30.0
 
 
 def default_state_path() -> Path:
@@ -70,6 +85,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
         raw = self.headers.get("Authorization", "") or ""
         if raw.lower().startswith("bearer "):
             return raw[7:].strip()
+        # EventSource cannot set headers, so the streaming route alone accepts
+        # the token as a query parameter. Origin is still checked, so this does
+        # not widen who may connect — only how the token travels, over loopback.
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/sessions/") and parsed.path.endswith("/events"):
+            return parse_qs(parsed.query).get("token", [""])[0].strip()
         return ""
 
     def _send(self, status: int, payload: Any) -> None:
@@ -94,6 +115,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         except ValueError:
             return None
         if length < 0 or length > MAX_REQUEST_BYTES:
+            self._drain(length)
             return None
         if length == 0:
             return {}
@@ -102,6 +124,22 @@ class BridgeHandler(BaseHTTPRequestHandler):
         except (UnicodeError, json.JSONDecodeError):
             return None
         return value if isinstance(value, dict) else None
+
+    def _drain(self, length: int) -> None:
+        """Read and discard a rejected body so the refusal reaches the caller."""
+        remaining = min(max(length, 0), MAX_DRAIN_BYTES)
+        if remaining >= MAX_DRAIN_BYTES:
+            # Too big to be a mistake — hang up rather than read it.
+            self.close_connection = True
+            return
+        try:
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 64 * 1024))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            self.close_connection = True
 
     def _require_pairing(self) -> bool:
         """Gate a route. Returns False once a refusal has been sent."""
@@ -163,7 +201,77 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return
             self._send(200, {"clients": self.pairing.list_clients()})
             return
+        if path == "/sessions":
+            if not self._require_pairing():
+                return
+            query = parse_qs(urlparse(self.path).query)
+            agent_id = query.get("agent_id", [None])[0]
+            self._send(200, {"sessions": get_session_manager().list(agent_id=agent_id)})
+            return
+        if path.startswith("/sessions/") and path.endswith("/events"):
+            if not self._require_pairing():
+                return
+            self._stream_events(path.split("/")[2], urlparse(self.path).query)
+            return
         self._send(404, {"error": "not found"})
+
+    def _stream_events(self, session_id: str, raw_query: str) -> None:
+        """Stream a session's events to the page as they happen.
+
+        Server-sent events rather than a socket: the payload only ever flows
+        one way, and the workbench already speaks SSE, so the page uses one
+        streaming mechanism for both kinds of Agent.
+        """
+
+        manager = get_session_manager()
+        try:
+            session = manager.get(session_id)
+        except SessionError as exc:
+            self._send(404, {"error": str(exc)})
+            return
+
+        query = parse_qs(raw_query)
+        try:
+            cursor = int(query.get("after", ["0"])[0])
+        except ValueError:
+            cursor = 0
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        origin = self._origin()
+        if origin and self.pairing.origin_allowed(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+            self.send_header("Vary", "Origin")
+        self.end_headers()
+
+        deadline = time.time() + SSE_WINDOW_SECONDS
+        next_heartbeat = time.time() + 5
+        try:
+            self.wfile.write(b"retry: 1000\n\n")
+            self.wfile.flush()
+            while time.time() < deadline:
+                for event in session.events_since(cursor):
+                    self.wfile.write(
+                        f"id: {event.seq}\ndata: ".encode()
+                        + json.dumps(event.to_dict(), ensure_ascii=False).encode("utf-8")
+                        + b"\n\n"
+                    )
+                    cursor = max(cursor, event.seq)
+                    self.wfile.flush()
+                if time.time() >= next_heartbeat:
+                    self.wfile.write(b": heartbeat\n\n")
+                    self.wfile.flush()
+                    next_heartbeat = time.time() + 5
+                time.sleep(0.15)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Ordinary when the page reloads or navigates away.
+            return
+        finally:
+            self.close_connection = True
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -193,6 +301,70 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "request_id": request.request_id,
                 "expires_in": int(PAIR_CODE_TTL_SECONDS),
             })
+            return
+
+        if path == "/sessions":
+            if not self._require_pairing():
+                return
+            provider = str(body.get("provider") or "")
+            adapter = get_adapter(provider)
+            if adapter is None:
+                self._send(400, {"error": f"未知的本地 Agent 类型：{provider or '(缺失)'}"})
+                return
+            try:
+                session = get_session_manager().create(
+                    agent_id=str(body.get("agent_id") or ""),
+                    provider=provider,
+                    workspace=str(body.get("workspace") or ""),
+                    permission_mode=str(body.get("permission_mode") or "ask"),
+                )
+            except SessionError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            self._send(201, session.public())
+            return
+
+        if path.startswith("/sessions/") and path.endswith("/messages"):
+            if not self._require_pairing():
+                return
+            session_id = path.split("/")[2]
+            manager = get_session_manager()
+            try:
+                session = manager.get(session_id)
+                adapter = get_adapter(session.provider)
+                if adapter is None:
+                    raise SessionError(f"该会话的 Agent 类型已不可用：{session.provider}")
+                manager.send(session_id, str(body.get("prompt") or ""), adapter)
+            except SessionError as exc:
+                self._send(409, {"error": str(exc)})
+                return
+            self._send(HTTPStatus.ACCEPTED, session.public())
+            return
+
+        if path.startswith("/sessions/") and path.endswith("/approvals"):
+            if not self._require_pairing():
+                return
+            try:
+                result = get_session_manager().resolve_approval(
+                    path.split("/")[2],
+                    str(body.get("approval_id") or ""),
+                    str(body.get("decision") or ""),
+                )
+            except SessionError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            self._send(200, result)
+            return
+
+        if path.startswith("/sessions/") and path.endswith("/cancel"):
+            if not self._require_pairing():
+                return
+            try:
+                cancelled = get_session_manager().cancel(path.split("/")[2])
+            except SessionError as exc:
+                self._send(404, {"error": str(exc)})
+                return
+            self._send(200, {"cancelled": cancelled})
             return
 
         if path == "/pair/confirm":
