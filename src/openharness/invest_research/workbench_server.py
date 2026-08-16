@@ -441,6 +441,28 @@ def kind_title(message: dict[str, Any]) -> str:
     return labels.get(str(message.get("message_kind") or ""), "消息")
 
 
+def _builtin_role_prompt(agent_id: str) -> str:
+    """Read a built-in Agent's role prompt from its plugin definition.
+
+    Only a custom Agent stores its prompt in the database; a built-in role
+    defines it in ``agents/<id>.md`` after the YAML front matter. Without this
+    the graph would show an empty prompt for every built-in role.
+    """
+
+    candidate = PROJECT_ROOT / ".openharness" / "plugins" / "investment-research" / "agents" / f"{agent_id}.md"
+    if not candidate.is_file():
+        return ""
+    try:
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            text = parts[2]
+    return text.strip()
+
+
 def _relationship_graph(channel_id: str) -> dict[str, Any]:
     """Build the who-works-with-whom graph, for one channel or the workspace.
 
@@ -472,38 +494,90 @@ def _relationship_graph(channel_id: str) -> dict[str, Any]:
                 kind, name, role, avatar_path = "system", "工作台", "系统事件", None
             else:
                 kind, name, role, avatar_path = "human", "你", "频道所有者", None
+            # Carry the profile the operator configured so clicking a node can
+            # show it without a second round trip. Read-only in the graph.
             nodes[member_id] = {
                 "id": member_id, "name": name, "role": role, "type": kind,
                 "avatar_path": avatar_path, "out_degree": 0, "in_degree": 0,
                 "connections": 0,
+                "profile": str((agent or {}).get("profile") or ""),
+                "system_prompt": str(
+                    (agent or {}).get("system_prompt")
+                    or (_builtin_role_prompt(member_id) if agent else "")
+                ),
+                "model": str((agent or {}).get("model") or ""),
+                "agent_type": str((agent or {}).get("type") or ""),
+                "status": str((agent or {}).get("status") or ""),
+                "allowed_tools": list((agent or {}).get("allowed_tools") or []),
+                "skills": [
+                    {
+                        "skill_id": skill["skill_id"], "name": skill["name"],
+                        "description": skill.get("description", ""),
+                        "filename": skill["filename"], "enabled": skill["enabled"],
+                    }
+                    for skill in (STORE.list_agent_skills(member_id) if agent else [])
+                ],
             }
         return member_id
 
-    def link(source: str, target: str, relation: str) -> None:
+    def link(source: str, target: str, relation: str, ref: str | None = None) -> None:
         source_id, target_id = touch(source), touch(target)
         if not source_id or not target_id or source_id == target_id:
             return
         key = (source_id, target_id)
         edge = edges.setdefault(
             key,
-            {"source": source_id, "target": target_id, "weight": 0, "relations": []},
+            {
+                "source": source_id, "target": target_id, "weight": 0,
+                "relations": [], "task_ids": [], "message_ids": [],
+            },
         )
         edge["weight"] += 1
         if relation not in edge["relations"]:
             edge["relations"].append(relation)
+        # Keep what produced the edge so clicking it can show the real records.
+        if ref:
+            bucket = "task_ids" if relation == "task" else "message_ids"
+            if ref not in edge[bucket]:
+                edge[bucket].append(ref)
 
     all_channels = STORE.list_channels()
     scanned = (
         [item["channel_id"] for item in all_channels] if not channel_id else [channel_id]
     )
+    task_index: dict[str, dict[str, Any]] = {}
     for task in STORE.list_tasks(channel_id or None):
-        link(str(task.get("created_by") or ""), str(task.get("assignee_id") or ""), "task")
+        link(
+            str(task.get("created_by") or ""), str(task.get("assignee_id") or ""),
+            "task", str(task.get("task_id") or ""),
+        )
+        task_index[str(task.get("task_id"))] = {
+            "task_id": task.get("task_id"), "title": task.get("title"),
+            "status": task.get("status"), "assignee_id": task.get("assignee_id"),
+            "created_by": task.get("created_by"), "channel_id": task.get("channel_id"),
+            "updated_at": task.get("updated_at"),
+        }
     # list_messages needs a concrete channel, so walk them rather than passing
     # an empty id, which would match nothing.
+    message_index: dict[str, dict[str, Any]] = {}
     for scanned_id in scanned:
         for message in STORE.list_messages(scanned_id, limit=500):
-            for mention in message.get("mentions") or []:
-                link(str(message.get("author_id") or ""), str(mention), "mention")
+            mentions = message.get("mentions") or []
+            if not mentions:
+                continue
+            message_index[str(message.get("message_id"))] = {
+                "message_id": message.get("message_id"),
+                "author_id": message.get("author_id"),
+                "message_kind": message.get("message_kind"),
+                "body": str(message.get("body") or "")[:240],
+                "channel_id": message.get("channel_id"),
+                "created_at": message.get("created_at"),
+            }
+            for mention in mentions:
+                link(
+                    str(message.get("author_id") or ""), str(mention),
+                    "mention", str(message.get("message_id") or ""),
+                )
 
     for edge in edges.values():
         nodes[edge["source"]]["out_degree"] += edge["weight"]
@@ -535,6 +609,9 @@ def _relationship_graph(channel_id: str) -> dict[str, Any]:
         },
         "top_members": ranked[:5],
         "channels": channel_sizes[:5],
+        # Lookups so clicking an edge can name the records behind it.
+        "tasks": task_index,
+        "messages": message_index,
     }
 
 
@@ -1265,10 +1342,10 @@ def _run_direct_agent_task(
             payload={"message": failed, "task_id": task_id, "agent_id": agent_id},
         )
     finally:
+        # The per-Agent worker owns the job's lifetime now; there is no
+        # per-task thread registry left to clean up.
         if "stop_heartbeat" in locals():
             stop_heartbeat.set()
-        with DIRECT_TASK_LOCK:
-            DIRECT_TASK_THREADS.pop(task_id, None)
 
 
 def _start_direct_agent_tasks(
@@ -1363,7 +1440,9 @@ def _agent_worker(agent_id: str) -> None:
         job = pending.get()
         try:
             _run_direct_agent_task(**job)
-        except Exception:  # noqa: BLE001 - one bad job must not kill the worker
+        except Exception:
+            # One bad job must not kill the worker, or the Agent's whole queue
+            # would stall behind it.
             log.exception("direct agent task failed outside its own handler")
         finally:
             pending.task_done()

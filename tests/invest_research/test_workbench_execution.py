@@ -203,6 +203,36 @@ class TestPerAgentQueue:
         assert (second, third) == (1, 2)
 
 
+class TestDirectTaskCleanup:
+    def test_the_finally_block_does_not_reference_a_removed_registry(self, monkeypatch, tmp_path):
+        """A failing direct task must fail with its own error, not a NameError.
+
+        The per-task thread registry was replaced by per-Agent queues; a stale
+        reference in the ``finally`` block raised NameError on every direct
+        task, masked because the worker catches everything.
+        """
+
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        monkeypatch.setattr(
+            server, "build_direct_agent_input" if hasattr(server, "build_direct_agent_input") else "_snapshot",
+            lambda *a, **k: (_ for _ in ()).throw(server.DirectAgentTaskError("no context")),
+            raising=False,
+        )
+        # Runs to completion: the task is marked failed and nothing raises out.
+        server._run_direct_agent_task(
+            channel_id="research-room",
+            root_message_id="MSG-1",
+            task_id="TASK-CLEANUP-1",
+            agent_id="risk",
+            objective="复核",
+            as_of_date=date(2026, 8, 16),
+            summary=None,
+        )
+        messages = store.list_messages("research-room")
+        assert not any("NameError" in str(item["body"]) for item in messages), messages
+
+
 class TestHandoffDepthLimit:
     def _channel(self, monkeypatch, tmp_path):
         store = CollaborationStore(tmp_path)

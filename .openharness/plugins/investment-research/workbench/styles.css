@@ -291,6 +291,23 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .graph-dot{display:inline-block;width:9px;height:9px;border-radius:50%}
 .graph-side{display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto}
 .graph-panel{border:1px solid var(--line);border-radius:9px;background:#fff;padding:12px;flex:0 0 auto}
+/* Clicking a node or a link fills this column with a read-only record. */
+.graph-link{cursor:pointer}
+.graph-link:hover{stroke:#C8102E}
+.graph-detail h2{font-size:16px;margin:2px 0 8px}
+.graph-detail-head{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px}
+.graph-detail-head h3{margin:0}
+.graph-detail-head button{display:grid;place-items:center;width:24px;height:24px;border:0;background:transparent;border-radius:6px;color:var(--muted);cursor:pointer}
+.graph-detail-head button:hover{background:#fde8ed;color:#C8102E}
+.graph-detail .agent-prompt{max-height:220px}
+.graph-detail .thread-item{margin:6px 0}
+.graph-skill{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:7px;padding:8px;margin:6px 0;background:#fff7f8}
+.graph-skill.skill-off{opacity:.6}
+.graph-skill .icon{color:#C8102E;flex:0 0 auto;margin-top:2px}
+.graph-skill strong{display:block;font-size:12px}
+.graph-skill small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+.graph-skill p{margin:5px 0 0;font-size:11px}
+.graph-readonly{color:var(--muted);font-size:11px;margin:10px 2px 0}
 .graph-panel h3{margin:0 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .graph-rank-row{display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid #f6eaee;font-size:12px}
 .graph-rank-row:last-child{border-bottom:0}

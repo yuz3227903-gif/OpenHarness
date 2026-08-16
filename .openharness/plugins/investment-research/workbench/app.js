@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', skills: {} };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, skills: {} };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -484,12 +484,13 @@ function setPane(pane){
   document.querySelectorAll('.pane-view').forEach(view=>{ view.hidden=view.dataset.paneView!==pane; });
   const composer=$('composer');
   if(composer) composer.hidden=pane!=='chat';
-  // Search and the graph take over the column, so the channel chrome steps aside.
+  // Every pane except chat takes over the column, so the channel chrome and
+  // the pane tabs step aside — a files view shows files and nothing else.
+  const chromeHidden=pane!=='chat';
   const tabs=$('pane-tabs');
-  if(tabs) tabs.hidden=pane==='search' || pane==='graph';
+  if(tabs) tabs.hidden=chromeHidden;
   const head=document.querySelector('.channel-head');
   const banner=$('run-banner');
-  const chromeHidden=pane==='graph';
   if(head) head.hidden=chromeHidden;
   if(banner) banner.hidden=chromeHidden;
   renderSidebar();
@@ -678,6 +679,68 @@ function setupSearch(){
 const GRAPH_NODE_FILL={agent:'#C8102E', human:'#7257a8', system:'#6d8c7c'};
 const GRAPH_NODE_RADIUS=22;
 let graphSimulation=null;
+// d3-force replaces a link's source/target with the node object once the
+// simulation starts, so accept either form.
+const idOf=(value)=>typeof value==='object' && value!==null ? value.id : value;
+
+// Selecting an entity fills the side column. Everything there is read-only:
+// the graph explains the workspace, it does not edit it.
+function selectGraphEntity(kind, id){
+  state.graphSelection=(state.graphSelection && state.graphSelection.kind===kind && state.graphSelection.id===id)
+    ? null : {kind, id};
+  renderGraphSide();
+}
+function graphEntityHtml(){
+  const graph=state.graph || {};
+  const selection=state.graphSelection;
+  if(!selection) return '';
+  if(selection.kind==='node'){
+    const node=(graph.nodes||[]).find(item=>item.id===selection.id);
+    if(!node) return '';
+    const rows=[
+      ['ID', node.id],
+      ['类型', node.type==='agent' ? (node.agent_type==='custom'?'自定义 Agent':'系统内置 Agent') : (node.type==='human'?'人类':'系统')],
+      ['职责', node.role],
+      ['模型', node.model],
+      ['派出 / 收到', `${node.out_degree} / ${node.in_degree}`],
+    ].filter(([,value])=>value!=='' && value!=null)
+     .map(([label,value])=>`<div class="kv"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('');
+    const tools=(node.allowed_tools||[]).map(tool=>`<span class="tool-tag">${esc(tool)}</span>`).join('')
+      || '<span class="muted">无直接工具</span>';
+    const skills=(node.skills||[]).length
+      ? node.skills.map(skill=>`<div class="graph-skill ${skill.enabled?'':'skill-off'}">${icon('puzzle')}<div><strong>${esc(skill.name)}</strong><small>${esc(skill.filename)} · ${skill.enabled?'已启用':'已停用'}</small>${skill.description?`<p>${esc(skill.description)}</p>`:''}</div></div>`).join('')
+      : '<p class="muted">没有安装 Skill 插件。</p>';
+    const prompt=node.system_prompt
+      ? `<h3>系统提示词</h3><div class="agent-prompt">${esc(node.system_prompt)}</div>`
+      : '';
+    const profile=node.profile ? `<h3>个人简介</h3><p>${esc(node.profile)}</p>` : '';
+    return `<div class="graph-panel graph-detail"><div class="graph-detail-head"><h3>实体详情</h3><button type="button" id="graph-detail-close">${icon('x')}</button></div><h2>${esc(node.name)}</h2>${rows}${profile}${prompt}${node.type==='agent'?`<h3>工具白名单</h3><div>${tools}</div><h3>Skill 插件</h3>${skills}`:''}<p class="graph-readonly">关系图只读展示，编辑请到聊天页的 Agent 资料。</p></div>`;
+  }
+  const edge=(graph.edges||[]).find(item=>`${idOf(item.source)}->${idOf(item.target)}`===selection.id);
+  if(!edge) return '';
+  const nameOf=id=>((graph.nodes||[]).find(item=>item.id===id)||{}).name || id;
+  const tasks=(edge.task_ids||[]).map(taskId=>{
+    const task=(graph.tasks||{})[taskId];
+    if(!task) return '';
+    return `<div class="thread-item"><strong>${esc(task.title)}</strong><span>${esc(task.task_id)} · ${esc(taskStatusText(task.status))}</span><small>负责人：${esc(labels[task.assignee_id]||task.assignee_id)}｜创建：${esc(labels[task.created_by]||task.created_by)}</small></div>`;
+  }).join('') || '<p class="muted">这条关系没有任务记录。</p>';
+  const messages=(edge.message_ids||[]).map(messageId=>{
+    const message=(graph.messages||{})[messageId];
+    if(!message) return '';
+    return `<div class="thread-item"><strong>${esc(kindLabel(message.message_kind))}</strong><p>${esc(message.body)}</p><small>${esc(new Date(message.created_at).toLocaleString())}</small></div>`;
+  }).join('') || '<p class="muted">这条关系没有 @提及记录。</p>';
+  return `<div class="graph-panel graph-detail"><div class="graph-detail-head"><h3>关系详情</h3><button type="button" id="graph-detail-close">${icon('x')}</button></div><h2>${esc(nameOf(idOf(edge.source)))} → ${esc(nameOf(idOf(edge.target)))}</h2><div class="kv"><span>累计</span><strong>${edge.weight} 次</strong></div><div class="kv"><span>关系类型</span><strong>${esc(edge.relations.map(item=>item==='task'?'任务派发':'@提及').join('、'))}</strong></div><h3>任务（${(edge.task_ids||[]).length}）</h3>${tasks}<h3>@提及（${(edge.message_ids||[]).length}）</h3>${messages}</div>`;
+}
+function renderGraphSide(){
+  const side=$('graph-side');
+  if(!side) return;
+  const graph=state.graph||{};
+  const detail=graphEntityHtml();
+  const members=(graph.top_members||[]).map(node=>`<div class="graph-rank-row"><span class="graph-dot" style="background:${GRAPH_NODE_FILL[node.type]||'#58746a'}"></span><span>${esc(node.name)}</span><b>${node.connections}</b></div>`).join('') || '<p class="muted">暂无成员。</p>';
+  const channels=(graph.channels||[]).map(channel=>`<div class="graph-rank-row"><span>#${esc(channel.name)}</span><b>${channel.message_count} 条</b></div>`).join('') || '<p class="muted">暂无可见频道。</p>';
+  side.innerHTML=detail || `<div class="graph-panel"><h3>连接最多的成员</h3>${members}</div><div class="graph-panel"><h3>最大的频道</h3>${channels}</div><p class="graph-readonly">点击结点查看实体资料，点击连线查看它们之间的任务。</p>`;
+  $('graph-detail-close')?.addEventListener('click',()=>{ state.graphSelection=null; renderGraphSide(); });
+}
 
 // D3 owns the layout: a force simulation settles the nodes, and each one can be
 // dragged and pinned. Re-rendering tears the previous simulation down first, or
@@ -719,11 +782,18 @@ function mountForceGraph(container, graph){
   svg.call(d3.zoom().scaleExtent([0.3,3]).on('zoom',event=>viewport.attr('transform',event.transform)));
 
   const link=viewport.append('g').selectAll('line').data(links).join('line')
+    .attr('class','graph-link')
     .attr('stroke','#d08a99')
     .attr('stroke-width',d=>1+(d.weight/maxWeight)*4)
     .attr('stroke-dasharray',d=>d.relations.includes('task')?null:'5 4')
-    .attr('marker-end','url(#graph-arrow)');
-  link.append('title').text(d=>`${d.source} → ${d.target}：${d.weight} 次（${d.relations.join('、')}）`);
+    .attr('marker-end','url(#graph-arrow)')
+    // A thin line is hard to hit, so widen only the clickable area.
+    .style('stroke-linecap','round')
+    .on('click',(event,d)=>{
+      event.stopPropagation();
+      selectGraphEntity('edge',`${idOf(d.source)}->${idOf(d.target)}`);
+    });
+  link.append('title').text(d=>`${idOf(d.source)} → ${idOf(d.target)}：${d.weight} 次（${d.relations.join('、')}）`);
 
   const node=viewport.append('g').selectAll('g').data(nodes).join('g')
     .attr('class','graph-node')
@@ -738,7 +808,7 @@ function mountForceGraph(container, graph){
         // Keep the node where it was dropped; double-click releases it.
         d.fx=event.x; d.fy=event.y;
       }))
-    .on('click',(event,d)=>{ if(d.type==='agent') showAgent(d.id); })
+    .on('click',(event,d)=>{ event.stopPropagation(); selectGraphEntity('node',d.id); })
     .on('dblclick',(event,d)=>{ d.fx=null; d.fy=null; graphSimulation.alpha(0.3).restart(); });
 
   node.append('circle')
@@ -786,16 +856,15 @@ function renderGraphBoard(){
   const options=[{channel_id:'',name:'全部频道'},...state.channels].map(channel=>
     `<option value="${esc(channel.channel_id)}" ${channel.channel_id===scope?'selected':''}>${channel.channel_id?(channel.kind==='direct'?'@':'#'):''}${esc(channel.name)}</option>`
   ).join('');
-  const members=(graph.top_members||[]).map(node=>`<div class="graph-rank-row"><span class="graph-dot" style="background:${GRAPH_NODE_FILL[node.type]||'#58746a'}"></span><span>${esc(node.name)}</span><b>${node.connections}</b></div>`).join('') || '<p class="muted">暂无成员。</p>';
-  const channels=(graph.channels||[]).map(channel=>`<div class="graph-rank-row"><span>#${esc(channel.name)}</span><b>${channel.message_count} 条</b></div>`).join('') || '<p class="muted">暂无可见频道。</p>';
-
-  board.innerHTML=`<div class="graph-toolbar"><span class="graph-title">${icon('graph')} 关系图 <em>EXPERIMENTAL</em></span><label class="search-filter">${icon('hash')}<select id="graph-channel">${options}</select></label><span class="graph-inline-stats"><b>${stats.humans ?? 0}</b> 人类 <b>${stats.agents ?? 0}</b> AGENT <b>${stats.connections ?? 0}</b> 连接</span><button type="button" id="graph-refresh" class="secondary">${icon('refresh')} 刷新</button></div><div class="graph-layout"><div class="graph-canvas"><div id="graph-canvas-host" class="graph-canvas-host"></div><div class="graph-legend"><span><i class="graph-line-solid"></i>任务派发</span><span><i class="graph-line-dashed"></i>@提及</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.agent}"></i>Agent</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.human}"></i>人类</span><span class="graph-hint">拖动结点可固定位置，双击释放，滚轮缩放</span></div></div><aside class="graph-side"><div class="graph-panel"><h3>连接最多的成员</h3>${members}</div><div class="graph-panel"><h3>最大的频道</h3>${channels}</div></aside></div>`;
+  board.innerHTML=`<div class="graph-toolbar"><span class="graph-title">${icon('graph')} 关系图 <em>EXPERIMENTAL</em></span><label class="search-filter">${icon('hash')}<select id="graph-channel">${options}</select></label><span class="graph-inline-stats"><b>${stats.humans ?? 0}</b> 人类 <b>${stats.agents ?? 0}</b> AGENT <b>${stats.connections ?? 0}</b> 连接</span><button type="button" id="graph-refresh" class="secondary">${icon('refresh')} 刷新</button></div><div class="graph-layout"><div class="graph-canvas"><div id="graph-canvas-host" class="graph-canvas-host"></div><div class="graph-legend"><span><i class="graph-line-solid"></i>任务派发</span><span><i class="graph-line-dashed"></i>@提及</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.agent}"></i>Agent</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.human}"></i>人类</span><span class="graph-hint">点击结点看资料，点击连线看任务；拖动固定，双击释放，滚轮缩放</span></div></div><aside class="graph-side" id="graph-side"></aside></div>`;
 
   $('graph-refresh')?.addEventListener('click',()=>loadGraph());
   $('graph-channel')?.addEventListener('change',event=>{
     state.graphChannel=event.target.value;
+    state.graphSelection=null;
     loadGraph();
   });
+  renderGraphSide();
   mountForceGraph($('graph-canvas-host'), graph);
 }
 async function loadGraph(){
@@ -825,10 +894,26 @@ function renderFileBoard(){
   const files=state.fileChannel
     ? state.files.filter(file=>file.channel_id===state.fileChannel)
     : state.files;
-  const scope=state.channels.find(item=>item.channel_id===state.fileChannel);
-  const heading=`<div class="task-toolbar"><span class="task-toolbar-title">${icon('paperclip')} ${scope?`#${esc(scope.name)}`:'全部频道'} <b>${files.length}</b> / ${state.files.length}</span></div>`;
+  // The files pane owns its channel filter: it is a whole-window view with no
+  // sidebar to put one in.
+  const counts=new Map();
+  state.files.forEach(file=>counts.set(file.channel_id,(counts.get(file.channel_id)||0)+1));
+  const options=[{channel_id:'',name:'全部频道'},...state.channels].map(channel=>{
+    const count=channel.channel_id ? (counts.get(channel.channel_id)||0) : state.files.length;
+    const prefix=channel.channel_id ? (channel.kind==='direct'?'@':'#') : '';
+    return `<option value="${esc(channel.channel_id)}" ${channel.channel_id===state.fileChannel?'selected':''}>${prefix}${esc(channel.name)}（${count}）</option>`;
+  }).join('');
+  const heading=`<div class="task-toolbar"><span class="task-toolbar-title">${icon('paperclip')} 文件 <b>${files.length}</b> / ${state.files.length}</span><label class="search-filter">${icon('hash')}<select id="file-channel">${options}</select></label><button type="button" id="file-refresh" class="secondary">${icon('refresh')} 刷新</button></div>`;
+  const bindToolbar=()=>{
+    $('file-channel')?.addEventListener('change',event=>{
+      state.fileChannel=event.target.value;
+      renderFileBoard();
+    });
+    $('file-refresh')?.addEventListener('click',()=>loadWorkspace(false));
+  };
   if(!files.length){
     board.innerHTML=heading+'<div class="board-empty board-empty-wide">这里还没有文件。在聊天框上传，或等 Agent 产出报告后自动同步到这里。</div>';
+    bindToolbar();
     return;
   }
   board.innerHTML=heading+`<div class="file-table"><div class="file-row file-head"><span>文件</span><span>频道</span><span>来源</span><span>创建者</span><span>大小</span><span>时间</span><span></span></div>${files.map(file=>{
@@ -838,6 +923,7 @@ function renderFileBoard(){
     const channel=state.channels.find(item=>item.channel_id===file.channel_id);
     return `<div class="file-row"><span class="file-name" title="${esc(file.summary||file.filename)}">${icon(glyph,'file-glyph')} ${esc(file.filename)}</span><span class="file-channel">${esc(channel?.name||file.channel_id)}</span><span><em class="file-source file-source-${esc(file.source)}">${esc(source)}</em></span><span>${esc(owner)}</span><span>${esc(formatBytes(file.size_bytes))}</span><span>${esc(new Date(file.created_at).toLocaleString())}</span><span><a class="file-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">${icon('download')} 下载</a></span></div>`;
   }).join('')}</div>`;
+  bindToolbar();
 }
 
 // Attachments upload before the message is sent, so the message body and its
@@ -891,13 +977,13 @@ function setupAttachments(){
 // channels, the files pane needs a channel filter, the graph pane needs the
 // member roster, and the task and search panes are workspace-wide and take the
 // full width instead.
-// The graph is a whole-window view: it drops both the sidebar and the context
-// pane so nothing competes with the canvas.
+// Only chat keeps the workspace sidebar. Files and the graph are whole-window
+// views: each drops the sidebar, the context pane and the channel chrome, and
+// carries its own channel filter in its toolbar.
 const SIDEBAR_BY_PANE={
   chat:{title:'聊天', subtitle:'本地工作区', action:'新建私信'},
-  files:{title:'文件', subtitle:'所有频道的文件', action:null},
 };
-const FULL_BLEED_PANES=new Set(['graph']);
+const FULL_BLEED_PANES=new Set(['graph','files']);
 function sectionHtml(key, label, count, body, action=''){
   const collapsed=state.collapsed[key];
   return `<div class="sidebar-section" data-section="${esc(key)}"><div class="section-title"><button class="section-toggle" type="button" data-toggle-section="${esc(key)}">${icon('chevron',collapsed?'chevron-collapsed':'')} ${esc(label)}</button><span>${count!=null?`<b>${count}</b>`:''}${action}</span></div><div class="section-body" ${collapsed?'hidden':''}>${body}</div></div>`;
@@ -946,26 +1032,10 @@ function renderSidebar(){
   const body=$('sidebar-body');
   const plus=id=>`<button id="${id}" class="section-add" type="button">${icon('plus')}</button>`;
 
-  if(state.activePane==='chat'){
-    body.innerHTML=
-      sectionHtml('channels','频道',projects.length,projects.map(channelButtonHtml).join(''),plus('create-channel'))+
-      sectionHtml('dms','私信',directs.length,directs.map(dmButtonHtml).join('') || '<p class="sidebar-hint">还没有私信。点右上角 + 发起一条。</p>',plus('create-dm'))+
-      sectionHtml('agents','Agent',state.agents.length,state.agents.map(agentRowHtml).join(''),plus('create-agent'));
-  }else if(state.activePane==='files'){
-    const counts=new Map();
-    state.files.forEach(file=>counts.set(file.channel_id,(counts.get(file.channel_id)||0)+1));
-    const rows=[{channel_id:'',name:'全部频道'},...state.channels].map(channel=>{
-      const count=channel.channel_id ? (counts.get(channel.channel_id)||0) : state.files.length;
-      const active=state.fileChannel===channel.channel_id ? 'active' : '';
-      return `<button class="channel ${active}" data-file-channel="${esc(channel.channel_id)}">${channel.channel_id?icon('hash','channel-icon'):icon('paperclip','channel-icon')} ${esc(channel.name)}<b class="channel-count">${count}</b></button>`;
-    }).join('');
-    body.innerHTML=sectionHtml('fileChannels','频道',state.channels.length,rows);
-  }else{
-    body.innerHTML=
-      `<button class="graph-entry active" type="button" id="open-graph">${icon('graph')} 关系图 <em>EXPERIMENTAL</em></button>`+
-      sectionHtml('graphAgents','AGENT',state.agents.length,state.agents.map(agentRowHtml).join(''))+
-      sectionHtml('graphHumans','人类',1,`<div class="agent-row" data-agent="owner"><div class="agent-avatar" style="background:#7257a8">${esc(initials('owner'))}</div><div class="agent-copy"><strong>你</strong><span>频道所有者</span></div><i class="status-dot"></i></div>`);
-  }
+  body.innerHTML=
+    sectionHtml('channels','频道',projects.length,projects.map(channelButtonHtml).join(''),plus('create-channel'))+
+    sectionHtml('dms','私信',directs.length,directs.map(dmButtonHtml).join('') || '<p class="sidebar-hint">还没有私信。点右上角 + 发起一条。</p>',plus('create-dm'))+
+    sectionHtml('agents','Agent',state.agents.length,state.agents.map(agentRowHtml).join(''),plus('create-agent'));
   bindSidebar();
 }
 function bindSidebar(){
