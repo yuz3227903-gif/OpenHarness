@@ -883,18 +883,30 @@ def _replay_flow_events(
         STORE.add_event(channel_id=channel_id, event_type="flow_event", payload={"message": message, "flow_event": flow_event})
 
 
-def _agent_handoff_targets(body: str, from_agent_id: str) -> list[str]:
+def _agent_handoff_targets(
+    body: str, from_agent_id: str, structured_output: Any = None,
+) -> list[str]:
     """Return the Agents this delivery hands work to.
+
+    The delivery message is a summary assembled from a couple of chosen output
+    fields, so a mention the model wrote elsewhere would never appear in it.
+    The Agent's own structured output is scanned too — that is where its prose
+    actually lives.
 
     Only an Agent that accepts direct tasks qualifies, and an Agent never hands
     work to itself.
     """
 
-    return [
-        agent_id
-        for agent_id in _parse_mentions(body, None)
+    scanned = [body]
+    if isinstance(structured_output, dict):
+        scanned.append(json.dumps(structured_output, ensure_ascii=False))
+    mentions: list[str] = []
+    for text in scanned:
+        mentions.extend(_parse_mentions(text, None))
+    return list(dict.fromkeys(
+        agent_id for agent_id in mentions
         if agent_id in DIRECT_AGENT_IDS and agent_id != from_agent_id
-    ]
+    ))
 
 
 def _dispatch_agent_handoffs(
@@ -1114,7 +1126,9 @@ def _run_direct_agent_task(
                 )
             STORE.update_task(task_id, "completed", run_id=run_id)
             delivery_body = build_agent_delivery_message(result)
-            handoffs = _agent_handoff_targets(delivery_body, agent_id)
+            handoffs = _agent_handoff_targets(
+                delivery_body, agent_id, result.structured_output
+            )
             delivered = STORE.add_message(
                 channel_id=channel_id,
                 thread_id=root_message_id,

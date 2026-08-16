@@ -129,6 +129,26 @@ class TestAgentHandoffTargets:
     def test_targets_are_deduplicated(self):
         assert server._agent_handoff_targets("@risk @risk 两次", "fundamental") == ["risk"]
 
+    def test_a_mention_in_the_structured_output_is_found(self):
+        # The delivery message is a summary built from a couple of chosen
+        # fields, so a mention written anywhere else would be invisible to a
+        # scan of that message alone.
+        output = {"open_questions": [{"item": "口径冲突", "owner": "@reviewer_arbiter"}]}
+        assert server._agent_handoff_targets("本轮工作已完成。", "risk", output) == [
+            "reviewer_arbiter"
+        ]
+
+    def test_the_same_target_in_body_and_output_is_not_duplicated(self):
+        output = {"note": "@risk 复核"}
+        assert server._agent_handoff_targets("@risk 复核", "fundamental", output) == ["risk"]
+
+    def test_self_mention_in_output_is_still_ignored(self):
+        assert server._agent_handoff_targets("", "risk", {"note": "@risk"}) == []
+
+    def test_a_non_dict_output_is_tolerated(self):
+        for output in (None, "plain text", ["@risk"], 42):
+            assert server._agent_handoff_targets("交付完成", "fundamental", output) == []
+
 
 class TestPerAgentQueue:
     def test_one_agent_runs_its_jobs_one_at_a_time(self, monkeypatch):
