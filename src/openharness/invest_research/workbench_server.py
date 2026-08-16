@@ -16,6 +16,7 @@ import logging
 import os
 import queue
 import re
+import shutil
 import threading
 import time
 import webbrowser
@@ -2128,6 +2129,27 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if body is None:
             self._send(400, {"error": "invalid JSON request"})
             return
+        if path.startswith("/api/channels/") and len(path.split("/")) == 4:
+            channel_id = path.split("/")[3]
+            if not any(item["channel_id"] == channel_id for item in STORE.list_channels()):
+                self._send(404, {"error": "channel not found"})
+                return
+            try:
+                updates = {
+                    "name": _required_text(body, "name", 80),
+                    "topic": str(body.get("topic") or "").strip()[:240],
+                    "description": str(body.get("description") or "").strip()[:1000],
+                }
+            except ValueError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            updated = STORE.update_channel(channel_id, **updates)
+            STORE.add_event(
+                channel_id=channel_id, event_type="channel_updated",
+                payload={"channel": updated},
+            )
+            self._send(200, updated)
+            return
         if path.startswith("/api/skills/"):
             skill_id = path.split("/")[3]
             if STORE.get_agent_skill(skill_id) is None:
@@ -2183,6 +2205,32 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         path = unquote(urlparse(self.path).path)
+        if path.startswith("/api/channels/") and len(path.split("/")) == 4:
+            channel_id = path.split("/")[3]
+            channels = STORE.list_channels()
+            channel = next(
+                (item for item in channels if item["channel_id"] == channel_id), None
+            )
+            if channel is None:
+                self._send(404, {"error": "channel not found"})
+                return
+            if any(
+                task.get("status") == "running"
+                for task in STORE.list_tasks(channel_id)
+            ):
+                self._send(409, {"error": "频道内还有正在执行的任务，无法删除。"})
+                return
+            # A workspace with no project channel has nowhere to send a message.
+            projects = [item for item in channels if item.get("kind") != "direct"]
+            if channel.get("kind") != "direct" and len(projects) <= 1:
+                self._send(409, {"error": "这是最后一个项目频道，删除后无处发送消息。"})
+                return
+            removed = STORE.delete_channel(channel_id)
+            uploads = (FILE_ROOT / _safe_filename(channel_id)).resolve()
+            if FILE_ROOT.resolve() in uploads.parents and uploads.is_dir():
+                shutil.rmtree(uploads, ignore_errors=True)
+            self._send(200, {"deleted": True, "channel_id": channel_id, "removed": removed})
+            return
         if path.startswith("/api/skills/"):
             skill_id = path.split("/")[3]
             record = STORE.get_agent_skill(skill_id)

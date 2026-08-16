@@ -7,13 +7,18 @@ function esc(value){ return String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&a
 // Reference one symbol from the inline Lucide sprite in index.html.
 function icon(name, extraClass=''){ return `<svg class="icon ${extraClass}" aria-hidden="true"><use href="#i-${name}"/></svg>`; }
 function initials(id){ return (labels[id] || id || '?').slice(0,2); }
+// The research subject belongs to the open channel, not to a fixed default.
+function currentCompany(){
+  const channel=state.channels.find(item=>item.channel_id===state.channelId);
+  return (channel?.project_company || channel?.topic || channel?.name || '').trim();
+}
 function toast(text){ $('toast').textContent=text; $('toast').classList.add('show'); setTimeout(()=>$('toast').classList.remove('show'),2600); }
 function kindLabel(kind){ return ({system_message:'工作台状态',user_message:'用户',agent_message:'Agent',task_dispatch:'任务派发',progress_update:'流程状态',task_update:'任务状态',review_issue:'审查 / 返工',artifact_delivery:'成果交付',report_delivery:'报告交付',run_failed:'运行失败'}[kind] || kind); }
 function modelOptionsHtml(selected){ return state.modelSettings.models.map(model=>`<option value="${esc(model.id)}" ${model.id===selected?'selected':''}>${esc(model.name)} · ${esc(model.id)}${model.status==='retiring'?'（即将下线）':''}</option>`).join(''); }
 function renderAgents(){ $('agent-count').textContent=state.agents.length; $('agent-list').innerHTML=state.agents.map(a=>`<div class="agent-row" data-agent="${esc(a.agent_id)}"><div class="agent-avatar" style="background:${agentColors[a.agent_id] || '#58746a'}">${esc(initials(a.agent_id))}</div><div class="agent-copy"><strong>${esc(a.name || labels[a.agent_id] || a.agent_id)}</strong><span>${esc(a.role || roles[a.agent_id] || 'Agent')}</span></div><i class="status-dot"></i></div>`).join(''); document.querySelectorAll('[data-agent]').forEach(el=>el.addEventListener('click',()=>showAgent(el.dataset.agent))); }
 function renderMessages(){ const list=$('message-list'); list.innerHTML=state.messages.map(m=>{ const name=labels[m.author_id] || m.author_id; const body=esc(m.body).replace(/(@[A-Za-z_]+)/g,'<span class="mention">$1</span>'); const meta=[]; if(m.metadata?.task_id) meta.push(`<span class="ref-chip">任务 ${esc(m.metadata.task_id)}</span>`); if(m.metadata?.run_id) meta.push(`<span class="ref-chip">Run ${esc(m.metadata.run_id)}</span>`); return `<article class="message" data-message="${esc(m.message_id)}"><div class="message-avatar" style="background:${agentColors[m.author_id] || '#6e7b76'}">${esc(initials(m.author_id))}</div><div class="message-main"><div class="message-top"><strong>${esc(name)}</strong><time>${new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time><span class="message-kind">${esc(kindLabel(m.message_kind))}</span></div><div class="message-body">${body}</div><div class="message-meta">${meta.join('')}<button class="secondary" data-message-detail="${esc(m.message_id)}">${icon('reply')} 查看线程</button></div></div></article>`; }).join(''); document.querySelectorAll('[data-message-detail]').forEach(el=>el.addEventListener('click',()=>showMessage(el.dataset.messageDetail))); list.scrollTop=list.scrollHeight; }
 function renderRun(){ const r=state.run || {}; const banner=$('run-banner'); if(r.error){ banner.className='run-banner failed'; $('run-label').textContent='本次运行失败，但记录已保留'; $('run-meta').textContent=r.error; } else if(r.running){ banner.className='run-banner running'; $('run-label').textContent='研究流程运行中'; $('run-meta').textContent=`${r.company || ''} · ${r.as_of_date || ''}`; } else if(r.report_available){ const fallback=Boolean(r.summary && r.summary.fallback_used); banner.className='run-banner'; $('run-label').textContent=fallback?'降级报告已交付':'报告已交付'; $('run-meta').textContent=`Run ${r.run_id || ''}`; } else { banner.className='run-banner'; $('run-label').textContent='等待研究任务'; $('run-meta').textContent='演示数据 / 本地真实运行入口'; } }
-function renderContext(){ const r=state.run||{}; const current=state.tasks.find(t=>t.status==='running') || state.tasks[0]; $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || '科大讯飞')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div>${current?`<h3>最近任务</h3><div class="kv"><span>任务</span><strong>${esc(current.title)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(current.assignee_id)}</strong></div>`:''}<h3>两种协作方式</h3><p><strong>@Planner</strong> 会启动七个 Agent 的完整研究闭环；<strong>@Fundamental 等其他 Agent</strong> 会复用频道最近一次 Run 的参数卡和证据，单独执行补充任务。一次 @多个 Agent 时会并行派发。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`; const btn=$('context-report'); if(btn) btn.addEventListener('click',openReport); }
+function renderContext(){ const r=state.run||{}; const current=state.tasks.find(t=>t.status==='running') || state.tasks[0]; $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div>${current?`<h3>最近任务</h3><div class="kv"><span>任务</span><strong>${esc(current.title)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(current.assignee_id)}</strong></div>`:''}<h3>两种协作方式</h3><p><strong>@Planner</strong> 会启动七个 Agent 的完整研究闭环；<strong>@Fundamental 等其他 Agent</strong> 会复用频道最近一次 Run 的参数卡和证据，单独执行补充任务。一次 @多个 Agent 时会并行派发。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`; const btn=$('context-report'); if(btn) btn.addEventListener('click',openReport); }
 function showAgent(id){
   const a=state.agents.find(x=>x.agent_id===id)||{};
   const isCustom=a.type==='custom';
@@ -149,7 +154,7 @@ async function saveAgentModel(agentId){
   await loadWorkspace(false); showAgent(agentId); toast(`已将 ${result.name || agentId} 切换为 ${model}`);
 }
 function showMessage(id){ const m=state.messages.find(x=>x.message_id===id); if(!m)return; $('context-content').innerHTML=`<div class="context-card"><h2>${esc(kindLabel(m.message_kind))}</h2><p>${esc(m.body)}</p><h3>消息信息</h3><div class="kv"><span>作者</span><strong>${esc(labels[m.author_id]||m.author_id)}</strong></div><div class="kv"><span>时间</span><strong>${esc(m.created_at)}</strong></div><div class="kv"><span>关联任务</span><strong>${esc(m.metadata?.task_id||'无')}</strong></div><p class="muted">详细线程能力会在下一阶段加入；当前先把主频道、任务状态和真实运行结果打通。</p></div>`; }
-async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}&files=all`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
+async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}&files=all`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); applyChannelHeader(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
 async function loadMessages(){ const res=await fetch(`/api/channels/${state.channelId}/messages`); state.messages=await res.json(); renderMessages(); }
 async function openReport(){ const res=await fetch(`/api/research/report?run_id=${encodeURIComponent(state.run.run_id||'')}`); if(!res.ok){toast('当前还没有报告');return;} const text=await res.text(); const win=window.open(); win.document.write(`<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;padding:28px">${esc(text)}</pre>`); win.document.close(); }
 function setupComposer(){
@@ -173,7 +178,8 @@ function setupComposer(){
     const body=input.value.trim();
     const attachmentIds=state.pendingAttachments.map(item=>item.file_id);
     if(!body && !attachmentIds.length)return;
-    const company=body.includes('科大讯飞')?'科大讯飞':body.includes('宁德时代')?'宁德时代':'科大讯飞';
+    // The研究标的 comes from the open channel's topic, not a hard-coded name.
+    const company=currentCompany();
     const res=await fetch(`/api/channels/${state.channelId}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,company,as_of_date:new Date().toISOString().slice(0,10),attachment_ids:attachmentIds})});
     const data=await res.json();
     if(!res.ok){toast(data.error||'发送失败');return;}
@@ -192,7 +198,7 @@ function setupComposer(){
     }
   });
 }
-async function startDefault(){ const res=await fetch('/api/research/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company:'科大讯飞',as_of_date:new Date().toISOString().slice(0,10),channel_id:state.channelId})}); const data=await res.json(); if(!res.ok)toast(data.error||'启动失败'); else toast('已启动真实研究流程'); await loadWorkspace(); await loadMessages(); }
+async function startDefault(){ const res=await fetch('/api/research/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company:currentCompany(),as_of_date:new Date().toISOString().slice(0,10),channel_id:state.channelId})}); const data=await res.json(); if(!res.ok)toast(data.error||'启动失败'); else toast('已启动真实研究流程'); await loadWorkspace(); await loadMessages(); }
 document.addEventListener('DOMContentLoaded',async()=>{ await loadWorkspace(); await loadMessages(); setupComposer(); connectEvents(); $('refresh')?.addEventListener('click',()=>{loadWorkspace();loadMessages();}); $('report-btn')?.addEventListener('click',openReport); $('start-default')?.addEventListener('click',startDefault); $('new-research')?.addEventListener('click',startDefault); });
 
 function showTask(taskId){ const task=state.tasks.find(item=>item.task_id===taskId); if(!task)return; $('context-content').innerHTML=`<div class="context-card"><h2>任务详情</h2><p>${esc(task.title)}</p><div class="kv"><span>任务 ID</span><strong>${esc(task.task_id)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[task.assignee_id]||task.assignee_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(task.status)}</strong></div><div class="kv"><span>运行 ID</span><strong>${esc(task.run_id||'等待运行')}</strong></div><h3>任务说明</h3><p>这是由频道消息触发的研究任务。任务状态来自本地 SQLite 协作记录，不是静态图片。</p></div>`; }
@@ -385,7 +391,7 @@ renderContext = function(){
   const r=state.run||{};
   const current=state.tasks.find(t=>t.status==='running') || state.tasks.find(t=>t.status==='queued') || state.tasks[0];
   const metadata=current?.metadata || {};
-  $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || '科大讯飞')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>流程状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div>${current?`<h3>最近任务</h3><div class="kv"><span>任务</span><strong>${esc(current.title)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[current.assignee_id]||current.assignee_id)}</strong></div><div class="kv"><span>任务状态</span><strong>${esc(taskStatusText(current.status))}</strong></div>${metadata.phase?`<div class="kv"><span>当前阶段</span><strong>${esc(metadata.phase)}</strong></div>`:''}${metadata.elapsed_seconds!=null?`<div class="kv"><span>已运行</span><strong>${esc(formatElapsed(metadata.elapsed_seconds))}</strong></div>`:''}${metadata.last_activity_at?`<div class="kv"><span>最近活动</span><strong>${esc(metadata.last_activity_at)}</strong></div>`:''}`:''}<h3>协作方式</h3><p><strong>@Planner</strong> 启动完整研究；<strong>@其他 Agent</strong> 复用当前 Run 的参数卡和证据执行直接任务。页面显示的工具和证据只来自真实运行回执。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`;
+  $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>流程状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div>${current?`<h3>最近任务</h3><div class="kv"><span>任务</span><strong>${esc(current.title)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[current.assignee_id]||current.assignee_id)}</strong></div><div class="kv"><span>任务状态</span><strong>${esc(taskStatusText(current.status))}</strong></div>${metadata.phase?`<div class="kv"><span>当前阶段</span><strong>${esc(metadata.phase)}</strong></div>`:''}${metadata.elapsed_seconds!=null?`<div class="kv"><span>已运行</span><strong>${esc(formatElapsed(metadata.elapsed_seconds))}</strong></div>`:''}${metadata.last_activity_at?`<div class="kv"><span>最近活动</span><strong>${esc(metadata.last_activity_at)}</strong></div>`:''}`:''}<h3>协作方式</h3><p><strong>@Planner</strong> 启动完整研究；<strong>@其他 Agent</strong> 复用当前 Run 的参数卡和证据执行直接任务。页面显示的工具和证据只来自真实运行回执。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`;
   const btn=$('context-report');
   if(btn) btn.addEventListener('click',openReport);
 };
@@ -453,7 +459,7 @@ function setupThreadComposer(rootMessageId){
     event.preventDefault();
     const body=input.value.trim();
     if(!body) return;
-    const company=state.run?.company || '科大讯飞';
+    const company=state.run?.company || currentCompany();
     const asOfDate=state.run?.as_of_date || new Date().toISOString().slice(0,10);
     const response=await fetch(`/api/channels/${state.channelId}/messages`,{
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -988,15 +994,21 @@ function sectionHtml(key, label, count, body, action=''){
   const collapsed=state.collapsed[key];
   return `<div class="sidebar-section" data-section="${esc(key)}"><div class="section-title"><button class="section-toggle" type="button" data-toggle-section="${esc(key)}">${icon('chevron',collapsed?'chevron-collapsed':'')} ${esc(label)}</button><span>${count!=null?`<b>${count}</b>`:''}${action}</span></div><div class="section-body" ${collapsed?'hidden':''}>${body}</div></div>`;
 }
+// Row actions stay hidden until hover so the list reads cleanly, and are real
+// buttons rather than a context menu so they are reachable by keyboard.
+function rowActionsHtml(kind, id, {edit=true}={}){
+  return `<span class="row-actions">${edit?`<button type="button" class="row-action" data-edit-${kind}="${esc(id)}" title="编辑">${icon('pencil')}</button>`:''}<button type="button" class="row-action row-danger" data-delete-${kind}="${esc(id)}" title="删除">${icon('trash')}</button></span>`;
+}
 function channelButtonHtml(channel){
-  return `<button class="channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}">${icon('hash','channel-icon')} ${esc(channel.name)}</button>`;
+  return `<div class="row-wrap ${channel.channel_id===state.channelId?'active':''}"><button class="channel" data-channel="${esc(channel.channel_id)}">${icon('hash','channel-icon')} ${esc(channel.name)}</button>${rowActionsHtml('channel',channel.channel_id)}</div>`;
 }
 function dmButtonHtml(channel){
   const agentId=channel.channel_id.replace(/^dm-/,'');
   const agent=state.agents.find(item=>item.agent_id===agentId);
   const avatar=agent?.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agentId));
   const role=agent?.role || roles[agentId] || '';
-  return `<button class="channel dm-channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}"><span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span><b>${esc(channel.name)}</b>${role?`<em>${esc(role)}</em>`:''}</button>`;
+  // A direct channel is named after its Agent, so only deleting makes sense.
+  return `<div class="row-wrap ${channel.channel_id===state.channelId?'active':''}"><button class="channel dm-channel" data-channel="${esc(channel.channel_id)}"><span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span><b>${esc(channel.name)}</b>${role?`<em>${esc(role)}</em>`:''}</button>${rowActionsHtml('channel',channel.channel_id,{edit:false})}</div>`;
 }
 function agentRowHtml(agent){
   const status=agent.status || 'online';
@@ -1004,10 +1016,13 @@ function agentRowHtml(agent){
   const name=agent.name || labels[agent.agent_id] || agent.agent_id;
   const role=agent.role || roles[agent.agent_id] || 'Agent';
   const avatar=agent.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agent.agent_id));
+  // A built-in role is defined in the plugin, so it can be reconfigured but
+  // never edited or deleted here; only a custom Agent gets row actions.
+  const actions=agent.type==='custom' ? rowActionsHtml('agent',agent.agent_id) : '';
   // Name and role sit side by side on one line. A busy Agent shows its live
   // status in the role's place instead, so the roster never hides real state
   // to save a line — CSS picks one of the two from data-status.
-  return `<div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" title="${esc(name)} · ${esc(role)}｜${esc(detail)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(name)}</strong><span class="agent-role-label">${esc(role)}</span><small class="agent-status-label">${esc(detail)}</small></div><i class="status-dot"></i></div>`;
+  return `<div class="row-wrap"><div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" title="${esc(name)} · ${esc(role)}｜${esc(detail)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(name)}</strong><span class="agent-role-label">${esc(role)}</span><small class="agent-status-label">${esc(detail)}</small></div><i class="status-dot"></i></div>${actions}</div>`;
 }
 function renderSidebar(){
   const shell=document.querySelector('.app-shell');
@@ -1056,9 +1071,80 @@ function bindSidebar(){
   $('create-agent')?.addEventListener('click',openAgentDialog);
   $('create-dm')?.addEventListener('click',openDirectMessageDialog);
   $('open-graph')?.addEventListener('click',()=>setPane('graph'));
+  document.querySelectorAll('[data-edit-channel]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    openChannelEditor(button.dataset.editChannel);
+  }));
+  document.querySelectorAll('[data-delete-channel]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    deleteChannel(button.dataset.deleteChannel);
+  }));
+  document.querySelectorAll('[data-edit-agent]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    openAgentEditor(button.dataset.editAgent);
+  }));
+  document.querySelectorAll('[data-delete-agent]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    deleteAgent(button.dataset.deleteAgent);
+  }));
   bindChannelButtons();
 }
+
+async function deleteChannel(channelId){
+  const channel=state.channels.find(item=>item.channel_id===channelId);
+  const label=channel?.kind==='direct' ? `与 ${channel.name} 的私信` : `频道「${channel?.name||channelId}」`;
+  if(!window.confirm(`确定删除${label}吗？\n其中的消息、任务、文件记录会一并删除，且无法恢复。`)) return;
+  const response=await fetch(`/api/channels/${encodeURIComponent(channelId)}`,{method:'DELETE'});
+  const result=await response.json();
+  if(!response.ok){ toast(result.error || '删除频道失败'); return; }
+  // Land somewhere valid if the open channel was the one removed.
+  if(state.channelId===channelId){
+    const fallback=state.channels.find(item=>item.channel_id!==channelId && item.kind!=='direct');
+    state.channelId=fallback?.channel_id || 'research-room';
+    state.selectedThreadMessageId=null;
+    state.eventSeq=0;
+  }
+  await loadWorkspace(false);
+  await loadMessages();
+  applyChannelHeader();
+  connectEvents();
+  toast('已删除');
+}
+
+async function deleteAgent(agentId){
+  const agent=state.agents.find(item=>item.agent_id===agentId);
+  if(!window.confirm(`确定删除 Agent「${agent?.name||agentId}」吗？此操作无法恢复。`)) return;
+  const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}`,{method:'DELETE'});
+  const result=await response.json();
+  if(!response.ok){ toast(result.error || '删除 Agent 失败'); return; }
+  await loadWorkspace(false);
+  toast(`Agent「${agent?.name||agentId}」已删除`);
+}
 function renderChannels(){ renderSidebar(); }
+
+// The header, the eyebrow and the composer hint all name the open channel.
+// They used to carry a hard-coded 科大讯飞 title that stayed put whichever
+// channel was selected.
+function applyChannelHeader(){
+  const channel=state.channels.find(item=>item.channel_id===state.channelId);
+  const direct=channel?.kind==='direct';
+  const name=channel?.name || state.channelId;
+  const eyebrow=document.querySelector('.channel-head .eyebrow');
+  const heading=document.querySelector('.channel-head h1');
+  const subtitle=document.querySelector('.channel-head p');
+  const hint=document.querySelector('.composer-hint');
+  if(eyebrow) eyebrow.textContent=direct?'私信':'投研协作频道';
+  if(heading) heading.textContent=`${direct?'@':'#'} ${name}`;
+  if(subtitle){
+    subtitle.textContent=channel?.topic
+      || channel?.description
+      || (direct ? `只有你和 ${name} 的一对一对话` : '人类与多个 Agent 的研究交接、任务和交付');
+  }
+  if(hint) hint.textContent=`发送消息给 ${direct?'@':'#'}${name}`;
+  const input=$('message-input');
+  if(input && direct) input.placeholder=`直接跟 ${name} 说…`;
+  else if(input) input.placeholder='输入消息，例如：@Fundamental 请补充最近一年经营变化';
+}
 function bindChannelButtons(){
   const list=$('sidebar-body');
   if(!list) return;
@@ -1067,10 +1153,7 @@ function bindChannelButtons(){
     state.channelId=button.dataset.channel;
     state.selectedThreadMessageId=null;
     state.eventSeq=0;
-    const channel=state.channels.find(item=>item.channel_id===state.channelId);
-    document.querySelector('.channel-head h1').textContent=`# ${channel?.name || state.channelId}`;
-    document.querySelector('.channel-head p').textContent=channel?.topic || '多 Agent 研究协作';
-    document.querySelector('.composer-hint').textContent=`发送消息给 #${channel?.name || state.channelId}`;
+    applyChannelHeader();
     renderChannels();
     await loadMessages();
     await loadWorkspace(false);
@@ -1126,8 +1209,32 @@ function openAgentEditor(agentId){
 // The sidebar is re-rendered on every pane switch, so its buttons are bound
 // each time rather than once at startup.
 function openAgentDialog(){ resetAgentEditor(); $('agent-dialog').showModal(); }
+let editingChannelId=null;
 function openChannelDialog(){
+  editingChannelId=null;
+  const form=$('channel-form');
+  form.reset();
+  $('channel-dialog-title').textContent='创建研究频道';
+  $('channel-dialog-subtitle').textContent='一个频道对应一个研究课题和根任务';
+  $('channel-submit').textContent='创建频道';
+  $('channel-members-field').hidden=false;
   $('channel-agent-options').innerHTML=state.agents.filter(agent=>agent.enabled!==false).map(agent=>`<label><input type="checkbox" name="member_ids" value="${esc(agent.agent_id)}"> <span>${esc(agent.name || agent.agent_id)} · ${esc(agent.role || 'Agent')}</span></label>`).join('');
+  $('channel-dialog').showModal();
+}
+function openChannelEditor(channelId){
+  const channel=state.channels.find(item=>item.channel_id===channelId);
+  if(!channel) return;
+  editingChannelId=channelId;
+  const form=$('channel-form');
+  form.reset();
+  form.elements.name.value=channel.name || '';
+  form.elements.topic.value=channel.topic || '';
+  form.elements.description.value=channel.description || '';
+  $('channel-dialog-title').textContent='编辑频道';
+  $('channel-dialog-subtitle').textContent='修改频道名称和研究课题';
+  $('channel-submit').textContent='保存修改';
+  // Membership is fixed after creation; only the naming is editable.
+  $('channel-members-field').hidden=true;
   $('channel-dialog').showModal();
 }
 function openDirectMessageDialog(){
@@ -1193,12 +1300,26 @@ function setupCreationDialogs(){
   });
   $('channel-form')?.addEventListener('submit',async event=>{
     event.preventDefault();
-    const form=new FormData(event.currentTarget);
-    const payload={name:form.get('name'),topic:form.get('topic'),description:form.get('description'),member_ids:form.getAll('member_ids')};
-    const response=await fetch('/api/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    // currentTarget is nulled once the handler yields, so keep the element
+    // itself rather than reaching for it again after an await.
+    const formElement=event.currentTarget;
+    const form=new FormData(formElement);
+    const payload={name:form.get('name'),topic:form.get('topic'),description:form.get('description')};
+    const editing=editingChannelId;
+    const response=editing
+      ? await fetch(`/api/channels/${encodeURIComponent(editing)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+      : await fetch('/api/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,member_ids:form.getAll('member_ids')})});
     const result=await response.json();
-    if(!response.ok){ toast(result.error || '创建频道失败'); return; }
-    channelDialog.close(); event.currentTarget.reset(); state.channelId=result.channel_id; state.eventSeq=0; await loadWorkspace(false); await loadMessages(); renderChannels(); connectEvents(); toast(`研究频道「${result.name}」已创建，根任务等待启动`);
+    if(!response.ok){ toast(result.error || (editing?'保存频道失败':'创建频道失败')); return; }
+    channelDialog.close();
+    formElement.reset();
+    editingChannelId=null;
+    if(!editing){ state.channelId=result.channel_id; state.eventSeq=0; }
+    await loadWorkspace(false);
+    await loadMessages();
+    applyChannelHeader();
+    connectEvents();
+    toast(editing ? `频道「${result.name}」已更新` : `研究频道「${result.name}」已创建，根任务等待启动`);
   });
 }
 

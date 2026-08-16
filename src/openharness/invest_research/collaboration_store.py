@@ -398,6 +398,51 @@ class CollaborationStore:
             )
         return next(item for item in self.list_channels() if item["channel_id"] == channel_id)
 
+    def update_channel(self, channel_id: str, **fields: Any) -> dict[str, Any] | None:
+        """Rename a channel or restate its topic."""
+
+        allowed = {"name", "topic", "description"}
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        if not updates:
+            return next(
+                (item for item in self.list_channels() if item["channel_id"] == channel_id), None
+            )
+        assignments = ", ".join(f"{key}=?" for key in updates)
+        values = [*updates.values(), channel_id]
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                f"UPDATE workbench_channels SET {assignments} WHERE channel_id=?", values
+            )
+        if not cursor.rowcount:
+            return None
+        return next(
+            (item for item in self.list_channels() if item["channel_id"] == channel_id), None
+        )
+
+    def delete_channel(self, channel_id: str) -> dict[str, int]:
+        """Delete a channel and everything recorded inside it.
+
+        Leaving messages, tasks or files behind would keep them visible in the
+        workspace-wide panes with no channel to open, so the delete cascades.
+        Returns the row counts removed so the caller can report them.
+        """
+
+        removed: dict[str, int] = {}
+        with self._lock, self._connect() as connection:
+            for table in (
+                "workbench_messages", "workbench_tasks", "workbench_events",
+                "workbench_artifacts", "workbench_files", "workbench_channel_members",
+            ):
+                cursor = connection.execute(
+                    f"DELETE FROM {table} WHERE channel_id=?", (channel_id,)
+                )
+                removed[table] = cursor.rowcount
+            cursor = connection.execute(
+                "DELETE FROM workbench_channels WHERE channel_id=?", (channel_id,)
+            )
+            removed["workbench_channels"] = cursor.rowcount
+        return removed
+
     def add_message(self, **kwargs: Any) -> dict[str, Any]:
         with self._lock, self._connect() as connection:
             return self._insert_message(connection, **kwargs)

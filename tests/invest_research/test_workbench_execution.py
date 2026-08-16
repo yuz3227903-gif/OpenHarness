@@ -233,6 +233,80 @@ class TestDirectTaskCleanup:
         assert not any("NameError" in str(item["body"]) for item in messages), messages
 
 
+class TestChannelEditing:
+    def test_renaming_a_channel_updates_its_topic(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        channel = store.create_channel(
+            name="temp", topic="比亚迪", description="", member_ids=["fundamental"],
+        )
+        updated = store.update_channel(
+            channel["channel_id"], name="改名后", topic="国轩高科", description="新说明",
+        )
+        assert (updated["name"], updated["topic"], updated["description"]) == (
+            "改名后", "国轩高科", "新说明",
+        )
+
+    def test_updating_an_unknown_channel_returns_none(self, tmp_path):
+        assert CollaborationStore(tmp_path).update_channel("nope", name="x") is None
+
+    def test_only_naming_fields_are_writable(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        channel = store.create_channel(
+            name="temp", topic="t", description="", member_ids=["risk"],
+        )
+        updated = store.update_channel(channel["channel_id"], kind="direct", name="仍是项目频道")
+        assert updated["kind"] == "project"
+        assert updated["name"] == "仍是项目频道"
+
+    def test_deleting_a_channel_removes_what_it_contained(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        channel = store.create_channel(
+            name="temp", topic="t", description="", member_ids=["risk"],
+        )
+        channel_id = channel["channel_id"]
+        store.add_message(
+            channel_id=channel_id, author_id="owner", author_type="human",
+            message_kind="user_message", body="临时消息",
+        )
+        store.create_task(
+            channel_id=channel_id, created_by="owner", assignee_id="risk", title="临时任务",
+        )
+        store.add_file(
+            channel_id=channel_id, owner_id="owner", owner_type="human", source="upload",
+            filename="a.txt", stored_name=f"{channel_id}/a.txt", media_type="text/plain",
+            size_bytes=3,
+        )
+        removed = store.delete_channel(channel_id)
+
+        assert removed["workbench_channels"] == 1
+        assert removed["workbench_messages"] >= 1
+        assert removed["workbench_tasks"] >= 1
+        assert removed["workbench_files"] == 1
+        assert all(item["channel_id"] != channel_id for item in store.list_channels())
+        # Nothing may survive in the workspace-wide panes with no channel to open.
+        assert store.list_messages(channel_id) == []
+        assert store.list_tasks(channel_id) == []
+        assert store.list_files(channel_id) == []
+
+    def test_deleting_one_channel_leaves_the_others_intact(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        keep = store.create_channel(
+            name="keep", topic="t", description="", member_ids=["risk"],
+        )
+        drop = store.create_channel(
+            name="drop", topic="t", description="", member_ids=["risk"],
+        )
+        store.add_message(
+            channel_id=keep["channel_id"], author_id="owner", author_type="human",
+            message_kind="user_message", body="保留",
+        )
+        # create_channel seeds its own system message, so compare the count.
+        before = len(store.list_messages(keep["channel_id"]))
+        store.delete_channel(drop["channel_id"])
+        assert len(store.list_messages(keep["channel_id"])) == before
+        assert any(item["channel_id"] == keep["channel_id"] for item in store.list_channels())
+
+
 class TestHandoffDepthLimit:
     def _channel(self, monkeypatch, tmp_path):
         store = CollaborationStore(tmp_path)

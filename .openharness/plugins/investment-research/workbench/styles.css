@@ -173,6 +173,18 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .section-add:hover{background:#fde8ed}
 .section-body{margin-top:4px}
 .sidebar-hint{color:var(--muted);font-size:11px;margin:6px 8px}
+/* Row actions stay out of the way until the row is hovered or focused, so the
+   list still reads as a list. Keyboard focus reveals them too. */
+.row-wrap{position:relative;display:flex;align-items:center;border-radius:7px}
+.row-wrap>.channel,.row-wrap>.agent-row{flex:1;min-width:0}
+.row-wrap.active>.channel{background:#f9dfe5;color:#C8102E;font-weight:650}
+.row-wrap:hover{background:#fbe8ed}
+.row-actions{display:none;position:absolute;right:4px;gap:2px;background:inherit}
+.row-wrap:hover .row-actions,.row-wrap:focus-within .row-actions{display:inline-flex}
+.row-action{display:grid;place-items:center;width:22px;height:22px;border:0;background:#fff;border-radius:5px;color:var(--muted);cursor:pointer;box-shadow:0 1px 2px rgba(112,16,38,.12)}
+.row-action:hover{color:#C8102E}
+.row-action.row-danger:hover{background:#fde8ed;color:#9f102b}
+.row-action .icon{width:13px;height:13px}
 .channel-count{margin-left:auto;color:var(--muted);font-weight:500;font-size:11px}
 .file-channel{color:var(--muted)}
 
