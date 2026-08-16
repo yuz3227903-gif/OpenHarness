@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'} };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -436,21 +436,33 @@ function setupThreadComposer(rootMessageId){
 function setPane(pane){
   state.activePane=pane;
   document.querySelectorAll('.pane-tab').forEach(tab=>tab.classList.toggle('active',tab.dataset.pane===pane));
+  document.querySelectorAll('.rail-btn').forEach(button=>button.classList.toggle('active',button.dataset.pane===pane));
   document.querySelectorAll('.pane-view').forEach(view=>{ view.hidden=view.dataset.paneView!==pane; });
   const composer=$('composer');
   if(composer) composer.hidden=pane!=='chat';
+  // Search takes over the whole column, so the channel tabs step aside.
+  const tabs=$('pane-tabs');
+  if(tabs) tabs.hidden=pane==='search';
   if(pane==='tasks') renderTaskBoard();
   if(pane==='files') renderFileBoard();
   if(pane==='graph') loadGraph();
+  if(pane==='search'){ runSearch(); $('search-input')?.focus(); }
 }
 function setupPaneTabs(){
   document.querySelectorAll('.pane-tab').forEach(tab=>tab.addEventListener('click',()=>setPane(tab.dataset.pane)));
-  document.querySelectorAll('.rail-btn').forEach((button,index)=>button.addEventListener('click',()=>{
-    document.querySelectorAll('.rail-btn').forEach(item=>item.classList.remove('active'));
-    button.classList.add('active');
-    setPane(['chat','tasks','files'][index] || 'chat');
-  }));
+  // The rail declares its target pane, so inserting a button never shifts the
+  // mapping the way an index-based lookup did.
+  document.querySelectorAll('.rail-btn').forEach(button=>button.addEventListener('click',()=>setPane(button.dataset.pane)));
   $('open-graph')?.addEventListener('click',()=>setPane('graph'));
+  $('search-close')?.addEventListener('click',()=>setPane('chat'));
+  document.addEventListener('keydown',event=>{
+    if((event.ctrlKey || event.metaKey) && event.key.toLowerCase()==='k'){
+      event.preventDefault();
+      setPane('search');
+    }else if(event.key==='Escape' && state.activePane==='search'){
+      setPane('chat');
+    }
+  });
   setPane('chat');
 }
 
@@ -473,17 +485,133 @@ function taskCardHtml(task){
   const phase=metadata.phase?`<small>阶段：${esc(metadata.phase)}</small>`:'';
   return `<article class="board-card" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><div class="board-card-id">${esc(task.task_id)}</div><strong>${esc(task.title)}</strong><div class="board-card-foot"><span class="board-assignee">${esc(assignee)}</span><span class="board-status">${esc(taskStatusText(task.status))}</span></div>${phase}${elapsed}</article>`;
 }
+function memberOptions(selected, placeholder, ids){
+  return `<option value="">${esc(placeholder)}</option>`+[...new Set(ids)].filter(Boolean).map(id=>`<option value="${esc(id)}" ${id===selected?'selected':''}>${esc(labels[id]||id)}</option>`).join('');
+}
+function visibleTasks(){
+  const {creator, assignee, channel}=state.taskFilters;
+  return state.tasks.filter(task=>
+    (!creator || task.created_by===creator) &&
+    (!assignee || task.assignee_id===assignee) &&
+    (!channel || task.channel_id===channel));
+}
+function taskListHtml(tasks){
+  if(!tasks.length) return '<div class="board-empty board-empty-wide">没有符合条件的任务。</div>';
+  return `<div class="task-table"><div class="task-row task-head"><span>任务</span><span>负责人</span><span>创建者</span><span>频道</span><span>状态</span><span>更新时间</span></div>${tasks.map(task=>{
+    const channel=state.channels.find(item=>item.channel_id===task.channel_id);
+    return `<div class="task-row" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><span class="task-row-title"><b>${esc(task.title)}</b><small>${esc(task.task_id)}</small></span><span>${esc(labels[task.assignee_id]||task.assignee_id)}</span><span>${esc(labels[task.created_by]||task.created_by)}</span><span>${esc(channel?.name||task.channel_id)}</span><span><em class="task-status task-status-${esc(taskColumnKey(task.status))}">${esc(taskStatusText(task.status))}</em></span><span>${esc(new Date(task.updated_at).toLocaleString())}</span></div>`;
+  }).join('')}</div>`;
+}
 function renderTaskBoard(){
   const board=$('task-board');
   const counter=$('tab-task-count');
   if(counter) counter.textContent=state.tasks.length;
   if(!board) return;
-  board.innerHTML=TASK_COLUMNS.map(column=>{
-    const items=state.tasks.filter(task=>taskColumnKey(task.status)===column.key);
+  const tasks=visibleTasks();
+  const {creator, assignee, channel, view}=state.taskFilters;
+  const toolbar=`<div class="task-toolbar"><span class="task-toolbar-title">${icon('tasks')} 任务 <b>${tasks.length}</b> / ${state.tasks.length}</span><label class="search-filter">${icon('hash')}<select id="task-filter-channel">${memberOptions(channel,'频道',state.channels.map(item=>item.channel_id))}</select></label><label class="search-filter">${icon('user')}<select id="task-filter-creator">${memberOptions(creator,'创建者',state.tasks.map(item=>item.created_by))}</select></label><label class="search-filter">${icon('users')}<select id="task-filter-assignee">${memberOptions(assignee,'负责人',state.tasks.map(item=>item.assignee_id))}</select></label><div class="task-view-toggle"><button type="button" data-task-view="board" class="${view==='board'?'active':''}">${icon('check-square')} 看板</button><button type="button" data-task-view="list" class="${view==='list'?'active':''}">${icon('tasks')} 列表</button></div></div>`;
+  const body=view==='list' ? taskListHtml(tasks) : `<div class="board-columns">${TASK_COLUMNS.map(column=>{
+    const items=tasks.filter(task=>taskColumnKey(task.status)===column.key);
     const cards=items.map(taskCardHtml).join('') || `<div class="board-empty">没有${esc(column.label)}的任务。</div>`;
     return `<section class="board-column" data-column="${esc(column.key)}"><header><span class="board-chip board-chip-${esc(column.key)}">${esc(column.label)}</span><b>${items.length}</b></header><div class="board-column-body">${cards}</div></section>`;
-  }).join('');
+  }).join('')}</div>`;
+  board.innerHTML=toolbar+body;
   board.querySelectorAll('[data-board-task]').forEach(card=>card.addEventListener('click',()=>showTask(card.dataset.boardTask)));
+  board.querySelectorAll('[data-task-view]').forEach(button=>button.addEventListener('click',()=>{
+    state.taskFilters={...state.taskFilters, view:button.dataset.taskView};
+    renderTaskBoard();
+  }));
+  const bind=(id,key)=>$(id)?.addEventListener('change',event=>{
+    state.taskFilters={...state.taskFilters, [key]:event.target.value};
+    renderTaskBoard();
+  });
+  bind('task-filter-channel','channel');
+  bind('task-filter-creator','creator');
+  bind('task-filter-assignee','assignee');
+}
+
+// Workspace search over every record the workbench owns. Filters mirror what a
+// person remembers about a hit — who sent it, what kind, which channel, when.
+const SEARCH_KIND_META={
+  message:{label:'消息', glyph:'message'}, task:{label:'任务', glyph:'tasks'},
+  file:{label:'文件', glyph:'file'}, agent:{label:'成员', glyph:'user'},
+  channel:{label:'频道', glyph:'hash'},
+};
+let searchDebounce=null;
+function searchFilters(){
+  return {
+    q: $('search-input')?.value || '',
+    scope: $('search-scope')?.value || 'all',
+    sender: $('search-sender')?.value || '',
+    channel_id: $('search-channel')?.value || '',
+    since: $('search-since')?.value || '0',
+    sort: $('search-sort')?.value || 'relevance',
+  };
+}
+function renderSearchOptions(data){
+  const sender=$('search-sender'), channel=$('search-channel');
+  if(sender && sender.options.length<=1){
+    sender.innerHTML='<option value="">发送者</option>'+(data.senders||[]).map(item=>`<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
+  }
+  if(channel && channel.options.length<=1){
+    channel.innerHTML='<option value="">频道</option>'+(data.channels||[]).map(item=>`<option value="${esc(item.id)}">${item.kind==='direct'?'@':'#'}${esc(item.name)}</option>`).join('');
+  }
+}
+function searchResultHtml(item){
+  const meta=SEARCH_KIND_META[item.kind] || {label:item.kind, glyph:'file'};
+  const when=item.created_at ? new Date(item.created_at).toLocaleString() : '';
+  const where=item.channel_name ? `#${esc(item.channel_name)}` : '工作区';
+  return `<article class="search-hit" data-hit-kind="${esc(item.kind)}" data-hit-ref="${esc(JSON.stringify(item.ref))}" data-hit-channel="${esc(item.channel_id)}"><span class="search-hit-kind">${icon(meta.glyph)} ${esc(meta.label)}</span><div class="search-hit-main"><strong>${esc(item.title)}</strong><p>${esc(item.body) || '<span class="muted">无正文</span>'}</p><div class="search-hit-meta"><span>${esc(item.owner_name || '—')}</span><span>${where}</span><span>${esc(when)}</span></div></div></article>`;
+}
+async function runSearch(){
+  const board=$('search-results');
+  if(!board) return;
+  const filters=searchFilters();
+  try{
+    const response=await fetch('/api/search?'+new URLSearchParams(filters),{cache:'no-store'});
+    if(!response.ok) throw new Error('search failed');
+    const data=await response.json();
+    renderSearchOptions(data);
+    if(!data.total){
+      board.innerHTML=`<div class="search-empty">${icon('search','search-empty-icon')}<h2>${filters.q?'没有匹配的内容':'搜索所有内容'}</h2><p>搜索频道、私信、成员、Agent、任务、文件和消息历史。</p></div>`;
+      return;
+    }
+    const counts=Object.entries(data.counts).map(([kind,count])=>`<span class="search-count">${esc((SEARCH_KIND_META[kind]||{}).label||kind)} <b>${count}</b></span>`).join('');
+    board.innerHTML=`<div class="search-summary">共 <b>${data.total}</b> 条结果${counts}</div>${data.results.map(searchResultHtml).join('')}`;
+    board.querySelectorAll('.search-hit').forEach(hit=>hit.addEventListener('click',()=>openSearchHit(hit)));
+  }catch(_error){
+    board.innerHTML='<div class="search-empty"><h2>搜索暂时不可用</h2><p>请刷新页面后重试。</p></div>';
+  }
+}
+async function openSearchHit(element){
+  let ref={};
+  try{ ref=JSON.parse(element.dataset.hitRef || '{}'); }catch(_error){ ref={}; }
+  const channelId=element.dataset.hitChannel;
+  const kind=element.dataset.hitKind;
+  if(kind==='agent' && ref.agent_id){ setPane('chat'); showAgent(ref.agent_id); return; }
+  if(channelId && channelId!==state.channelId && kind!=='agent'){
+    state.channelId=channelId;
+    state.eventSeq=0;
+    renderChannels();
+    await Promise.all([loadMessages(),loadWorkspace(false)]);
+    connectEvents();
+  }
+  if(kind==='message' && ref.message_id){ setPane('chat'); showMessage(ref.thread_id || ref.message_id); }
+  else if(kind==='task' && ref.task_id){ setPane('tasks'); showTask(ref.task_id); }
+  else if(kind==='file'){ setPane('files'); }
+  else { setPane('chat'); }
+}
+function setupSearch(){
+  const inputs=['search-input','search-scope','search-sender','search-channel','search-since','search-sort'];
+  inputs.forEach(id=>{
+    const element=$(id);
+    if(!element) return;
+    const event=element.tagName==='SELECT' ? 'change' : 'input';
+    element.addEventListener(event,()=>{
+      clearTimeout(searchDebounce);
+      searchDebounce=setTimeout(runSearch, event==='input' ? 220 : 0);
+    });
+  });
 }
 
 // Relationship graph: who handed work to whom.  Every edge comes from a real
@@ -630,8 +758,23 @@ function setupAttachments(){
 function renderChannels(){
   const list=$('channel-list');
   if(!list) return;
-  // Direct channels are reached from an Agent profile, not the channel list.
-  list.innerHTML=state.channels.filter(channel=>channel.kind!=='direct').map(channel=>`<button class="channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}">${icon('hash','channel-icon')} ${esc(channel.name)}</button>`).join('');
+  // Project channels and direct messages are separate lists, as in a chat app.
+  const projects=state.channels.filter(channel=>channel.kind!=='direct');
+  const directs=state.channels.filter(channel=>channel.kind==='direct');
+  list.innerHTML=projects.map(channel=>`<button class="channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}">${icon('hash','channel-icon')} ${esc(channel.name)}</button>`).join('');
+  const dmSection=$('dm-section'), dmList=$('dm-channel-list'), dmCount=$('dm-count');
+  if(dmSection && dmList){
+    dmSection.hidden=!directs.length;
+    if(dmCount) dmCount.textContent=directs.length;
+    dmList.innerHTML=directs.map(channel=>{
+      const agentId=channel.channel_id.replace(/^dm-/,'');
+      const agent=state.agents.find(item=>item.agent_id===agentId);
+      const avatar=agent?.avatar_path
+        ? `<img src="/${esc(agent.avatar_path)}" alt="">`
+        : esc(initials(agentId));
+      return `<button class="channel dm-channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}"><span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span> ${esc(channel.name)}</button>`;
+    }).join('');
+  }
   list.querySelectorAll('[data-channel]').forEach(button=>button.addEventListener('click',async()=>{
     if(button.dataset.channel===state.channelId) return;
     state.channelId=button.dataset.channel;
@@ -737,7 +880,7 @@ function setupCreationDialogs(){
 document.addEventListener('DOMContentLoaded',setupCreationDialogs);
 // Load the graph once at startup so its tab count is real before the pane is
 // ever opened, matching how the task and file counts behave.
-document.addEventListener('DOMContentLoaded',()=>{ setupPaneTabs(); setupAttachments(); loadGraph(); });
+document.addEventListener('DOMContentLoaded',()=>{ setupPaneTabs(); setupAttachments(); setupSearch(); loadGraph(); });
 
 // Attachments belong to the message they were sent with, so they render in the
 // timeline instead of only appearing in the files tab.

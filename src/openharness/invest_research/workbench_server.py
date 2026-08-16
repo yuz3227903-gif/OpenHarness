@@ -17,7 +17,7 @@ import re
 import threading
 import time
 import webbrowser
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -222,6 +222,167 @@ def _sync_agent_files(channel_id: str, run_id: str | None) -> None:
             size_bytes=candidate.stat().st_size,
             summary=f"{title} · Run {run_id}",
         )
+
+
+_SEARCH_SCOPES = ("all", "message", "file", "task", "agent", "channel")
+
+
+def _search_workspace(
+    *, query: str, scope: str, sender: str, channel_id: str, since_days: int, sort: str,
+) -> dict[str, Any]:
+    """Search every record the workbench owns: messages, files, tasks, members.
+
+    Matching is a case-insensitive substring over the fields a person would
+    actually recall.  Results carry the channel and timestamp so a hit can be
+    opened where it happened.
+    """
+
+    needle = query.strip().lower()
+    scope = scope if scope in _SEARCH_SCOPES else "all"
+    sender = sender.strip()
+    cutoff: str | None = None
+    if since_days > 0:
+        cutoff = (datetime.now(UTC) - timedelta(days=since_days)).isoformat()
+
+    channels = STORE.list_channels()
+    channel_names = {item["channel_id"]: item["name"] for item in channels}
+    searched = [item for item in channels if not channel_id or item["channel_id"] == channel_id]
+    agents = {item["agent_id"]: item for item in STORE.list_agents()}
+
+    status_labels = {
+        "queued": "排队中", "pending": "待办", "running": "执行中", "completed": "已交付",
+        "complete": "已交付", "failed": "失败", "blocked": "已阻塞", "review": "待确认",
+        "awaiting_review": "待确认", "partial": "部分完成",
+    }
+    member_labels = {"owner": "你", "system": "工作台", "unassigned": "未指派"}
+
+    def display(member_id: str) -> str:
+        agent = agents.get(member_id)
+        if agent is not None:
+            return str(agent.get("name") or member_id)
+        return member_labels.get(member_id, member_id)
+
+    def hit(kind: str, *, title: str, body: str, owner: str, created_at: str,
+            channel: str, ref: dict[str, Any], score: int) -> dict[str, Any]:
+        return {
+            "kind": kind, "title": title, "body": body[:280], "owner": owner,
+            "owner_name": display(owner), "created_at": created_at,
+            "channel_id": channel, "channel_name": channel_names.get(channel, channel),
+            "ref": ref, "score": score,
+        }
+
+    results: list[dict[str, Any]] = []
+
+    def keep(text: str) -> bool:
+        return not needle or needle in text.lower()
+
+    for channel in searched:
+        cid = channel["channel_id"]
+        if scope in ("all", "message"):
+            for message in STORE.list_messages(cid, limit=500):
+                if sender and message.get("author_id") != sender:
+                    continue
+                if cutoff and str(message.get("created_at") or "") < cutoff:
+                    continue
+                if not keep(str(message.get("body") or "")):
+                    continue
+                results.append(hit(
+                    "message", title=kind_title(message), body=str(message.get("body") or ""),
+                    owner=str(message.get("author_id") or ""),
+                    created_at=str(message.get("created_at") or ""), channel=cid,
+                    ref={"message_id": message["message_id"],
+                         "thread_id": message.get("thread_id")},
+                    score=3 if message.get("thread_id") is None else 2,
+                ))
+        if scope in ("all", "task"):
+            for task in STORE.list_tasks(cid):
+                if sender and sender not in {task.get("created_by"), task.get("assignee_id")}:
+                    continue
+                if cutoff and str(task.get("updated_at") or "") < cutoff:
+                    continue
+                if not keep(str(task.get("title") or "")):
+                    continue
+                results.append(hit(
+                    "task", title=str(task.get("title") or ""),
+                    body=(
+                        f"负责人 {display(str(task.get('assignee_id') or ''))}"
+                        f" · {status_labels.get(str(task.get('status') or ''), str(task.get('status') or ''))}"
+                    ),
+                    owner=str(task.get("assignee_id") or ""),
+                    created_at=str(task.get("updated_at") or ""), channel=cid,
+                    ref={"task_id": task["task_id"], "status": task.get("status")}, score=3,
+                ))
+        if scope in ("all", "file"):
+            for record in STORE.list_files(cid):
+                if sender and record.get("owner_id") != sender:
+                    continue
+                if cutoff and str(record.get("created_at") or "") < cutoff:
+                    continue
+                if not keep(f"{record.get('filename')} {record.get('summary')}"):
+                    continue
+                results.append(hit(
+                    "file", title=str(record.get("filename") or ""),
+                    body=str(record.get("summary") or ""),
+                    owner=str(record.get("owner_id") or ""),
+                    created_at=str(record.get("created_at") or ""), channel=cid,
+                    ref={"file_id": record["file_id"], "source": record.get("source")}, score=2,
+                ))
+
+    # A member and a channel are workspace-level records: they have no author
+    # and no owning channel, so a sender or channel filter excludes them rather
+    # than letting every one of them through unfiltered.
+    if scope in ("all", "agent") and not channel_id:
+        for agent in agents.values():
+            if sender and agent["agent_id"] != sender:
+                continue
+            if not keep(f"{agent.get('name')} {agent.get('role')} {agent.get('profile')}"):
+                continue
+            results.append(hit(
+                "agent", title=str(agent.get("name") or agent["agent_id"]),
+                body=str(agent.get("role") or ""), owner=agent["agent_id"],
+                created_at="", channel="", ref={"agent_id": agent["agent_id"]}, score=1,
+            ))
+    if scope in ("all", "channel") and not sender:
+        for channel in searched:
+            if not keep(f"{channel.get('name')} {channel.get('topic')}"):
+                continue
+            results.append(hit(
+                "channel", title=str(channel.get("name") or ""),
+                body=str(channel.get("topic") or ""), owner="", created_at="",
+                channel=channel["channel_id"],
+                ref={"channel_id": channel["channel_id"], "kind": channel.get("kind")}, score=1,
+            ))
+
+    if sort == "recent":
+        results.sort(key=lambda item: item["created_at"], reverse=True)
+    else:
+        results.sort(key=lambda item: (item["score"], item["created_at"]), reverse=True)
+
+    counts: dict[str, int] = {}
+    for item in results:
+        counts[item["kind"]] = counts.get(item["kind"], 0) + 1
+    return {
+        "query": query, "scope": scope, "total": len(results),
+        "counts": counts, "results": results[:100],
+        "senders": [
+            {"id": agent_id, "name": str(agent.get("name") or agent_id)}
+            for agent_id, agent in agents.items()
+        ] + [{"id": "owner", "name": "你"}],
+        "channels": [
+            {"id": item["channel_id"], "name": item["name"], "kind": item.get("kind")}
+            for item in channels
+        ],
+    }
+
+
+def kind_title(message: dict[str, Any]) -> str:
+    labels = {
+        "system_message": "工作台状态", "user_message": "用户消息", "agent_message": "Agent 消息",
+        "task_dispatch": "任务派发", "progress_update": "流程状态", "task_update": "任务状态",
+        "review_issue": "审查 / 返工", "artifact_delivery": "成果交付",
+        "report_delivery": "报告交付", "run_failed": "运行失败",
+    }
+    return labels.get(str(message.get("message_kind") or ""), "消息")
 
 
 def _relationship_graph(channel_id: str) -> dict[str, Any]:
@@ -1286,6 +1447,19 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._send(200, STORE.list_tasks(query.get("channel_id", [None])[0]))
         elif path == "/api/artifacts":
             self._send(200, STORE.list_artifacts(query.get("channel_id", [None])[0]))
+        elif path == "/api/search":
+            try:
+                since_days = int(query.get("since", ["0"])[0])
+            except ValueError:
+                since_days = 0
+            self._send(200, _search_workspace(
+                query=query.get("q", [""])[0],
+                scope=query.get("scope", ["all"])[0],
+                sender=query.get("sender", [""])[0],
+                channel_id=query.get("channel_id", [""])[0],
+                since_days=since_days,
+                sort=query.get("sort", ["relevance"])[0],
+            ))
         elif path == "/api/graph":
             self._send(200, _relationship_graph(query.get("channel_id", ["research-room"])[0]))
         elif path == "/api/files":

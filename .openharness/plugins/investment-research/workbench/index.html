@@ -37,9 +37,11 @@
   <div class="app-shell">
     <aside class="rail">
       <div class="brand-mark">研</div>
-      <button class="rail-btn active" title="协作频道"><svg class="icon"><use href="#i-message"/></svg></button>
-      <button class="rail-btn" title="任务"><svg class="icon"><use href="#i-check-square"/></svg></button>
-      <button class="rail-btn" title="文件"><svg class="icon"><use href="#i-paperclip"/></svg></button>
+      <button class="rail-btn" data-pane="search" title="搜索 (Ctrl+K)"><svg class="icon"><use href="#i-search"/></svg></button>
+      <button class="rail-btn active" data-pane="chat" title="协作频道"><svg class="icon"><use href="#i-message"/></svg></button>
+      <button class="rail-btn" data-pane="tasks" title="任务"><svg class="icon"><use href="#i-check-square"/></svg></button>
+      <button class="rail-btn" data-pane="files" title="文件"><svg class="icon"><use href="#i-paperclip"/></svg></button>
+      <button class="rail-btn" data-pane="graph" title="关系图"><svg class="icon"><use href="#i-graph"/></svg></button>
       <div class="rail-spacer"></div>
       <div class="rail-avatar">ZY</div>
     </aside>
@@ -47,6 +49,7 @@
       <div class="workspace-head"><div><strong>AI帮投研助手</strong><span>本地工作区</span></div><button id="new-research" title="研究科大讯飞"><svg class="icon"><use href="#i-plus"/></svg></button></div>
       <button id="open-graph" class="graph-entry" type="button"><svg class="icon"><use href="#i-graph"/></svg> 关系图 <em>EXPERIMENTAL</em></button>
       <div class="sidebar-section"><div class="section-title">频道 <button id="create-channel" title="创建研究频道"><svg class="icon"><use href="#i-plus"/></svg></button></div><div id="channel-list"></div></div>
+      <div class="sidebar-section" id="dm-section" hidden><div class="section-title">私信 <b id="dm-count">0</b></div><div id="dm-channel-list"></div></div>
       <div class="sidebar-section"><div class="section-title">Agent <span><b id="agent-count">7</b><button id="create-agent" title="创建 Agent"><svg class="icon"><use href="#i-plus"/></svg></button></span></div><div id="agent-list" class="agent-list"></div></div>
       <div class="sidebar-note">演示数据与真实运行记录保存在本机项目目录。<br>“工作台”只记录状态，不参与研究判断。</div>
     </aside>
@@ -58,6 +61,17 @@
       <section id="task-board" class="task-board pane-view" data-pane-view="tasks" hidden></section>
       <section id="file-board" class="file-board pane-view" data-pane-view="files" hidden></section>
       <section id="graph-board" class="graph-board pane-view" data-pane-view="graph" hidden></section>
+      <section id="search-board" class="search-board pane-view" data-pane-view="search" hidden>
+        <div class="search-bar"><svg class="icon"><use href="#i-search"/></svg><input id="search-input" type="search" placeholder="搜索频道、私信、消息…" autocomplete="off"><kbd id="search-hint">Ctrl+K</kbd><button type="button" id="search-close" class="secondary">ESC</button></div>
+        <div class="search-filters">
+          <label class="search-filter"><svg class="icon"><use href="#i-user"/></svg><select id="search-sender"><option value="">发送者</option></select></label>
+          <label class="search-filter"><svg class="icon"><use href="#i-sparkle"/></svg><select id="search-scope"><option value="all">范围</option><option value="message">消息</option><option value="task">任务</option><option value="file">文件</option><option value="agent">成员</option><option value="channel">频道</option></select></label>
+          <label class="search-filter"><svg class="icon"><use href="#i-hash"/></svg><select id="search-channel"><option value="">频道</option></select></label>
+          <label class="search-filter"><svg class="icon"><use href="#i-refresh"/></svg><select id="search-since"><option value="0">不限时间</option><option value="1">最近一天</option><option value="7">最近一周</option><option value="30">最近一月</option></select></label>
+          <label class="search-filter"><svg class="icon"><use href="#i-tasks"/></svg><select id="search-sort"><option value="relevance">相关度</option><option value="recent">最新</option></select></label>
+        </div>
+        <div id="search-results" class="search-results"></div>
+      </section>
       <form id="composer" class="composer"><div class="composer-hint">发送消息给 #科大讯飞研究室</div><textarea id="message-input" rows="2" placeholder="输入消息，例如：@Fundamental 请补充最近一年经营变化"></textarea><div id="attachment-tray" class="attachment-tray" hidden></div><div class="composer-footer"><span class="composer-tip">@Planner 启动完整研究；@其他 Agent 创建直接任务，可同时 @多个 Agent</span><div><label class="attach-btn" title="上传图片或文件"><svg class="icon"><use href="#i-image"/></svg><svg class="icon"><use href="#i-paperclip"/></svg><input id="attachment-input" type="file" multiple hidden></label><button type="button" id="report-btn" class="secondary"><svg class="icon"><use href="#i-report"/></svg> 查看报告</button><button type="submit" class="send"><svg class="icon"><use href="#i-send"/></svg> 发送</button></div></div><div id="mention-menu" class="mention-menu"></div></form>
     </main>
     <aside class="context-pane"><div class="context-head"><span><svg class="icon"><use href="#i-user"/></svg> 上下文</span><button id="close-context" title="关闭"><svg class="icon"><use href="#i-x"/></svg></button></div><div id="context-content" class="context-content"><div class="empty-context"><div class="context-icon"><svg class="icon"><use href="#i-sparkle"/></svg></div><h2>研究协作室</h2><p>选择 Agent、任务或消息，查看它的角色、状态和交付内容。</p><button id="start-default" class="primary">研究科大讯飞</button></div></div></aside>
