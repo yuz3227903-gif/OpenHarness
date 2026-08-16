@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from openharness.invest_research.runtime_adapter import (
     AgentExecutionRequest,
@@ -19,8 +19,14 @@ class AgentRuntime(Protocol):
 class OpenHarnessRuntimeGateway:
     """Call exactly one OpenHarness Agent for each CrewAI workflow step."""
 
-    def __init__(self, runtime: AgentRuntime | None = None) -> None:
+    def __init__(
+        self,
+        runtime: AgentRuntime | None = None,
+        *,
+        model_resolver: Callable[[str], str | None] | None = None,
+    ) -> None:
         self._runtime = runtime or InvestmentResearchRuntimeAdapter()
+        self._model_resolver = model_resolver
         self.execution_count = 0
 
     @property
@@ -41,9 +47,13 @@ class OpenHarnessRuntimeGateway:
         retry_transient: bool = True,
         output_contract: Literal["agent_default", "report_section"] = "agent_default",
         persist_output: bool = True,
+        model_override: str | None = None,
     ) -> AgentExecutionResult:
         """Forward one typed request without adding a CrewAI model call."""
 
+        resolved_model = model_override
+        if resolved_model is None and self._model_resolver is not None:
+            resolved_model = self._model_resolver(agent_id)
         request = AgentExecutionRequest(
             agent_id=agent_id,
             input_payload=input_payload,
@@ -55,6 +65,7 @@ class OpenHarnessRuntimeGateway:
             timeout_seconds=timeout_seconds,
             output_contract=output_contract,
             persist_output=persist_output,
+            model_override=resolved_model,
         )
         max_attempts = 2 if retry_transient else 1
         for attempt in range(max_attempts):

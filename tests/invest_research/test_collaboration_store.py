@@ -113,3 +113,57 @@ def test_artifact_can_be_upserted_and_filtered_by_channel(workspace_tmp: Path) -
     )
     assert updated["status"] == "reviewed"
     assert store.list_artifacts("research-room")[0]["summary"] == "已补充交叉验证。"
+
+
+def test_custom_agent_can_be_created_and_join_research_channel(workspace_tmp: Path) -> None:
+    store = CollaborationStore(workspace_tmp)
+    agent = store.create_agent(
+        name="财务分析助手",
+        profile="专注财务质量与现金流",
+        role="财务分析",
+        system_prompt="只根据可验证材料分析财务质量。",
+        model="deepseek-v4-flash",
+        avatar_path="uploads/avatars/finance.png",
+    )
+    assert agent["type"] == "custom"
+    assert agent["system_prompt"] == "只根据可验证材料分析财务质量。"
+    assert len(store.list_agents()) == 8
+
+    channel = store.create_channel(
+        name="宁德时代电池研究",
+        topic="宁德时代动力电池竞争力",
+        description="研究技术、成本与市场份额",
+        member_ids=["planner", agent["agent_id"]],
+    )
+    assert channel["topic"] == "宁德时代动力电池竞争力"
+    assert channel["member_ids"] == ["planner", agent["agent_id"]]
+    root_task = store.get_task(channel["root_task_id"])
+    assert root_task is not None
+    assert root_task["status"] == "queued"
+    assert root_task["metadata"]["root_research_task"] is True
+
+
+def test_custom_agent_can_be_updated_disabled_and_deleted(workspace_tmp: Path) -> None:
+    store = CollaborationStore(workspace_tmp)
+    agent = store.create_agent(
+        name="行业助手", profile="行业研究", role="研究员",
+        system_prompt="分析行业。", model="deepseek-v4-flash",
+    )
+    updated = store.update_agent(agent["agent_id"], name="行业研究助手", enabled=False)
+    assert updated is not None
+    assert updated["name"] == "行业研究助手"
+    assert updated["enabled"] is False
+    assert store.delete_agent(agent["agent_id"]) is True
+    assert all(item["agent_id"] != agent["agent_id"] for item in store.list_agents())
+
+
+def test_builtin_agent_model_override_is_persisted(workspace_tmp: Path) -> None:
+    store = CollaborationStore(workspace_tmp)
+
+    updated = store.update_agent_model("planner", "doubao-seed-2.1-turbo")
+
+    assert updated is not None
+    assert updated["agent_id"] == "planner"
+    assert updated["model"] == "doubao-seed-2.1-turbo"
+    reloaded = CollaborationStore(workspace_tmp)
+    assert reloaded.get_agent("planner")["model"] == "doubao-seed-2.1-turbo"

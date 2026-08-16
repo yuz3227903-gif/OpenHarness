@@ -109,6 +109,7 @@ class AgentExecutionRequest(AdapterModel):
     tool_call_limits: dict[str, int] = Field(default_factory=dict)
     output_contract: Literal["agent_default", "report_section"] = "agent_default"
     persist_output: bool = True
+    model_override: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class ToolCallTrace(AdapterModel):
@@ -332,6 +333,7 @@ class InvestmentResearchRuntimeAdapter:
                 )
 
         preflight = self.preflight(entry.agent_id)
+        effective_model = request.model_override or preflight.model
         if not preflight.ready_for_real_run:
             missing = list(preflight.missing_tools)
             if "tavily_search" in entry.allowed_tools and not preflight.tavily_configured:
@@ -339,7 +341,7 @@ class InvestmentResearchRuntimeAdapter:
             return self._blocked_result(
                 entry.agent_id,
                 "Missing runtime prerequisites: " + ", ".join(missing),
-                model=preflight.model,
+                model=effective_model,
             )
 
         agent_definition = self._load_agent_definition(entry.runtime_agent_name)
@@ -391,7 +393,7 @@ class InvestmentResearchRuntimeAdapter:
             tool_registry=registry,
             permission_checker=PermissionChecker(permission_settings),
             cwd=self._project_root,
-            model=settings.model,
+            model=effective_model,
             system_prompt=system_prompt,
             max_tokens=min(
                 request.max_output_tokens or settings.max_tokens,
@@ -556,7 +558,7 @@ class InvestmentResearchRuntimeAdapter:
                 status="failed",
                 agent_id=entry.agent_id,
                 runtime_agent_name=entry.runtime_agent_name,
-                model=settings.model,
+                model=effective_model,
                 raw_output=_sanitize_text(raw_output),
                 model_call_id=model_call_id,
                 tool_calls=tool_calls,
@@ -591,7 +593,7 @@ class InvestmentResearchRuntimeAdapter:
                     status="invalid_output",
                     agent_id=entry.agent_id,
                     runtime_agent_name=entry.runtime_agent_name,
-                    model=settings.model,
+                    model=effective_model,
                     structured_output=salvaged,
                     raw_output=_sanitize_text(raw_output),
                     model_call_id=model_call_id,
@@ -621,7 +623,7 @@ class InvestmentResearchRuntimeAdapter:
                 status="invalid_output",
                 agent_id=entry.agent_id,
                 runtime_agent_name=entry.runtime_agent_name,
-                model=settings.model,
+                model=effective_model,
                 raw_output=_sanitize_text(raw_output),
                 model_call_id=model_call_id,
                 tool_calls=tool_calls,
@@ -659,7 +661,7 @@ class InvestmentResearchRuntimeAdapter:
             status="succeeded",
             agent_id=entry.agent_id,
             runtime_agent_name=entry.runtime_agent_name,
-            model=settings.model,
+            model=effective_model,
             structured_output=parsed,
             raw_output=_sanitize_text(raw_output),
             model_call_id=model_call_id,

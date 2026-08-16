@@ -4,6 +4,21 @@
 
 **Goal:** Deliver a Windows-local React browser workbench where a user collaborates with the seven existing investment-research Agents through Slack-style channels, threads, tasks, artifacts, review loops, evidence, and Markdown reports.
 
+## 2026-08-16 Scope Amendment
+
+The MVP now also includes two owner-managed creation flows:
+
+1. **Custom Agents** — create, edit, disable, and delete an Agent with a name, uploaded avatar, profile, role, system prompt, and model. A created Agent can join channels, be mentioned, receive direct tasks, and participate in multi-Agent discussions. Tool and advanced runtime settings use safe system defaults.
+2. **Research channels** — create a channel with a name, research topic, topic description, and one or more built-in/custom Agent members. Creation also creates a root research task in `queued` state; model execution begins only after an explicit start action or an Agent mention.
+
+Implementation order is adjusted to deliver a vertical slice before the full React migration:
+
+- extend `CollaborationStore` with custom-Agent, avatar, channel-membership, and root-task persistence;
+- expose validated REST endpoints and safe static avatar delivery in `workbench_server`;
+- add creation dialogs and channel switching to the existing workbench client;
+- cover the store, API, file validation, and browser flow with tests;
+- then migrate the validated interaction contracts into the planned React/Vite client.
+
 **Architecture:** Add a typed React/Vite application at `frontend/workbench` and build it into the existing workbench static root. Extend `CollaborationStore` and `workbench_server` with stable REST/SSE contracts while preserving the current CrewAI/OpenHarness execution path, SQLite records, and report fallback behavior.
 
 **Tech Stack:** Python 3.10+, SQLite, existing `ThreadingHTTPServer`, CrewAI/OpenHarness, React 19, TypeScript 5.8, Vite 6, Vitest, Testing Library, SSE, CSS.

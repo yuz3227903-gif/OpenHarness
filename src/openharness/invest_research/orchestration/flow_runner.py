@@ -36,6 +36,7 @@ async def run(
     complete_report: bool = False,
     pause_callback: Any | None = None,
     event_callback: Any | None = None,
+    gateway: Any | None = None,
 ) -> tuple[dict[str, Any], Path]:
     configure_crewai_environment(_project_root())
     from openharness.invest_research.orchestration.research_flow import (
@@ -43,6 +44,7 @@ async def run(
     )
 
     flow = InvestmentResearchSmokeFlow(
+        gateway,
         complete_report=complete_report,
         pause_callback=pause_callback,
         event_callback=event_callback,

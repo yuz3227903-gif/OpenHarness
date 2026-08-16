@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from openharness.invest_research.agent_registry import iter_agent_entries
+from openharness.invest_research.workbench_models import DEFAULT_MODEL
 
 
 def _now() -> str:
@@ -50,7 +51,21 @@ class CollaborationStore:
                 );
                 CREATE TABLE IF NOT EXISTS workbench_channels (
                     channel_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL,
-                    kind TEXT NOT NULL DEFAULT 'project', project_company TEXT, created_at TEXT NOT NULL
+                    kind TEXT NOT NULL DEFAULT 'project', project_company TEXT, topic TEXT,
+                    description TEXT, root_task_id TEXT, created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workbench_agents (
+                    agent_id TEXT PRIMARY KEY, name TEXT NOT NULL, profile TEXT NOT NULL,
+                    role TEXT NOT NULL, system_prompt TEXT NOT NULL, model TEXT NOT NULL,
+                    avatar_path TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workbench_channel_members (
+                    channel_id TEXT NOT NULL, agent_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(channel_id, agent_id)
+                );
+                CREATE TABLE IF NOT EXISTS workbench_agent_overrides (
+                    agent_id TEXT PRIMARY KEY, model TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS workbench_messages (
                     message_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, thread_id TEXT,
@@ -81,6 +96,16 @@ class CollaborationStore:
                 );
                 """
             )
+            channel_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(workbench_channels)")
+            }
+            for name, definition in (
+                ("topic", "TEXT"), ("description", "TEXT"), ("root_task_id", "TEXT")
+            ):
+                if name not in channel_columns:
+                    connection.execute(
+                        f"ALTER TABLE workbench_channels ADD COLUMN {name} {definition}"
+                    )
 
     def _seed_defaults(self) -> None:
         # Keep seed values ASCII here; the UI supplies the Chinese display labels.
@@ -138,20 +163,157 @@ class CollaborationStore:
 
     def list_channels(self) -> list[dict[str, Any]]:
         with self._lock, self._connect() as connection:
-            return [dict(row) for row in connection.execute(
+            channels = [dict(row) for row in connection.execute(
                 "SELECT * FROM workbench_channels ORDER BY created_at"
             ).fetchall()]
+            for channel in channels:
+                channel["member_ids"] = [
+                    row["agent_id"] for row in connection.execute(
+                        "SELECT agent_id FROM workbench_channel_members WHERE channel_id=? ORDER BY rowid",
+                        (channel["channel_id"],),
+                    ).fetchall()
+                ]
+            return channels
 
     def list_agents(self) -> list[dict[str, Any]]:
-        return [
+        built_in = [
             {
                 "agent_id": entry.agent_id, "name": entry.display_name,
                 "role": entry.role_title_zh, "type": "system", "status": "online",
-                "model": "deepseek-v4-flash", "allowed_tools": list(entry.allowed_tools),
-                "runtime_agent_name": entry.runtime_agent_name,
+                "model": DEFAULT_MODEL, "allowed_tools": list(entry.allowed_tools),
+                "runtime_agent_name": entry.runtime_agent_name, "profile": entry.role_title_zh,
+                "avatar_path": None, "enabled": True,
             }
             for entry in iter_agent_entries()
         ]
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM workbench_agents ORDER BY created_at"
+            ).fetchall()
+        with self._lock, self._connect() as connection:
+            overrides = {
+                row["agent_id"]: row["model"]
+                for row in connection.execute(
+                    "SELECT agent_id, model FROM workbench_agent_overrides"
+                ).fetchall()
+            }
+        for item in built_in:
+            item["model"] = overrides.get(item["agent_id"], item["model"])
+        custom = []
+        for row in rows:
+            item = dict(row)
+            item["type"] = "custom"
+            item["status"] = "online" if item.pop("enabled") else "disabled"
+            item["enabled"] = item["status"] == "online"
+            item["allowed_tools"] = []
+            custom.append(item)
+        return built_in + custom
+
+    def update_agent_model(self, agent_id: str, model: str) -> dict[str, Any] | None:
+        if self.get_agent(agent_id) is None:
+            return None
+        timestamp = _now()
+        with self._lock, self._connect() as connection:
+            custom = connection.execute(
+                "SELECT 1 FROM workbench_agents WHERE agent_id=?", (agent_id,)
+            ).fetchone()
+            if custom is not None:
+                connection.execute(
+                    "UPDATE workbench_agents SET model=?, updated_at=? WHERE agent_id=?",
+                    (model, timestamp, agent_id),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO workbench_agent_overrides(agent_id, model, updated_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(agent_id) DO UPDATE SET
+                         model=excluded.model, updated_at=excluded.updated_at""",
+                    (agent_id, model, timestamp),
+                )
+        return self.get_agent(agent_id)
+
+    def create_agent(
+        self, *, name: str, profile: str, role: str, system_prompt: str, model: str,
+        avatar_path: str | None = None,
+    ) -> dict[str, Any]:
+        agent_id = f"custom-{uuid4().hex[:10]}"
+        timestamp = _now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT INTO workbench_agents(
+                    agent_id, name, profile, role, system_prompt, model, avatar_path,
+                    enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                (agent_id, name, profile, role, system_prompt, model, avatar_path,
+                 timestamp, timestamp),
+            )
+        return self.get_agent(agent_id) or {}
+
+    def get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        return next((item for item in self.list_agents() if item["agent_id"] == agent_id), None)
+
+    def update_agent(self, agent_id: str, **fields: Any) -> dict[str, Any] | None:
+        allowed = {"name", "profile", "role", "system_prompt", "model", "avatar_path", "enabled"}
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        if not updates:
+            return self.get_agent(agent_id)
+        assignments = [f"{key}=?" for key in updates]
+        values = [int(value) if key == "enabled" else value for key, value in updates.items()]
+        assignments.append("updated_at=?")
+        values.extend([_now(), agent_id])
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                f"UPDATE workbench_agents SET {', '.join(assignments)} WHERE agent_id=?", values
+            )
+        return self.get_agent(agent_id) if cursor.rowcount else None
+
+    def delete_agent(self, agent_id: str) -> bool:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "DELETE FROM workbench_channel_members WHERE agent_id=?", (agent_id,)
+            )
+            cursor = connection.execute(
+                "DELETE FROM workbench_agents WHERE agent_id=?", (agent_id,)
+            )
+        return bool(cursor.rowcount)
+
+    def create_channel(
+        self, *, name: str, topic: str, description: str, member_ids: list[str],
+        workspace_id: str = "default",
+    ) -> dict[str, Any]:
+        channel_id = f"channel-{uuid4().hex[:10]}"
+        timestamp = _now()
+        root_task_id = f"TASK-WB-{uuid4().hex[:10].upper()}"
+        unique_members = list(dict.fromkeys(member_ids))
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT INTO workbench_channels(
+                    channel_id, workspace_id, name, kind, project_company, topic,
+                    description, root_task_id, created_at
+                ) VALUES (?, ?, ?, 'project', ?, ?, ?, ?, ?)""",
+                (channel_id, workspace_id, name, topic, topic, description, root_task_id, timestamp),
+            )
+            for agent_id in unique_members:
+                connection.execute(
+                    "INSERT INTO workbench_channel_members(channel_id, agent_id, created_at) VALUES (?, ?, ?)",
+                    (channel_id, agent_id, timestamp),
+                )
+            connection.execute(
+                """INSERT INTO workbench_tasks(
+                    task_id, channel_id, run_id, created_by, assignee_id, title, status,
+                    metadata_json, created_at, updated_at
+                ) VALUES (?, ?, NULL, 'owner', 'unassigned', ?, 'queued', ?, ?, ?)""",
+                (root_task_id, channel_id, topic,
+                 _json({"root_research_task": True, "description": description}),
+                 timestamp, timestamp),
+            )
+            self._insert_message(
+                connection, channel_id=channel_id, author_id="system", author_type="system",
+                message_kind="system_message",
+                body=f"研究频道已创建：{topic}。请明确启动研究或 @Agent 下发任务。",
+                metadata={"root_task_id": root_task_id},
+            )
+        return next(item for item in self.list_channels() if item["channel_id"] == channel_id)
 
     def add_message(self, **kwargs: Any) -> dict[str, Any]:
         with self._lock, self._connect() as connection:

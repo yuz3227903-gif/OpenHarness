@@ -138,6 +138,21 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertTrue(fake_client.closed)
         self.assertEqual(result.tool_calls, [])
 
+    def test_agent_request_can_override_provider_model(self):
+        fake_client = _StaticApiClient(_partial_planner_json())
+        adapter = self.make_adapter(fake_client)
+        request = AgentExecutionRequest(
+            agent_id="planner",
+            input_payload=_planner_input(),
+            model_override="doubao-seed-2.1-turbo",
+        )
+
+        result = asyncio.run(adapter.execute_agent(request))
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(result.model, "doubao-seed-2.1-turbo")
+        self.assertEqual(fake_client.last_request.model, "doubao-seed-2.1-turbo")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -95,3 +95,83 @@ def test_workbench_routes_non_planner_mentions_to_direct_agent_tasks():
     assert "include_replies=False" in server
     assert "data.status==='agents_started'" in app
     assert "可同时 @多个 Agent" in html
+
+
+def test_custom_agent_detail_can_open_prefilled_editor_and_replace_avatar():
+    app = (
+        PROJECT_ROOT
+        / ".openharness"
+        / "plugins"
+        / "investment-research"
+        / "workbench"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    html = (
+        PROJECT_ROOT
+        / ".openharness"
+        / "plugins"
+        / "investment-research"
+        / "workbench"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="edit-agent"' in app
+    assert "openAgentEditor" in app
+    assert "agentForm.elements.system_prompt.value" in app
+    assert "agentForm.elements.profile.value" in app
+    assert "method:'PATCH'" in app
+    assert "avatar_data_url:avatar" in app
+    assert 'id="agent-dialog-title"' in html
+    assert 'id="agent-avatar-preview"' in html
+
+
+def test_agent_editor_renders_ark_plan_model_catalog_and_effective_model() -> None:
+    app = (
+        PROJECT_ROOT
+        / ".openharness"
+        / "plugins"
+        / "investment-research"
+        / "workbench"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    html = (
+        PROJECT_ROOT
+        / ".openharness"
+        / "plugins"
+        / "investment-research"
+        / "workbench"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+
+    assert "state.modelSettings=data.model_settings" in app
+    assert "renderModelOptions" in app
+    assert "state.modelSettings.models.map" in app
+    assert "model-description" in html
+    assert "当前模型" in app
+    assert "ark-code-latest" in html
+
+
+def test_builtin_agent_detail_allows_model_only_switch() -> None:
+    app = (
+        PROJECT_ROOT
+        / ".openharness"
+        / "plugins"
+        / "investment-research"
+        / "workbench"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="agent-model-select"' in app
+    assert 'id="save-agent-model"' in app
+    assert "saveAgentModel" in app
+    assert "body:JSON.stringify({model})" in app
+
+
+def test_full_research_flow_uses_persisted_agent_model_resolver() -> None:
+    server = (
+        PROJECT_ROOT / "src" / "openharness" / "invest_research" / "workbench_server.py"
+    ).read_text(encoding="utf-8")
+
+    assert "OpenHarnessRuntimeGateway" in server
+    assert "model_resolver=_resolve_agent_model" in server
+    assert "gateway=runtime_gateway" in server

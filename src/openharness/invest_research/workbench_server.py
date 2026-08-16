@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import binascii
 import json
+import os
 import re
 import threading
 import time
@@ -30,11 +33,19 @@ from openharness.invest_research.workbench_agent_tasks import (
     direct_task_budget,
     direct_task_prompt,
 )
+from openharness.invest_research.workbench_models import (
+    ARK_PLAN_BASE_URL,
+    DEFAULT_MODEL,
+    MODEL_CATALOG,
+    model_ids,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 WEB_ROOT = PROJECT_ROOT / ".openharness" / "plugins" / "investment-research" / "workbench"
-MAX_REQUEST_BYTES = 64 * 1024
+MAX_REQUEST_BYTES = 3 * 1024 * 1024
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
+AVATAR_ROOT = PROJECT_ROOT / ".openharness" / "data" / "uploads" / "avatars"
 FLOW_IDLE_TIMEOUT_SECONDS = 360
 STORE = CollaborationStore(PROJECT_ROOT)
 EVIDENCE_STORE = EvidenceStore.for_project(PROJECT_ROOT)
@@ -72,8 +83,55 @@ MENTION_ALIASES = {
 }
 
 
+def _resolve_agent_model(agent_id: str) -> str:
+    agent = STORE.get_agent(agent_id)
+    return str((agent or {}).get("model") or DEFAULT_MODEL)
+
+
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False).encode("utf-8")
+
+
+def _save_avatar(data_url: str) -> str | None:
+    if not data_url:
+        return None
+    match = re.fullmatch(
+        r"data:(image/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)", data_url
+    )
+    if not match:
+        raise ValueError("avatar must be a PNG, JPEG, WEBP or GIF data URL")
+    try:
+        payload = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("avatar image is invalid") from exc
+    if not payload or len(payload) > MAX_AVATAR_BYTES:
+        raise ValueError("avatar must be between 1 byte and 2 MB")
+    extensions = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
+    AVATAR_ROOT.mkdir(parents=True, exist_ok=True)
+    filename = f"avatar-{int(time.time() * 1000)}-{len(payload)}{extensions[match.group(1)]}"
+    (AVATAR_ROOT / filename).write_bytes(payload)
+    return f"uploads/avatars/{filename}"
+
+
+def _required_text(body: dict[str, Any], field: str, limit: int) -> str:
+    value = str(body.get(field) or "").strip()
+    if not value:
+        raise ValueError(f"{field} is required")
+    if len(value) > limit:
+        raise ValueError(f"{field} is too long")
+    return value
+
+
+def _model_settings_payload() -> dict[str, Any]:
+    return {
+        "provider": "ark-plan",
+        "base_url": ARK_PLAN_BASE_URL,
+        "default_model": DEFAULT_MODEL,
+        "api_key_configured": bool(
+            os.environ.get("ARK_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        ),
+        "models": MODEL_CATALOG,
+    }
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -469,6 +527,8 @@ def _run_direct_agent_task(
         heartbeat.start()
 
         budget = direct_task_budget(agent_id)
+        selected_agent = STORE.get_agent(agent_id) or {}
+        selected_model = str(selected_agent.get("model") or DEFAULT_MODEL)
         result = asyncio.run(
             OpenHarnessRuntimeGateway().execute(
                 agent_id=agent_id,
@@ -480,6 +540,7 @@ def _run_direct_agent_task(
                 tool_call_limits=budget["tool_call_limits"],
                 timeout_seconds=180,
                 retry_transient=True,
+                model_override=selected_model,
             )
         )
         projection = {
@@ -496,6 +557,7 @@ def _run_direct_agent_task(
             "catalyst_ids": result.catalyst_ids,
             "risk_ids": result.risk_ids,
             "warnings": result.warnings[:5],
+            "model": result.model,
         }
         if result.status == "succeeded":
             refs = list(
@@ -721,6 +783,13 @@ def _run_background(
         # Import only in the worker: the static page can start even if the
         # optional model/runtime dependencies are not importable yet.
         from openharness.invest_research.orchestration.flow_runner import run
+        from openharness.invest_research.orchestration.runtime_gateway import (
+            OpenHarnessRuntimeGateway,
+        )
+
+        runtime_gateway = OpenHarnessRuntimeGateway(
+            model_resolver=_resolve_agent_model,
+        )
 
         with RUN_STATE_LOCK:
             RUN_STATE["started_at"] = RUN_STATE.get("started_at")
@@ -757,6 +826,7 @@ def _run_background(
                         complete_report=True,
                         pause_callback=_wait_if_paused,
                         event_callback=on_flow_event,
+                        gateway=runtime_gateway,
                     )
                 )
             except Exception as exc:  # pass the original failure to the worker
@@ -966,7 +1036,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         if path == "/api/workspace":
             snapshot = _ensure_flow_events_projected("research-room")
-            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room")})
+            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
         elif path == "/api/channels":
             self._send(200, STORE.list_channels())
         elif path.startswith("/api/channels/") and path.endswith("/messages"):
@@ -981,6 +1051,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self._send(200, payload)
         elif path == "/api/agents":
             self._send(200, STORE.list_agents())
+        elif path == "/api/models":
+            self._send(200, _model_settings_payload())
         elif path == "/api/tasks":
             self._send(200, STORE.list_tasks(query.get("channel_id", [None])[0]))
         elif path == "/api/artifacts":
@@ -995,6 +1067,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self._send(200, report.read_bytes(), "text/markdown; charset=utf-8")
         elif path == "/api/events":
             self._send_events(query)
+        elif path.startswith("/uploads/avatars/"):
+            self._serve_avatar(path)
         else:
             self._serve_static(path)
 
@@ -1057,6 +1131,15 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         content_types = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "application/javascript; charset=utf-8"}
         self._send(200, candidate.read_bytes(), content_types.get(candidate.suffix, "application/octet-stream"))
 
+    def _serve_avatar(self, path: str) -> None:
+        filename = Path(path).name
+        candidate = (AVATAR_ROOT / filename).resolve()
+        if candidate.parent != AVATAR_ROOT.resolve() or not candidate.is_file():
+            self._send(404, {"error": "avatar not found"})
+            return
+        content_types = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+        self._send(200, candidate.read_bytes(), content_types.get(candidate.suffix.lower(), "application/octet-stream"))
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
@@ -1075,6 +1158,46 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if path == "/api/research/run":
             status, payload = _start_research(str(body.get("company") or "").strip(), str(body.get("as_of_date") or "").strip(), str(body.get("channel_id") or "research-room"), "owner")
             self._send(status, payload)
+            return
+        if path == "/api/agents":
+            try:
+                avatar_path = _save_avatar(str(body.get("avatar_data_url") or ""))
+                model = _required_text(body, "model", 120)
+                if model not in model_ids():
+                    raise ValueError("model is not available in the Ark Plan catalog")
+                agent = STORE.create_agent(
+                    name=_required_text(body, "name", 80),
+                    profile=_required_text(body, "profile", 500),
+                    role=_required_text(body, "role", 120),
+                    system_prompt=_required_text(body, "system_prompt", 12000),
+                    model=model,
+                    avatar_path=avatar_path,
+                )
+            except ValueError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            self._send(201, agent)
+            return
+        if path == "/api/channels":
+            try:
+                name = _required_text(body, "name", 80)
+                topic = _required_text(body, "topic", 240)
+                description = str(body.get("description") or "").strip()
+                raw_members = body.get("member_ids")
+                if not isinstance(raw_members, list) or not raw_members:
+                    raise ValueError("member_ids must contain at least one Agent")
+                known_agents = {item["agent_id"] for item in STORE.list_agents() if item.get("enabled", True)}
+                member_ids = [str(item) for item in raw_members]
+                if any(item not in known_agents for item in member_ids):
+                    raise ValueError("member_ids contains an unknown or disabled Agent")
+                channel = STORE.create_channel(
+                    name=name, topic=topic, description=description, member_ids=member_ids
+                )
+            except ValueError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            STORE.add_event(channel_id=channel["channel_id"], event_type="channel_created", payload={"channel": channel})
+            self._send(201, channel)
             return
         if path.startswith("/api/channels/") and path.endswith("/messages"):
             channel_id = path.split("/")[3]
@@ -1145,6 +1268,55 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "notice": "消息已记录；@任意 Agent 可创建直接任务，@Planner 可启动完整研究。",
                     },
                 )
+            return
+        self._send(404, {"error": "not found"})
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        path = unquote(urlparse(self.path).path)
+        body = self._body()
+        if body is None:
+            self._send(400, {"error": "invalid JSON request"})
+            return
+        if path.startswith("/api/agents/"):
+            agent_id = path.split("/")[3]
+            agent = STORE.get_agent(agent_id)
+            if not agent:
+                self._send(404, {"error": "Agent not found"})
+                return
+            updates = {key: body[key] for key in ("name", "profile", "role", "system_prompt", "model", "enabled") if key in body}
+            if "model" in updates and str(updates["model"]) not in model_ids():
+                self._send(400, {"error": "model is not available in the Ark Plan catalog"})
+                return
+            if agent.get("type") != "custom":
+                if set(updates) != {"model"} or body.get("avatar_data_url"):
+                    self._send(400, {"error": "built-in Agents only allow model changes"})
+                    return
+                self._send(200, STORE.update_agent_model(agent_id, str(updates["model"])))
+                return
+            if body.get("avatar_data_url"):
+                try:
+                    updates["avatar_path"] = _save_avatar(str(body["avatar_data_url"]))
+                except ValueError as exc:
+                    self._send(400, {"error": str(exc)})
+                    return
+            updated = STORE.update_agent(agent_id, **updates)
+            self._send(200, updated)
+            return
+        self._send(404, {"error": "not found"})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        path = unquote(urlparse(self.path).path)
+        if path.startswith("/api/agents/"):
+            agent_id = path.split("/")[3]
+            agent = STORE.get_agent(agent_id)
+            if not agent or agent.get("type") != "custom":
+                self._send(404, {"error": "custom Agent not found"})
+                return
+            if any(task.get("assignee_id") == agent_id and task.get("status") == "running" for task in STORE.list_tasks()):
+                self._send(409, {"error": "running Agent cannot be deleted"})
+                return
+            STORE.delete_agent(agent_id)
+            self._send(200, {"deleted": True, "agent_id": agent_id})
             return
         self._send(404, {"error": "not found"})
 

@@ -18,8 +18,8 @@
     </aside>
     <aside class="sidebar">
       <div class="workspace-head"><div><strong>AI帮投研助手</strong><span>本地工作区</span></div><button id="new-research">＋</button></div>
-      <div class="sidebar-section"><div class="section-title">频道 <span>＋</span></div><button class="channel active" data-channel="research-room"><span>#</span> 科大讯飞研究室</button></div>
-      <div class="sidebar-section"><div class="section-title">Agent <span id="agent-count">7</span></div><div id="agent-list" class="agent-list"></div></div>
+      <div class="sidebar-section"><div class="section-title">频道 <button id="create-channel" title="创建研究频道">＋</button></div><div id="channel-list"></div></div>
+      <div class="sidebar-section"><div class="section-title">Agent <span><b id="agent-count">7</b><button id="create-agent" title="创建 Agent">＋</button></span></div><div id="agent-list" class="agent-list"></div></div>
       <div class="sidebar-note">演示数据与真实运行记录保存在本机项目目录。<br>“工作台”只记录状态，不参与研究判断。</div>
     </aside>
     <main class="main-pane">
@@ -30,6 +30,8 @@
     </main>
     <aside class="context-pane"><div class="context-head"><span>上下文</span><button id="close-context">×</button></div><div id="context-content" class="context-content"><div class="empty-context"><div class="context-icon">◎</div><h2>研究协作室</h2><p>选择 Agent、任务或消息，查看它的角色、状态和交付内容。</p><button id="start-default" class="primary">研究科大讯飞</button></div></div></aside>
   </div>
+  <dialog id="agent-dialog" class="workbench-dialog"><form id="agent-form"><div class="dialog-head"><div><strong id="agent-dialog-title">创建 Agent</strong><span id="agent-dialog-subtitle">配置一个可以加入频道协作的研究成员</span></div><button type="button" data-close="agent-dialog">×</button></div><label>名称<input name="name" maxlength="80" required></label><label>个人简介<textarea name="profile" maxlength="500" required></textarea></label><label>职责<input name="role" maxlength="120" required></label><label>系统提示词<textarea name="system_prompt" rows="6" maxlength="12000" required></textarea></label><label>模型<select name="model"><option value="ark-code-latest">Ark Code Latest · Auto</option></select><small id="model-description" class="model-description">默认使用效果与速度双维度智能调度。</small></label><label>头像图片<div class="avatar-editor"><img id="agent-avatar-preview" alt="头像预览" hidden><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>不选择新图片时保留现有头像，最大 2 MB</small></div></label><div class="dialog-actions"><button type="button" class="secondary" data-close="agent-dialog">取消</button><button id="agent-submit" class="primary" type="submit">创建 Agent</button></div></form></dialog>
+  <dialog id="channel-dialog" class="workbench-dialog"><form id="channel-form"><div class="dialog-head"><div><strong>创建研究频道</strong><span>一个频道对应一个研究课题和根任务</span></div><button type="button" data-close="channel-dialog">×</button></div><label>频道名称<input name="name" maxlength="80" required></label><label>研究课题<input name="topic" maxlength="240" required></label><label>课题说明<textarea name="description" maxlength="1000"></textarea></label><fieldset><legend>选择 Agent（至少一个）</legend><div id="channel-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="channel-dialog">取消</button><button class="primary" type="submit">创建频道</button></div></form></dialog>
   <div id="toast" class="toast"></div>
   <script src="/app.js"></script>
 </body>
