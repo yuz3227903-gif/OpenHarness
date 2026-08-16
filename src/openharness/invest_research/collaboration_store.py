@@ -104,6 +104,15 @@ class CollaborationStore:
                 );
                 CREATE INDEX IF NOT EXISTS ix_workbench_files_channel
                     ON workbench_files(channel_id, created_at);
+                CREATE TABLE IF NOT EXISTS workbench_agent_skills (
+                    skill_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '', filename TEXT NOT NULL,
+                    stored_name TEXT NOT NULL, media_type TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_workbench_agent_skills_agent
+                    ON workbench_agent_skills(agent_id, created_at);
                 """
             )
             channel_columns = {
@@ -623,6 +632,66 @@ class CollaborationStore:
             item["metadata"] = json.loads(item.pop("metadata_json"))
             result.append(item)
         return result
+
+    def add_agent_skill(
+        self, *, agent_id: str, name: str, description: str, filename: str,
+        stored_name: str, media_type: str, size_bytes: int,
+    ) -> dict[str, Any]:
+        """Attach one uploaded Skill plugin to an Agent."""
+
+        skill_id = f"SKILL-{uuid4().hex[:12].upper()}"
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT INTO workbench_agent_skills(
+                    skill_id, agent_id, name, description, filename, stored_name,
+                    media_type, size_bytes, enabled, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                (skill_id, agent_id, name, description, filename, stored_name,
+                 media_type, int(size_bytes), _now()),
+            )
+        return self.get_agent_skill(skill_id) or {}
+
+    def get_agent_skill(self, skill_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workbench_agent_skills WHERE skill_id=?", (skill_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["enabled"] = bool(item["enabled"])
+        return item
+
+    def list_agent_skills(self, agent_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM workbench_agent_skills"
+        values: tuple[Any, ...] = ()
+        if agent_id:
+            query += " WHERE agent_id=?"
+            values = (agent_id,)
+        query += " ORDER BY created_at DESC LIMIT 100"
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(query, values).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["enabled"] = bool(item["enabled"])
+            result.append(item)
+        return result
+
+    def set_agent_skill_enabled(self, skill_id: str, enabled: bool) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE workbench_agent_skills SET enabled=? WHERE skill_id=?",
+                (1 if enabled else 0, skill_id),
+            )
+        return self.get_agent_skill(skill_id) if cursor.rowcount else None
+
+    def delete_agent_skill(self, skill_id: str) -> bool:
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM workbench_agent_skills WHERE skill_id=?", (skill_id,)
+            )
+        return bool(cursor.rowcount)
 
     def add_event(self, *, channel_id: str, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         event_id = f"EVENT-WB-{uuid4().hex[:12].upper()}"

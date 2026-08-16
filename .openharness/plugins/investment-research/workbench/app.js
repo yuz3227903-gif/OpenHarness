@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'} };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', skills: {} };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -23,11 +23,62 @@ function showAgent(id){
     : `<div class="profile-avatar profile-avatar-fallback" style="background:${agentColors[id] || '#58746a'}">${esc(initials(id))}</div>`;
   // Model and avatar are operator choices for every Agent, built-in included.
   // Prompt and contract stay editable only for custom Agents.
-  $('context-content').innerHTML=`<div class="context-card"><div class="profile-head">${avatar}<label class="avatar-replace">更换头像<input id="agent-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></div><h2>${esc(a.name||labels[id]||id)}</h2><p class="muted">${esc(a.role||roles[id]||'Agent')}</p><div class="kv"><span>Agent ID</span><strong>${esc(id)}</strong></div><div class="kv"><span>类型</span><strong>${isCustom?'自定义':'系统内置'}</strong></div><div class="kv"><span>当前模型</span><strong>${esc(model)}</strong></div><h3>个人简介</h3><p>${esc(a.profile||'暂无简介')}</p>${isCustom?`<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`:`<h3>工具白名单</h3><div>${(a.allowed_tools||[]).map(t=>`<span class="tool-tag">${esc(t)}</span>`).join('')||'<span class="muted">当前角色无直接工具</span>'}</div>`}<h3>切换模型</h3><select id="agent-model-select">${modelOptionsHtml(model)}</select><h3>状态</h3><p><span class="status-dot"></span> ${esc(taskStatusText(a.status))} · ${esc(a.task_phase||'等待频道任务')}</p><div class="context-actions"><button id="save-agent-model" class="primary" type="button">保存模型</button>${isCustom?'<button id="edit-agent" class="secondary" type="button">编辑资料</button>':''}</div></div><div class="context-card dm-card"><h2>单独对话</h2><p class="muted">只有你和 ${esc(a.name||id)} 的一对一频道，不进入项目频道。</p><div id="dm-list" class="dm-list"><p class="muted">正在加载对话…</p></div><form id="dm-composer" class="thread-composer"><textarea id="dm-input" rows="3" placeholder="直接跟 ${esc(a.name||id)} 说，例如：帮我核一下这条数据的来源"></textarea><div class="thread-composer-footer"><span>发送后会为它单独建一个任务。</span><button type="submit" class="send">${icon('send')} 发送</button></div></form></div>`;
+  $('context-content').innerHTML=`<div class="context-card"><div class="profile-head">${avatar}<label class="avatar-replace">更换头像<input id="agent-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></div><h2>${esc(a.name||labels[id]||id)}</h2><p class="muted">${esc(a.role||roles[id]||'Agent')}</p><div class="kv"><span>Agent ID</span><strong>${esc(id)}</strong></div><div class="kv"><span>类型</span><strong>${isCustom?'自定义':'系统内置'}</strong></div><div class="kv"><span>当前模型</span><strong>${esc(model)}</strong></div><h3>个人简介</h3><p>${esc(a.profile||'暂无简介')}</p>${isCustom?`<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`:`<h3>工具白名单</h3><div>${(a.allowed_tools||[]).map(t=>`<span class="tool-tag">${esc(t)}</span>`).join('')||'<span class="muted">当前角色无直接工具</span>'}</div>`}<h3>切换模型</h3><select id="agent-model-select">${modelOptionsHtml(model)}</select><h3>状态</h3><p><span class="status-dot"></span> ${esc(taskStatusText(a.status))} · ${esc(a.task_phase||'等待频道任务')}</p><div class="context-actions"><button id="save-agent-model" class="primary" type="button">保存模型</button>${isCustom?'<button id="edit-agent" class="secondary" type="button">编辑资料</button>':''}</div></div><div class="context-card"><div class="skill-head"><h2>Skill 插件</h2><label class="attach-btn" title="上传 Skill 插件">${icon('upload')} 上传<input id="skill-input" type="file" accept=".md,.markdown,.json,.yaml,.yml,.txt,.zip" hidden></label></div><p class="muted">上传 SKILL.md 或打包的插件；启用后随该 Agent 的角色提示词一起加载。</p><div id="skill-list" class="skill-list"><p class="muted">正在加载插件…</p></div></div><div class="context-card dm-card"><h2>单独对话</h2><p class="muted">只有你和 ${esc(a.name||id)} 的一对一频道，不进入项目频道。</p><div id="dm-list" class="dm-list"><p class="muted">正在加载对话…</p></div><form id="dm-composer" class="thread-composer"><textarea id="dm-input" rows="3" placeholder="直接跟 ${esc(a.name||id)} 说，例如：帮我核一下这条数据的来源"></textarea><div class="thread-composer-footer"><span>发送后会为它单独建一个任务。</span><button type="submit" class="send">${icon('send')} 发送</button></div></form></div>`;
   $('edit-agent')?.addEventListener('click',()=>openAgentEditor(id));
   $('save-agent-model')?.addEventListener('click',()=>saveAgentModel(id));
   $('agent-avatar-input')?.addEventListener('change',event=>saveAgentAvatar(id,event));
+  setupSkills(id);
   setupDirectMessages(id);
+}
+
+// Skill plugins are instruction files attached to one Agent. The workbench
+// stores and toggles them; it never executes an uploaded file.
+async function loadSkills(agentId){
+  const list=$('skill-list');
+  if(!list) return;
+  try{
+    const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/skills`,{cache:'no-store'});
+    if(!response.ok) throw new Error('unavailable');
+    const skills=await response.json();
+    state.skills={...state.skills,[agentId]:skills};
+    list.innerHTML=skills.length ? skills.map(skill=>`<div class="skill-row ${skill.enabled?'':'skill-off'}"><span class="skill-glyph">${icon('puzzle')}</span><div class="skill-copy"><strong>${esc(skill.name)}</strong><small>${esc(skill.filename)} · ${esc(formatBytes(skill.size_bytes))}</small>${skill.description?`<p>${esc(skill.description)}</p>`:''}</div><div class="skill-actions"><label class="skill-switch"><input type="checkbox" data-skill-toggle="${esc(skill.skill_id)}" ${skill.enabled?'checked':''}><span>${skill.enabled?'已启用':'已停用'}</span></label><button type="button" class="skill-delete" data-skill-delete="${esc(skill.skill_id)}" title="删除">${icon('trash')}</button></div></div>`).join('')
+      : '<p class="muted">还没有插件。上传一个 SKILL.md 试试。</p>';
+    list.querySelectorAll('[data-skill-toggle]').forEach(input=>input.addEventListener('change',async()=>{
+      const response=await fetch(`/api/skills/${encodeURIComponent(input.dataset.skillToggle)}`,{
+        method:'PATCH', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({enabled:input.checked}),
+      });
+      if(!response.ok){ toast('插件状态更新失败'); }
+      await loadSkills(agentId);
+    }));
+    list.querySelectorAll('[data-skill-delete]').forEach(button=>button.addEventListener('click',async()=>{
+      const response=await fetch(`/api/skills/${encodeURIComponent(button.dataset.skillDelete)}`,{method:'DELETE'});
+      if(!response.ok){ toast('删除插件失败'); return; }
+      await loadSkills(agentId);
+      toast('插件已删除');
+    }));
+  }catch(_error){
+    list.innerHTML='<p class="muted">插件列表暂时不可用。</p>';
+  }
+}
+function setupSkills(agentId){
+  loadSkills(agentId);
+  $('skill-input')?.addEventListener('change',async event=>{
+    const file=event.target.files?.[0];
+    event.target.value='';
+    if(!file) return;
+    try{
+      const dataUrl=await fileDataUrl(file);
+      const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/skills`,{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({filename:file.name, data_url:dataUrl}),
+      });
+      const result=await response.json();
+      if(!response.ok) throw new Error(result.error || '上传失败');
+      await loadSkills(agentId);
+      toast(`插件「${result.name}」已上传`);
+    }catch(error){ toast(error.message || '插件上传失败'); }
+  });
 }
 
 async function saveAgentAvatar(agentId,event){
@@ -98,7 +149,7 @@ async function saveAgentModel(agentId){
   await loadWorkspace(false); showAgent(agentId); toast(`已将 ${result.name || agentId} 切换为 ${model}`);
 }
 function showMessage(id){ const m=state.messages.find(x=>x.message_id===id); if(!m)return; $('context-content').innerHTML=`<div class="context-card"><h2>${esc(kindLabel(m.message_kind))}</h2><p>${esc(m.body)}</p><h3>消息信息</h3><div class="kv"><span>作者</span><strong>${esc(labels[m.author_id]||m.author_id)}</strong></div><div class="kv"><span>时间</span><strong>${esc(m.created_at)}</strong></div><div class="kv"><span>关联任务</span><strong>${esc(m.metadata?.task_id||'无')}</strong></div><p class="muted">详细线程能力会在下一阶段加入；当前先把主频道、任务状态和真实运行结果打通。</p></div>`; }
-async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
+async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}&files=all`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
 async function loadMessages(){ const res=await fetch(`/api/channels/${state.channelId}/messages`); state.messages=await res.json(); renderMessages(); }
 async function openReport(){ const res=await fetch(`/api/research/report?run_id=${encodeURIComponent(state.run.run_id||'')}`); if(!res.ok){toast('当前还没有报告');return;} const text=await res.text(); const win=window.open(); win.document.write(`<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;padding:28px">${esc(text)}</pre>`); win.document.close(); }
 function setupComposer(){
@@ -327,16 +378,9 @@ function formatElapsed(seconds){
   const mins=Math.floor(value/60), secs=value%60;
   return mins ? `${mins}分${String(secs).padStart(2,'0')}秒` : `${secs}秒`;
 }
-renderAgents = function(){
-  $('agent-count').textContent=state.agents.length;
-  $('agent-list').innerHTML=state.agents.map(a=>{
-    const status=a.status || 'online';
-    const detail=status==='running' && a.task_phase ? a.task_phase : taskStatusText(status);
-    const avatar=a.avatar_path?`<img src="/${esc(a.avatar_path)}" alt="">`:esc(initials(a.agent_id));
-    return `<div class="agent-row" data-agent="${esc(a.agent_id)}" data-status="${esc(status)}"><div class="agent-avatar" style="background:${agentColors[a.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(a.name || labels[a.agent_id] || a.agent_id)}</strong><span>${esc(a.role || roles[a.agent_id] || 'Agent')}</span><small class="agent-status-label">${esc(detail)}</small></div><i class="status-dot"></i></div>`;
-  }).join('');
-  document.querySelectorAll('[data-agent]').forEach(el=>el.addEventListener('click',()=>showAgent(el.dataset.agent)));
-};
+// The roster lives inside the pane-aware sidebar now, so both renderers point
+// at the same place instead of writing to a container that no longer exists.
+renderAgents = function(){ renderSidebar(); };
 renderContext = function(){
   const r=state.run||{};
   const current=state.tasks.find(t=>t.status==='running') || state.tasks.find(t=>t.status==='queued') || state.tasks[0];
@@ -443,6 +487,7 @@ function setPane(pane){
   // Search takes over the whole column, so the channel tabs step aside.
   const tabs=$('pane-tabs');
   if(tabs) tabs.hidden=pane==='search';
+  renderSidebar();
   if(pane==='tasks') renderTaskBoard();
   if(pane==='files') renderFileBoard();
   if(pane==='graph') loadGraph();
@@ -676,7 +721,7 @@ function renderGraphBoard(){
 }
 async function loadGraph(){
   try{
-    const response=await fetch(`/api/graph?channel_id=${encodeURIComponent(state.channelId)}`,{cache:'no-store'});
+    const response=await fetch('/api/graph',{cache:'no-store'});
     if(!response.ok) throw new Error('graph unavailable');
     state.graph=await response.json();
   }catch(_error){ state.graph={nodes:[],edges:[],stats:{}}; }
@@ -696,15 +741,22 @@ function renderFileBoard(){
   const counter=$('tab-file-count');
   if(counter) counter.textContent=state.files.length;
   if(!board) return;
-  if(!state.files.length){
-    board.innerHTML='<div class="board-empty board-empty-wide">这个频道还没有文件。在聊天框上传，或等 Agent 产出报告后自动同步到这里。</div>';
+  // The sidebar owns the channel filter; an empty selection means every channel.
+  const files=state.fileChannel
+    ? state.files.filter(file=>file.channel_id===state.fileChannel)
+    : state.files;
+  const scope=state.channels.find(item=>item.channel_id===state.fileChannel);
+  const heading=`<div class="task-toolbar"><span class="task-toolbar-title">${icon('paperclip')} ${scope?`#${esc(scope.name)}`:'全部频道'} <b>${files.length}</b> / ${state.files.length}</span></div>`;
+  if(!files.length){
+    board.innerHTML=heading+'<div class="board-empty board-empty-wide">这里还没有文件。在聊天框上传，或等 Agent 产出报告后自动同步到这里。</div>';
     return;
   }
-  board.innerHTML=`<div class="file-table"><div class="file-row file-head"><span>文件</span><span>来源</span><span>创建者</span><span>大小</span><span>时间</span><span></span></div>${state.files.map(file=>{
+  board.innerHTML=heading+`<div class="file-table"><div class="file-row file-head"><span>文件</span><span>频道</span><span>来源</span><span>创建者</span><span>大小</span><span>时间</span><span></span></div>${files.map(file=>{
     const owner=labels[file.owner_id]||file.owner_id;
     const source=FILE_SOURCE_LABELS[file.source]||file.source;
     const glyph=String(file.media_type||'').startsWith('image/')?'image':'file';
-    return `<div class="file-row"><span class="file-name" title="${esc(file.summary||file.filename)}">${icon(glyph,'file-glyph')} ${esc(file.filename)}</span><span><em class="file-source file-source-${esc(file.source)}">${esc(source)}</em></span><span>${esc(owner)}</span><span>${esc(formatBytes(file.size_bytes))}</span><span>${esc(new Date(file.created_at).toLocaleString())}</span><span><a class="file-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">${icon('download')} 下载</a></span></div>`;
+    const channel=state.channels.find(item=>item.channel_id===file.channel_id);
+    return `<div class="file-row"><span class="file-name" title="${esc(file.summary||file.filename)}">${icon(glyph,'file-glyph')} ${esc(file.filename)}</span><span class="file-channel">${esc(channel?.name||file.channel_id)}</span><span><em class="file-source file-source-${esc(file.source)}">${esc(source)}</em></span><span>${esc(owner)}</span><span>${esc(formatBytes(file.size_bytes))}</span><span>${esc(new Date(file.created_at).toLocaleString())}</span><span><a class="file-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">${icon('download')} 下载</a></span></div>`;
   }).join('')}</div>`;
 }
 
@@ -755,26 +807,97 @@ function setupAttachments(){
   });
 }
 
-function renderChannels(){
-  const list=$('channel-list');
-  if(!list) return;
-  // Project channels and direct messages are separate lists, as in a chat app.
+// The sidebar belongs to the pane, not to the workspace: the chat pane needs
+// channels, the files pane needs a channel filter, the graph pane needs the
+// member roster, and the task and search panes are workspace-wide and take the
+// full width instead.
+const SIDEBAR_BY_PANE={
+  chat:{title:'聊天', subtitle:'本地工作区', action:'新建私信'},
+  files:{title:'文件', subtitle:'所有频道的文件', action:null},
+  graph:{title:'成员', subtitle:'跨频道协作关系', action:null},
+};
+function sectionHtml(key, label, count, body, action=''){
+  const collapsed=state.collapsed[key];
+  return `<div class="sidebar-section" data-section="${esc(key)}"><div class="section-title"><button class="section-toggle" type="button" data-toggle-section="${esc(key)}">${icon('chevron',collapsed?'chevron-collapsed':'')} ${esc(label)}</button><span>${count!=null?`<b>${count}</b>`:''}${action}</span></div><div class="section-body" ${collapsed?'hidden':''}>${body}</div></div>`;
+}
+function channelButtonHtml(channel){
+  return `<button class="channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}">${icon('hash','channel-icon')} ${esc(channel.name)}</button>`;
+}
+function dmButtonHtml(channel){
+  const agentId=channel.channel_id.replace(/^dm-/,'');
+  const agent=state.agents.find(item=>item.agent_id===agentId);
+  const avatar=agent?.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agentId));
+  return `<button class="channel dm-channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}"><span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span> ${esc(channel.name)}</button>`;
+}
+function agentRowHtml(agent){
+  const status=agent.status || 'online';
+  const detail=status==='running' && agent.task_phase ? agent.task_phase : taskStatusText(status);
+  const avatar=agent.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agent.agent_id));
+  return `<div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(agent.name || labels[agent.agent_id] || agent.agent_id)}</strong><span>${esc(agent.role || roles[agent.agent_id] || 'Agent')}</span><small class="agent-status-label">${esc(detail)}</small></div><i class="status-dot"></i></div>`;
+}
+function renderSidebar(){
+  const shell=document.querySelector('.app-shell');
+  const sidebar=$('sidebar');
+  const config=SIDEBAR_BY_PANE[state.activePane];
+  if(shell) shell.classList.toggle('no-sidebar',!config);
+  if(sidebar) sidebar.hidden=!config;
+  if(!config || !sidebar) return;
+  $('sidebar-title').textContent=config.title;
+  $('sidebar-subtitle').textContent=config.subtitle;
+  const action=$('sidebar-action');
+  if(action){ action.hidden=!config.action; action.title=config.action || ''; }
+
   const projects=state.channels.filter(channel=>channel.kind!=='direct');
   const directs=state.channels.filter(channel=>channel.kind==='direct');
-  list.innerHTML=projects.map(channel=>`<button class="channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}">${icon('hash','channel-icon')} ${esc(channel.name)}</button>`).join('');
-  const dmSection=$('dm-section'), dmList=$('dm-channel-list'), dmCount=$('dm-count');
-  if(dmSection && dmList){
-    dmSection.hidden=!directs.length;
-    if(dmCount) dmCount.textContent=directs.length;
-    dmList.innerHTML=directs.map(channel=>{
-      const agentId=channel.channel_id.replace(/^dm-/,'');
-      const agent=state.agents.find(item=>item.agent_id===agentId);
-      const avatar=agent?.avatar_path
-        ? `<img src="/${esc(agent.avatar_path)}" alt="">`
-        : esc(initials(agentId));
-      return `<button class="channel dm-channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}"><span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span> ${esc(channel.name)}</button>`;
+  const body=$('sidebar-body');
+  const plus=id=>`<button id="${id}" class="section-add" type="button">${icon('plus')}</button>`;
+
+  if(state.activePane==='chat'){
+    body.innerHTML=
+      sectionHtml('channels','频道',projects.length,projects.map(channelButtonHtml).join(''),plus('create-channel'))+
+      sectionHtml('dms','私信',directs.length,directs.map(dmButtonHtml).join('') || '<p class="sidebar-hint">还没有私信。点右上角 + 发起一条。</p>',plus('create-dm'))+
+      sectionHtml('agents','Agent',state.agents.length,state.agents.map(agentRowHtml).join(''),plus('create-agent'));
+  }else if(state.activePane==='files'){
+    const counts=new Map();
+    state.files.forEach(file=>counts.set(file.channel_id,(counts.get(file.channel_id)||0)+1));
+    const rows=[{channel_id:'',name:'全部频道'},...state.channels].map(channel=>{
+      const count=channel.channel_id ? (counts.get(channel.channel_id)||0) : state.files.length;
+      const active=state.fileChannel===channel.channel_id ? 'active' : '';
+      return `<button class="channel ${active}" data-file-channel="${esc(channel.channel_id)}">${channel.channel_id?icon('hash','channel-icon'):icon('paperclip','channel-icon')} ${esc(channel.name)}<b class="channel-count">${count}</b></button>`;
     }).join('');
+    body.innerHTML=sectionHtml('fileChannels','频道',state.channels.length,rows);
+  }else{
+    body.innerHTML=
+      `<button class="graph-entry active" type="button" id="open-graph">${icon('graph')} 关系图 <em>EXPERIMENTAL</em></button>`+
+      sectionHtml('graphAgents','AGENT',state.agents.length,state.agents.map(agentRowHtml).join(''))+
+      sectionHtml('graphHumans','人类',1,`<div class="agent-row" data-agent="owner"><div class="agent-avatar" style="background:#7257a8">${esc(initials('owner'))}</div><div class="agent-copy"><strong>你</strong><span>频道所有者</span></div><i class="status-dot"></i></div>`);
   }
+  bindSidebar();
+}
+function bindSidebar(){
+  document.querySelectorAll('[data-toggle-section]').forEach(button=>button.addEventListener('click',()=>{
+    const key=button.dataset.toggleSection;
+    state.collapsed={...state.collapsed, [key]:!state.collapsed[key]};
+    renderSidebar();
+  }));
+  document.querySelectorAll('[data-agent]').forEach(el=>el.addEventListener('click',()=>{
+    if(el.dataset.agent!=='owner') showAgent(el.dataset.agent);
+  }));
+  document.querySelectorAll('[data-file-channel]').forEach(button=>button.addEventListener('click',()=>{
+    state.fileChannel=button.dataset.fileChannel;
+    renderSidebar();
+    renderFileBoard();
+  }));
+  $('create-channel')?.addEventListener('click',openChannelDialog);
+  $('create-agent')?.addEventListener('click',openAgentDialog);
+  $('create-dm')?.addEventListener('click',openDirectMessageDialog);
+  $('open-graph')?.addEventListener('click',()=>setPane('graph'));
+  bindChannelButtons();
+}
+function renderChannels(){ renderSidebar(); }
+function bindChannelButtons(){
+  const list=$('sidebar-body');
+  if(!list) return;
   list.querySelectorAll('[data-channel]').forEach(button=>button.addEventListener('click',async()=>{
     if(button.dataset.channel===state.channelId) return;
     state.channelId=button.dataset.channel;
@@ -836,12 +959,50 @@ function openAgentEditor(agentId){
   $('agent-dialog').showModal();
 }
 
+// The sidebar is re-rendered on every pane switch, so its buttons are bound
+// each time rather than once at startup.
+function openAgentDialog(){ resetAgentEditor(); $('agent-dialog').showModal(); }
+function openChannelDialog(){
+  $('channel-agent-options').innerHTML=state.agents.filter(agent=>agent.enabled!==false).map(agent=>`<label><input type="checkbox" name="member_ids" value="${esc(agent.agent_id)}"> <span>${esc(agent.name || agent.agent_id)} · ${esc(agent.role || 'Agent')}</span></label>`).join('');
+  $('channel-dialog').showModal();
+}
+function openDirectMessageDialog(){
+  const existing=new Set(state.channels.filter(item=>item.kind==='direct').map(item=>item.channel_id));
+  const options=state.agents.filter(agent=>agent.enabled!==false).map(agent=>{
+    const started=existing.has(`dm-${agent.agent_id}`);
+    return `<label><input type="radio" name="dm_agent" value="${esc(agent.agent_id)}" ${started?'':'required'}> <span>${esc(agent.name || agent.agent_id)} · ${esc(agent.role || 'Agent')}${started?'（已有对话）':''}</span></label>`;
+  }).join('');
+  $('dm-agent-options').innerHTML=options || '<p class="muted">没有可对话的 Agent。</p>';
+  $('dm-dialog').showModal();
+}
+async function startDirectMessage(agentId){
+  // GET creates the channel on first use, so opening a conversation needs no
+  // separate create call.
+  const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages`,{cache:'no-store'});
+  if(!response.ok){ toast('无法创建私信'); return; }
+  const data=await response.json();
+  state.channelId=data.channel.channel_id;
+  state.selectedThreadMessageId=null;
+  state.eventSeq=0;
+  setPane('chat');
+  await Promise.all([loadWorkspace(false),loadMessages()]);
+  connectEvents();
+  showAgent(agentId);
+  toast(`已打开与 ${data.agent.name || agentId} 的私信`);
+}
+
 function setupCreationDialogs(){
-  const agentDialog=$('agent-dialog'), channelDialog=$('channel-dialog');
-  $('create-agent')?.addEventListener('click',()=>{ resetAgentEditor(); agentDialog.showModal(); });
-  $('create-channel')?.addEventListener('click',()=>{
-    $('channel-agent-options').innerHTML=state.agents.filter(agent=>agent.enabled!==false).map(agent=>`<label><input type="checkbox" name="member_ids" value="${esc(agent.agent_id)}"> <span>${esc(agent.name || agent.agent_id)} · ${esc(agent.role || 'Agent')}</span></label>`).join('');
-    channelDialog.showModal();
+  const agentDialog=$('agent-dialog'), channelDialog=$('channel-dialog'), dmDialog=$('dm-dialog');
+  $('sidebar-action')?.addEventListener('click',()=>{
+    if(state.activePane==='chat') openDirectMessageDialog();
+  });
+  $('dm-form')?.addEventListener('submit',async event=>{
+    event.preventDefault();
+    const agentId=new FormData(event.currentTarget).get('dm_agent');
+    if(!agentId){ toast('请选择一个 Agent'); return; }
+    dmDialog.close();
+    event.currentTarget.reset();
+    await startDirectMessage(String(agentId));
   });
   document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',()=>{ const dialog=$(button.dataset.close); dialog.close(); if(dialog===agentDialog) resetAgentEditor(); }));
   $('agent-form').elements.avatar.addEventListener('change',async event=>{

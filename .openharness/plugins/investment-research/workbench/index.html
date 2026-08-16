@@ -32,6 +32,10 @@
     <symbol id="i-report" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
     <symbol id="i-reply" viewBox="0 0 24 24"><path d="m9 17-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 0 10h-1"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.66V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.66"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></symbol>
     <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="m5.6 5.6 2.8 2.8"/><path d="m15.6 15.6 2.8 2.8"/><path d="m18.4 5.6-2.8 2.8"/><path d="m8.4 15.6-2.8 2.8"/></symbol>
   </defs></svg>
   <div class="app-shell">
@@ -45,13 +49,10 @@
       <div class="rail-spacer"></div>
       <div class="rail-avatar">ZY</div>
     </aside>
-    <aside class="sidebar">
-      <div class="workspace-head"><div><strong>AI帮投研助手</strong><span>本地工作区</span></div><button id="new-research" title="研究科大讯飞"><svg class="icon"><use href="#i-plus"/></svg></button></div>
-      <button id="open-graph" class="graph-entry" type="button"><svg class="icon"><use href="#i-graph"/></svg> 关系图 <em>EXPERIMENTAL</em></button>
-      <div class="sidebar-section"><div class="section-title">频道 <button id="create-channel" title="创建研究频道"><svg class="icon"><use href="#i-plus"/></svg></button></div><div id="channel-list"></div></div>
-      <div class="sidebar-section" id="dm-section" hidden><div class="section-title">私信 <b id="dm-count">0</b></div><div id="dm-channel-list"></div></div>
-      <div class="sidebar-section"><div class="section-title">Agent <span><b id="agent-count">7</b><button id="create-agent" title="创建 Agent"><svg class="icon"><use href="#i-plus"/></svg></button></span></div><div id="agent-list" class="agent-list"></div></div>
-      <div class="sidebar-note">演示数据与真实运行记录保存在本机项目目录。<br>“工作台”只记录状态，不参与研究判断。</div>
+    <aside class="sidebar" id="sidebar">
+      <div class="workspace-head"><div><strong id="sidebar-title">聊天</strong><span id="sidebar-subtitle">本地工作区</span></div><button id="sidebar-action" title="新建"><svg class="icon"><use href="#i-plus"/></svg></button></div>
+      <div id="sidebar-body"></div>
+      <div class="sidebar-note" id="sidebar-note">演示数据与真实运行记录保存在本机项目目录。<br>“工作台”只记录状态，不参与研究判断。</div>
     </aside>
     <main class="main-pane">
       <header class="channel-head"><div><div class="eyebrow">投研协作频道</div><h1># 科大讯飞研究室</h1><p>人类与多个 Agent 的研究交接、任务和交付</p></div><div class="head-actions"><span class="live-dot"></span><span id="connection-state">正在连接</span><button id="pause-run" class="secondary" type="button"><svg class="icon"><use href="#i-pause"/></svg> 暂停项目</button><button id="resume-run" class="secondary" type="button" hidden><svg class="icon"><use href="#i-play"/></svg> 继续项目</button><button id="refresh"><svg class="icon"><use href="#i-refresh"/></svg> 刷新</button></div></header>
@@ -78,6 +79,7 @@
   </div>
   <dialog id="agent-dialog" class="workbench-dialog"><form id="agent-form"><div class="dialog-head"><div><strong id="agent-dialog-title">创建 Agent</strong><span id="agent-dialog-subtitle">配置一个可以加入频道协作的研究成员</span></div><button type="button" data-close="agent-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><label>名称<input name="name" maxlength="80" required></label><label>个人简介<textarea name="profile" maxlength="500" required></textarea></label><label>职责<input name="role" maxlength="120" required></label><label>系统提示词<textarea name="system_prompt" rows="6" maxlength="12000" required></textarea></label><label>模型<select name="model"><option value="ark-code-latest">Ark Code Latest · Auto</option></select><small id="model-description" class="model-description">默认使用效果与速度双维度智能调度。</small></label><label>头像图片<div class="avatar-editor"><img id="agent-avatar-preview" alt="头像预览" hidden><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>不选择新图片时保留现有头像，最大 2 MB</small></div></label><div class="dialog-actions"><button type="button" class="secondary" data-close="agent-dialog">取消</button><button id="agent-submit" class="primary" type="submit">创建 Agent</button></div></form></dialog>
   <dialog id="channel-dialog" class="workbench-dialog"><form id="channel-form"><div class="dialog-head"><div><strong>创建研究频道</strong><span>一个频道对应一个研究课题和根任务</span></div><button type="button" data-close="channel-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><label>频道名称<input name="name" maxlength="80" required></label><label>研究课题<input name="topic" maxlength="240" required></label><label>课题说明<textarea name="description" maxlength="1000"></textarea></label><fieldset><legend>选择 Agent（至少一个）</legend><div id="channel-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="channel-dialog">取消</button><button class="primary" type="submit">创建频道</button></div></form></dialog>
+  <dialog id="dm-dialog" class="workbench-dialog"><form id="dm-form"><div class="dialog-head"><div><strong>发起私信</strong><span>选择一个 Agent，开一条只有你和它的对话</span></div><button type="button" data-close="dm-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><fieldset><legend>选择对话对象</legend><div id="dm-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="dm-dialog">取消</button><button class="primary" type="submit">开始对话</button></div></form></dialog>
   <div id="toast" class="toast"></div>
   <script src="/app.js"></script>
 </body>

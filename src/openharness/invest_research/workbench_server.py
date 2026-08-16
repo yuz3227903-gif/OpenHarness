@@ -53,6 +53,10 @@ MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_FILE_REQUEST_BYTES = 28 * 1024 * 1024
 AVATAR_ROOT = PROJECT_ROOT / ".openharness" / "data" / "uploads" / "avatars"
 FILE_ROOT = PROJECT_ROOT / ".openharness" / "data" / "uploads" / "files"
+SKILL_ROOT = PROJECT_ROOT / ".openharness" / "data" / "agent-skills"
+MAX_SKILL_BYTES = 5 * 1024 * 1024
+# A Skill plugin is text or a packaged folder; refuse anything executable.
+SKILL_SUFFIXES = {".md", ".markdown", ".json", ".yaml", ".yml", ".txt", ".zip"}
 FLOW_IDLE_TIMEOUT_SECONDS = 360
 STORE = CollaborationStore(PROJECT_ROOT)
 EVIDENCE_STORE = EvidenceStore.for_project(PROJECT_ROOT)
@@ -165,6 +169,47 @@ def _store_channel_upload(
         media_type=match.group(1) or "application/octet-stream",
         size_bytes=len(payload),
         summary=summary,
+    )
+
+
+def _store_agent_skill(
+    *, agent_id: str, filename: str, data_url: str, name: str, description: str,
+) -> dict[str, Any]:
+    """Persist one uploaded Skill plugin for an Agent.
+
+    A Skill is instruction text or a packaged folder, never a program the
+    workbench executes, so the accepted suffixes stay deliberately narrow.
+    """
+
+    match = _DATA_URL.fullmatch(str(data_url or "").strip())
+    if not match:
+        raise ValueError("skill must be a base64 data URL")
+    try:
+        payload = base64.b64decode(match.group(3), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("skill payload is not valid base64") from exc
+    if not payload:
+        raise ValueError("skill file is empty")
+    if len(payload) > MAX_SKILL_BYTES:
+        raise ValueError("skill file must be 5 MB or smaller")
+
+    display_name = _safe_filename(filename)
+    if Path(display_name).suffix.lower() not in SKILL_SUFFIXES:
+        allowed = "、".join(sorted(SKILL_SUFFIXES))
+        raise ValueError(f"skill file type is not supported; allowed: {allowed}")
+
+    agent_dir = SKILL_ROOT / _safe_filename(agent_id)
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{int(time.time() * 1000)}-{uuid4().hex[:8]}-{display_name}"
+    (agent_dir / stored_name).write_bytes(payload)
+    return STORE.add_agent_skill(
+        agent_id=agent_id,
+        name=(name.strip() or Path(display_name).stem)[:120],
+        description=description.strip()[:500],
+        filename=display_name,
+        stored_name=f"{_safe_filename(agent_id)}/{stored_name}",
+        media_type=match.group(1) or "text/markdown",
+        size_bytes=len(payload),
     )
 
 
@@ -386,7 +431,11 @@ def kind_title(message: dict[str, Any]) -> str:
 
 
 def _relationship_graph(channel_id: str) -> dict[str, Any]:
-    """Build the who-works-with-whom graph for one channel.
+    """Build the who-works-with-whom graph, for one channel or the workspace.
+
+    An empty ``channel_id`` aggregates every channel, which is what the graph
+    pane shows by default — collaboration crosses channels, so scoping it to
+    the one open in the chat pane would hide most of the relationships.
 
     Two real collaboration records become edges: a task, whose creator handed
     work to its assignee, and a message, whose author addressed the Agents it
@@ -432,11 +481,18 @@ def _relationship_graph(channel_id: str) -> dict[str, Any]:
         if relation not in edge["relations"]:
             edge["relations"].append(relation)
 
-    for task in STORE.list_tasks(channel_id):
+    all_channels = STORE.list_channels()
+    scanned = (
+        [item["channel_id"] for item in all_channels] if not channel_id else [channel_id]
+    )
+    for task in STORE.list_tasks(channel_id or None):
         link(str(task.get("created_by") or ""), str(task.get("assignee_id") or ""), "task")
-    for message in STORE.list_messages(channel_id):
-        for mention in message.get("mentions") or []:
-            link(str(message.get("author_id") or ""), str(mention), "mention")
+    # list_messages needs a concrete channel, so walk them rather than passing
+    # an empty id, which would match nothing.
+    for scanned_id in scanned:
+        for message in STORE.list_messages(scanned_id, limit=500):
+            for mention in message.get("mentions") or []:
+                link(str(message.get("author_id") or ""), str(mention), "mention")
 
     for edge in edges.values():
         nodes[edge["source"]]["out_degree"] += edge["weight"]
@@ -445,7 +501,7 @@ def _relationship_graph(channel_id: str) -> dict[str, Any]:
         node["connections"] = node["out_degree"] + node["in_degree"]
 
     channel_sizes = []
-    for channel in STORE.list_channels():
+    for channel in all_channels:
         if channel.get("kind") == "direct":
             continue
         message_count = len(STORE.list_messages(channel["channel_id"], limit=500))
@@ -1412,9 +1468,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         if path == "/api/workspace":
             channel_id = query.get("channel_id", ["research-room"])[0]
+            # The files pane is workspace wide, so it asks for every channel's
+            # files and filters client-side.
+            files_scope = None if query.get("files", [""])[0] == "all" else channel_id
             snapshot = _ensure_flow_events_projected("research-room")
             _sync_agent_files(channel_id, snapshot.get("run_id") or RUN_STATE.get("run_id"))
-            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "files": STORE.list_files(channel_id), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
+            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "files": STORE.list_files(files_scope), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
         elif path == "/api/channels":
             self._send(200, STORE.list_channels())
         elif path.startswith("/api/channels/") and path.endswith("/messages"):
@@ -1429,6 +1488,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self._send(200, payload)
         elif path == "/api/agents":
             self._send(200, STORE.list_agents())
+        elif path.startswith("/api/agents/") and path.endswith("/skills"):
+            agent_id = path.split("/")[3]
+            if STORE.get_agent(agent_id) is None:
+                self._send(404, {"error": "Agent not found"})
+                return
+            self._send(200, STORE.list_agent_skills(agent_id))
         elif path.startswith("/api/agents/") and path.endswith("/messages"):
             agent_id = path.split("/")[3]
             agent = STORE.get_agent(agent_id)
@@ -1461,11 +1526,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 sort=query.get("sort", ["relevance"])[0],
             ))
         elif path == "/api/graph":
-            self._send(200, _relationship_graph(query.get("channel_id", ["research-room"])[0]))
+            self._send(200, _relationship_graph(query.get("channel_id", [""])[0]))
         elif path == "/api/files":
-            channel_id = query.get("channel_id", ["research-room"])[0]
-            _sync_agent_files(channel_id, RUN_STATE.get("run_id"))
-            self._send(200, STORE.list_files(channel_id))
+            # No channel_id means every channel: the files pane is workspace
+            # wide and filters client-side.
+            channel_id = query.get("channel_id", [""])[0]
+            _sync_agent_files(channel_id or "research-room", RUN_STATE.get("run_id"))
+            self._send(200, STORE.list_files(channel_id or None))
         elif path.startswith("/api/files/") and path.endswith("/download"):
             self._serve_file(path.split("/")[3])
         elif path == "/api/research/status":
@@ -1609,6 +1676,24 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if path == "/api/research/run":
             status, payload = _start_research(str(body.get("company") or "").strip(), str(body.get("as_of_date") or "").strip(), str(body.get("channel_id") or "research-room"), "owner")
             self._send(status, payload)
+            return
+        if path.startswith("/api/agents/") and path.endswith("/skills"):
+            agent_id = path.split("/")[3]
+            if STORE.get_agent(agent_id) is None:
+                self._send(404, {"error": "Agent not found"})
+                return
+            try:
+                skill = _store_agent_skill(
+                    agent_id=agent_id,
+                    filename=str(body.get("filename") or ""),
+                    data_url=str(body.get("data_url") or ""),
+                    name=str(body.get("name") or ""),
+                    description=str(body.get("description") or ""),
+                )
+            except ValueError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            self._send(201, skill)
             return
         if path.startswith("/api/agents/") and path.endswith("/messages"):
             agent_id = path.split("/")[3]
@@ -1780,6 +1865,16 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if body is None:
             self._send(400, {"error": "invalid JSON request"})
             return
+        if path.startswith("/api/skills/"):
+            skill_id = path.split("/")[3]
+            if STORE.get_agent_skill(skill_id) is None:
+                self._send(404, {"error": "skill not found"})
+                return
+            if "enabled" not in body:
+                self._send(400, {"error": "enabled is required"})
+                return
+            self._send(200, STORE.set_agent_skill_enabled(skill_id, bool(body["enabled"])))
+            return
         if path.startswith("/api/agents/"):
             agent_id = path.split("/")[3]
             agent = STORE.get_agent(agent_id)
@@ -1825,6 +1920,18 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         path = unquote(urlparse(self.path).path)
+        if path.startswith("/api/skills/"):
+            skill_id = path.split("/")[3]
+            record = STORE.get_agent_skill(skill_id)
+            if record is None:
+                self._send(404, {"error": "skill not found"})
+                return
+            stored = (SKILL_ROOT / str(record.get("stored_name") or "")).resolve()
+            if SKILL_ROOT.resolve() in stored.parents and stored.is_file():
+                stored.unlink()
+            STORE.delete_agent_skill(skill_id)
+            self._send(200, {"deleted": True, "skill_id": skill_id})
+            return
         if path.startswith("/api/agents/"):
             agent_id = path.split("/")[3]
             agent = STORE.get_agent(agent_id)

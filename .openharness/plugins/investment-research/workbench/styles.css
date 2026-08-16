@@ -93,7 +93,7 @@ html,body{height:100%;overflow:hidden}
 /* Channel files: uploads plus everything the Agents wrote for this channel. */
 .file-board{flex:1;min-height:0;overflow:auto;padding:18px 28px 24px}
 .file-table{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
-.file-row{display:grid;grid-template-columns:minmax(160px,2.4fr) 1.1fr 1fr .7fr 1.3fr .6fr;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #f6eaee;font-size:12px}
+.file-row{display:grid;grid-template-columns:minmax(150px,2.2fr) 1fr 1.1fr .9fr .6fr 1.2fr .6fr;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #f6eaee;font-size:12px}
 .file-row:last-child{border-bottom:0}
 .file-head{background:#fff5f6;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.05em;font-size:11px}
 .file-name{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -146,6 +146,40 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .context-icon .icon{width:40px;height:40px;stroke-width:1.5}
 .attach-btn{gap:4px}
 .attach-btn .icon{width:15px;height:15px}
+
+/* Panes that are workspace-wide (tasks, search) drop the sidebar entirely and
+   take the full width, matching the reference workspace. */
+.app-shell.no-sidebar{grid-template-columns:64px minmax(620px,1fr) 330px}
+@media(max-width:1300px){.app-shell.no-sidebar{grid-template-columns:58px minmax(580px,1fr) 290px}}
+
+/* Collapsible sidebar sections. */
+.section-title{gap:6px}
+.section-toggle{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;padding:0;cursor:pointer}
+.section-toggle:hover{color:#C8102E}
+.section-toggle .icon{width:13px;height:13px;transition:transform .15s ease}
+.section-toggle .chevron-collapsed{transform:rotate(-90deg)}
+.section-add{display:grid;place-items:center;width:24px;height:24px;border:0;background:transparent;border-radius:6px;color:var(--green);cursor:pointer}
+.section-add:hover{background:#fde8ed}
+.section-body{margin-top:4px}
+.sidebar-hint{color:var(--muted);font-size:11px;margin:6px 8px}
+.channel-count{margin-left:auto;color:var(--muted);font-weight:500;font-size:11px}
+.file-channel{color:var(--muted)}
+
+/* Skill plugins attached to one Agent. */
+.skill-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.skill-head h2{margin:0}
+.skill-list{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.skill-row{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;background:#fff;padding:9px 10px}
+.skill-row.skill-off{opacity:.6}
+.skill-glyph{color:#C8102E;display:grid;place-items:center;width:26px;height:26px;border-radius:7px;background:#fff0f3;flex:0 0 auto}
+.skill-copy{min-width:0;flex:1}
+.skill-copy strong{display:block;font-size:13px;word-break:break-word}
+.skill-copy small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+.skill-copy p{margin:5px 0 0;font-size:12px}
+.skill-actions{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:0 0 auto}
+.skill-switch{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);cursor:pointer}
+.skill-delete{border:0;background:transparent;color:#9f102b;border-radius:5px;padding:3px;cursor:pointer;display:grid;place-items:center}
+.skill-delete:hover{background:#fde8ed}
 
 /* Workspace search: the centre column becomes a full-height search surface. */
 .search-board{flex:1;min-height:0;overflow:auto;padding:18px 28px 24px;display:flex;flex-direction:column;gap:12px}
