@@ -13,7 +13,10 @@ function initials(id){ return (labels[id] || id || '?').slice(0,2); }
 // The research subject belongs to the open channel, not to a fixed default.
 function currentCompany(){
   const channel=state.channels.find(item=>item.channel_id===state.channelId);
-  return (channel?.project_company || channel?.topic || channel?.name || '').trim();
+  // A direct channel's topic describes the conversation, not a research
+  // subject, so it must not be offered as one.
+  if(!channel || channel.kind==='direct') return '';
+  return (channel.project_company || channel.topic || channel.name || '').trim();
 }
 function toast(text){ $('toast').textContent=text; $('toast').classList.add('show'); setTimeout(()=>$('toast').classList.remove('show'),2600); }
 function kindLabel(kind){ return ({system_message:'工作台状态',user_message:'用户',agent_message:'Agent',task_dispatch:'任务派发',progress_update:'流程状态',task_update:'任务状态',review_issue:'审查 / 返工',artifact_delivery:'成果交付',report_delivery:'报告交付',run_failed:'运行失败'}[kind] || kind); }
@@ -1282,6 +1285,12 @@ function applyChannelHeader(){
   const input=$('message-input');
   if(input && direct) input.placeholder=`直接跟 ${name} 说…`;
   else if(input) input.placeholder='输入消息，例如：@Fundamental 请补充最近一年经营变化';
+  // The tab row belongs to the channel view. A 1:1 conversation has no
+  // collaboration structure, so its graph tab goes; the rail keeps the
+  // workspace-wide graph reachable from anywhere.
+  const graphTab=document.querySelector('.pane-tab[data-pane="graph"]');
+  if(graphTab) graphTab.hidden=direct;
+  if(direct && state.activePane==='graph') setPane('chat');
 }
 function bindChannelButtons(){
   const list=$('sidebar-body');
