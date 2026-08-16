@@ -271,8 +271,9 @@ function setupComposer(){
     }
   });
 }
-async function startDefault(){ const res=await fetch('/api/research/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company:currentCompany(),as_of_date:new Date().toISOString().slice(0,10),channel_id:state.channelId})}); const data=await res.json(); if(!res.ok)toast(data.error||'启动失败'); else toast('已启动真实研究流程'); await loadWorkspace(); await loadMessages(); }
-document.addEventListener('DOMContentLoaded',async()=>{ await loadWorkspace(); await loadMessages(); setupComposer(); connectEvents(); $('refresh')?.addEventListener('click',()=>{loadWorkspace();loadMessages();}); $('report-btn')?.addEventListener('click',openReport); $('start-default')?.addEventListener('click',startDefault); $('new-research')?.addEventListener('click',startDefault); });
+// A research run is started by @Planner in the channel, so the old
+// start-a-run buttons and their handler are gone with the panels that held them.
+document.addEventListener('DOMContentLoaded',async()=>{ await loadWorkspace(); await loadMessages(); setupComposer(); connectEvents(); $('refresh')?.addEventListener('click',()=>{loadWorkspace();loadMessages();}); $('report-btn')?.addEventListener('click',openReport); });
 
 function showTask(taskId){ const task=state.tasks.find(item=>item.task_id===taskId); if(!task)return; $('context-content').innerHTML=`<div class="context-card"><h2>任务详情</h2><p>${esc(task.title)}</p><div class="kv"><span>任务 ID</span><strong>${esc(task.task_id)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[task.assignee_id]||task.assignee_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(task.status)}</strong></div><div class="kv"><span>运行 ID</span><strong>${esc(task.run_id||'等待运行')}</strong></div><h3>任务说明</h3><p>这是由频道消息触发的研究任务。任务状态来自本地 SQLite 协作记录，不是静态图片。</p></div>`; }
 function showArtifact(artifactId){ const artifact=state.artifacts.find(item=>item.artifact_id===artifactId); if(!artifact)return; $('context-content').innerHTML=`<div class="context-card"><h2>交付成果</h2><p>${esc(artifact.title)}</p><div class="kv"><span>成果 ID</span><strong>${esc(artifact.artifact_id)}</strong></div><div class="kv"><span>提交 Agent</span><strong>${esc(labels[artifact.agent_id]||artifact.agent_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(artifact.status)}</strong></div><h3>成果摘要</h3><p>${esc(artifact.summary)}</p><h3>关联编号</h3><div>${(artifact.refs||[]).map(item=>`<span class="tool-tag">${esc(item)}</span>`).join('')||'<span class="muted">暂未记录</span>'}</div></div>`; }
@@ -462,9 +463,12 @@ function formatElapsed(seconds){
 renderAgents = function(){ renderSidebar(); };
 // Task state belongs to the task pane. The context pane keeps only what the
 // chat itself cannot show: the run and how to work with the Agents.
+// Only the facts about the current run. Anything explaining how to use the
+// workbench lives where the action is, not in a permanent panel.
 renderContext = function(){
   const r=state.run||{};
-  $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>流程状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div><h3>协作方式</h3><p><strong>@Planner</strong> 启动完整研究；<strong>@其他 Agent</strong> 复用当前 Run 的参数卡和证据执行直接任务。在某条发言下评论，等于给这位 Agent 排一条任务。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`;
+  const status=r.running?'运行中':r.report_available?'已交付':'等待中';
+  $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><div class="kv"><span>标的</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>状态</span><strong>${esc(status)}</strong></div>${r.report_available?'<div class="context-actions"><button class="primary" id="context-report">打开报告</button></div>':''}</div>`;
   const btn=$('context-report');
   if(btn) btn.addEventListener('click',openReport);
 };
