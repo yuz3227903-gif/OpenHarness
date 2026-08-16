@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, railExpanded: false };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, railExpanded: false, bridgePort: 18789 };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -6,6 +6,12 @@ const roles = { planner:'任务规划 Agent', fundamental:'公司基本面 Agent
 // Agents that accept a directly assigned task. Planner is excluded: it owns the
 // full flow and is started from the channel, not from a comment.
 const DIRECT_AGENT_IDS = new Set(['fundamental','industry_competition','market_catalyst','risk','reviewer_arbiter','report_writer']);
+const PERMISSION_LABELS = {ask:'危险操作前询问', accept_edits:'自动接受文件修改', read_only:'只读'};
+const CAPABILITY_LABELS = {
+  chat:'对话', streaming:'流式输出', shell:'执行命令', file_read:'读取文件',
+  file_write:'写入文件', diff:'查看 Diff', mcp:'MCP', skills:'Skills',
+  resume_session:'恢复会话', approval:'操作审批',
+};
 function esc(value){ return String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 // Reference one symbol from the inline Lucide sprite in index.html.
 function icon(name, extraClass=''){ return `<svg class="icon ${extraClass}" aria-hidden="true"><use href="#i-${name}"/></svg>`; }
@@ -102,13 +108,37 @@ function showAgent(id){
   const avatar=a.avatar_path
     ? `<img class="profile-avatar" src="/${esc(a.avatar_path)}" alt="${esc(a.name||id)}">`
     : `<div class="profile-avatar profile-avatar-fallback" style="background:${agentColors[id] || '#58746a'}">${esc(initials(id))}</div>`;
-  // Model and avatar are operator choices for every Agent, built-in included.
-  // Prompt and contract stay editable only for custom Agents.
-  $('context-content').innerHTML=`<div class="context-card"><div class="profile-head">${avatar}<label class="avatar-replace">更换头像<input id="agent-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></div><h2>${esc(a.name||labels[id]||id)}</h2><p class="muted">${esc(a.role||roles[id]||'Agent')}</p><div class="kv"><span>Agent ID</span><strong>${esc(id)}</strong></div><div class="kv"><span>类型</span><strong>${isCustom?'自定义':'系统内置'}</strong></div><div class="kv"><span>当前模型</span><strong>${esc(model)}</strong></div><h3>个人简介</h3><p>${esc(a.profile||'暂无简介')}</p>${isCustom?`<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`:`<h3>工具白名单</h3><div>${(a.allowed_tools||[]).map(t=>`<span class="tool-tag">${esc(t)}</span>`).join('')||'<span class="muted">当前角色无直接工具</span>'}</div>`}<h3>切换模型</h3><select id="agent-model-select">${modelOptionsHtml(model)}</select><h3>状态</h3><p><span class="status-dot"></span> ${esc(taskStatusText(a.status))} · ${esc(a.task_phase||'等待频道任务')}</p><div class="context-actions"><button id="save-agent-model" class="primary" type="button">保存模型</button>${isCustom?'<button id="edit-agent" class="secondary" type="button">编辑资料</button>':''}</div></div><div class="context-card"><div class="skill-head"><h2>Skill 插件</h2><label class="attach-btn" title="上传 Skill 插件">${icon('upload')} 上传<input id="skill-input" type="file" accept=".md,.markdown,.json,.yaml,.yml,.txt,.zip" hidden></label></div><p class="muted">上传 SKILL.md 或打包的插件；启用后随该 Agent 的角色提示词一起加载。</p><div id="skill-list" class="skill-list"><p class="muted">正在加载插件…</p></div></div>`;
+  // A local Agent runs on the user's machine: its model, prompt and Skills
+  // belong to that CLI, so the panel shows where it runs instead of offering
+  // platform settings it does not have.
+  const isLocal=a.runtime==='local';
+  const kindLabel=isLocal?`本地 Agent · ${esc(a.provider||'')}`:(isCustom?'自定义':'系统内置');
+  const localRows=isLocal
+    ? `<div class="kv"><span>工作目录</span><strong class="kv-path">${esc(a.workspace||'未设置')}</strong></div><div class="kv"><span>Bridge</span><strong>${esc(a.bridge_id||'local')}</strong></div><div class="kv"><span>权限模式</span><strong>${esc(PERMISSION_LABELS[(a.connection_config||{}).permission_mode]||'未设置')}</strong></div>`
+    : `<div class="kv"><span>当前模型</span><strong>${esc(model)}</strong></div>`;
+  const capabilityRow=isLocal
+    ? `<h3>能力</h3><div>${Object.entries(a.capabilities||{}).filter(([,on])=>on).map(([name])=>`<span class="tool-tag">${esc(CAPABILITY_LABELS[name]||name)}</span>`).join('')||'<span class="muted">未声明能力</span>'}</div>`
+    : `<h3>工具白名单</h3><div>${(a.allowed_tools||[]).map(t=>`<span class="tool-tag">${esc(t)}</span>`).join('')||'<span class="muted">当前角色无直接工具</span>'}</div>`;
+  const modelControl=isLocal
+    ? '<p class="muted">模型与提示词由本机上的 Agent 自己管理，平台不参与配置。</p>'
+    : `<h3>切换模型</h3><select id="agent-model-select">${modelOptionsHtml(model)}</select>`;
+  const actions=isLocal
+    ? ''
+    : `<div class="context-actions"><button id="save-agent-model" class="primary" type="button">保存模型</button>${isCustom?'<button id="edit-agent" class="secondary" type="button">编辑资料</button>':''}</div>`;
+  const skillCard=isLocal
+    ? ''
+    : `<div class="context-card"><div class="skill-head"><h2>Skill 插件</h2><label class="attach-btn" title="上传 Skill 插件">${icon('upload')} 上传<input id="skill-input" type="file" accept=".md,.markdown,.json,.yaml,.yml,.txt,.zip" hidden></label></div><p class="muted">上传 SKILL.md 或打包的插件；启用后随该 Agent 的角色提示词一起加载。</p><div id="skill-list" class="skill-list"><p class="muted">正在加载插件…</p></div></div>`;
+  const promptCard=(!isLocal && isCustom)
+    ? `<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`
+    : '';
+
+  $('context-content').innerHTML=`<div class="context-card"><div class="profile-head">${avatar}<label class="avatar-replace">更换头像<input id="agent-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></div><h2>${esc(a.name||labels[id]||id)}</h2><p class="muted">${esc(a.role||roles[id]||'Agent')}</p><div class="kv"><span>Agent ID</span><strong>${esc(id)}</strong></div><div class="kv"><span>类型</span><strong>${kindLabel}</strong></div>${localRows}<h3>个人简介</h3><p>${esc(a.profile||'暂无简介')}</p>${promptCard}${capabilityRow}${modelControl}<h3>状态</h3><p><span class="status-dot"></span> ${esc(taskStatusText(a.status))}${isLocal?'':` · ${esc(a.task_phase||'等待频道任务')}`}</p>${actions}</div>${skillCard}`;
   $('edit-agent')?.addEventListener('click',()=>openAgentEditor(id));
   $('save-agent-model')?.addEventListener('click',()=>saveAgentModel(id));
   $('agent-avatar-input')?.addEventListener('change',event=>saveAgentAvatar(id,event));
-  setupSkills(id);
+  // A local Agent's Skills live in its own CLI, so there is no Skill card to
+  // wire up here.
+  if(!isLocal) setupSkills(id);
 }
 
 // Skill plugins are instruction files attached to one Agent. The workbench
@@ -190,7 +220,7 @@ async function saveAgentModel(agentId){
   await loadWorkspace(false); showAgent(agentId); toast(`已将 ${result.name || agentId} 切换为 ${model}`);
 }
 function showMessage(id){ const m=state.messages.find(x=>x.message_id===id); if(!m)return; $('context-content').innerHTML=`<div class="context-card"><h2>${esc(kindLabel(m.message_kind))}</h2><p>${esc(m.body)}</p><h3>消息信息</h3><div class="kv"><span>作者</span><strong>${esc(labels[m.author_id]||m.author_id)}</strong></div><div class="kv"><span>时间</span><strong>${esc(m.created_at)}</strong></div><div class="kv"><span>关联任务</span><strong>${esc(m.metadata?.task_id||'无')}</strong></div><p class="muted">详细线程能力会在下一阶段加入；当前先把主频道、任务状态和真实运行结果打通。</p></div>`; }
-async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}&files=all`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.removedAgents=data.removed_agents||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); applyChannelHeader(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
+async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}&files=all`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.removedAgents=data.removed_agents||[]; if(data.bridge_port) state.bridgePort=data.bridge_port; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); applyChannelHeader(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
 async function loadMessages(){ const res=await fetch(`/api/channels/${state.channelId}/messages`); state.messages=await res.json(); renderMessages(); }
 async function openReport(){ const res=await fetch(`/api/research/report?run_id=${encodeURIComponent(state.run.run_id||'')}`); if(!res.ok){toast('当前还没有报告');return;} const text=await res.text(); const win=window.open(); win.document.write(`<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;padding:28px">${esc(text)}</pre>`); win.document.close(); }
 function setupComposer(){
@@ -413,6 +443,10 @@ const taskStatusLabels = {
   queued:'排队中', pending:'待办', running:'执行中', completed:'已交付', complete:'已交付',
   failed:'失败', blocked:'已阻塞', online:'在线',
   review:'待确认', awaiting_review:'待确认', partial:'部分完成',
+  // A local Agent lives on the user's machine, so it has states a hosted one
+  // never has. They are named rather than collapsed into "offline".
+  offline:'本机离线', bridge_offline:'Bridge 未运行', agent_not_found:'未找到该 Agent',
+  connecting:'连接中', busy:'忙碌中', error:'连接异常', unknown:'尚未连接',
 };
 function taskStatusText(status){ return taskStatusLabels[status] || status || '在线'; }
 function formatElapsed(seconds){
@@ -1096,12 +1130,15 @@ function agentRowHtml(agent){
   const role=agent.role || roles[agent.agent_id] || 'Agent';
   const avatar=agent.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agent.agent_id));
   // Every Agent can be removed. Only a custom one can have its profile edited;
-  // a built-in role's prompt and contract belong to the plugin.
+  // a built-in role's prompt and contract belong to the plugin, and a local
+  // one's belong to the CLI on the user's machine.
   const actions=rowActionsHtml('agent',agent.agent_id,{edit:agent.type==='custom'});
+  const localBadge=agent.runtime==='local'
+    ? `<span class="runtime-badge">${esc(agent.provider||'local')}</span>` : '';
   // Name and role sit side by side on one line. A busy Agent shows its live
   // status in the role's place instead, so the roster never hides real state
   // to save a line — CSS picks one of the two from data-status.
-  return `<div class="row-wrap"><div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" title="${esc(name)} · ${esc(role)}｜${esc(detail)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(name)}</strong><span class="agent-role-label">${esc(role)}</span><small class="agent-status-label">${esc(detail)}</small></div><i class="status-dot"></i></div>${actions}</div>`;
+  return `<div class="row-wrap"><div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" data-runtime="${esc(agent.runtime||'hosted')}" title="${esc(name)} · ${esc(role)}｜${esc(detail)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(name)}</strong><span class="agent-role-label">${esc(role)}${localBadge}</span><small class="agent-status-label">${esc(detail)}${localBadge}</small></div><i class="status-dot"></i></div>${actions}</div>`;
 }
 function renderSidebar(){
   const shell=document.querySelector('.app-shell');
@@ -1151,7 +1188,12 @@ function bindSidebar(){
     renderFileBoard();
   }));
   $('create-channel')?.addEventListener('click',openChannelDialog);
-  $('create-agent')?.addEventListener('click',openAgentDialog);
+  // Creating an Agent now starts with choosing which kind; the hosted dialog
+  // is one branch of that choice rather than the only path.
+  $('create-agent')?.addEventListener('click',()=>{
+    if(typeof openAgentKindDialog==='function') openAgentKindDialog();
+    else openAgentDialog();
+  });
   $('create-dm')?.addEventListener('click',openDirectMessageDialog);
   $('open-graph')?.addEventListener('click',()=>setPane('graph'));
   document.querySelectorAll('[data-edit-channel]').forEach(button=>button.addEventListener('click',event=>{
@@ -1269,7 +1311,10 @@ function bindChannelButtons(){
 }
 
 function avatarDataUrl(file){
-  if(!file) return Promise.resolve('');
+  // An untouched file input still yields a File — empty, and with no image
+  // type. Reading it produces a data URL the server rightly rejects, so an
+  // Agent created without an avatar would fail on the avatar.
+  if(!file || !file.size) return Promise.resolve('');
   if(file.size>2*1024*1024) return Promise.reject(new Error('头像不能超过 2 MB'));
   return new Promise((resolve,reject)=>{ const reader=new FileReader(); reader.onload=()=>resolve(String(reader.result)); reader.onerror=()=>reject(new Error('头像读取失败')); reader.readAsDataURL(file); });
 }

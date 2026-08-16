@@ -143,6 +143,25 @@ class CollaborationStore:
                     "ALTER TABLE workbench_agent_overrides "
                     "ADD COLUMN removed INTEGER NOT NULL DEFAULT 0"
                 )
+            # An Agent is either hosted by this platform or a local one the
+            # bridge connects to. Existing rows predate the distinction, so
+            # they default to hosted and keep working untouched.
+            agent_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(workbench_agents)")
+            }
+            for name, definition in (
+                ("agent_type", "TEXT NOT NULL DEFAULT 'hosted'"),
+                ("provider", "TEXT"),
+                ("bridge_id", "TEXT"),
+                ("workspace", "TEXT"),
+                ("capabilities_json", "TEXT"),
+                ("connection_config_json", "TEXT"),
+                ("connection_status", "TEXT"),
+            ):
+                if name not in agent_columns:
+                    connection.execute(
+                        f"ALTER TABLE workbench_agents ADD COLUMN {name} {definition}"
+                    )
 
     def _seed_defaults(self) -> None:
         # Keep seed values ASCII here; the UI supplies the Chinese display labels.
@@ -220,6 +239,17 @@ class CollaborationStore:
                 "model": DEFAULT_MODEL, "allowed_tools": list(entry.allowed_tools),
                 "runtime_agent_name": entry.runtime_agent_name, "profile": entry.role_title_zh,
                 "avatar_path": None, "enabled": True,
+                # Built-in roles are hosted here, so they answer the same
+                # provider/runtime questions a local Agent does. The UI then
+                # renders one kind of Agent card.
+                "agent_type": "hosted", "provider": "openharness", "runtime": "hosted",
+                "workspace": None, "bridge_id": None, "connection_config": {},
+                "capabilities": {
+                    "chat": True, "streaming": True, "shell": False,
+                    "file_read": "read_uploaded_file" in entry.allowed_tools,
+                    "file_write": False, "diff": False, "mcp": False,
+                    "skills": True, "resume_session": False, "approval": False,
+                },
             }
             for entry in iter_agent_entries()
         ]
@@ -244,11 +274,25 @@ class CollaborationStore:
         custom = []
         for row in rows:
             item = dict(row)
-            item["type"] = "custom"
+            agent_type = str(item.get("agent_type") or "hosted")
+            item["type"] = "local" if agent_type == "local" else "custom"
+            item["agent_type"] = agent_type
             item["status"] = "online" if item.pop("enabled") else "disabled"
             item["enabled"] = item["status"] == "online"
             item["allowed_tools"] = []
             item["removed"] = False
+            item["capabilities"] = json.loads(item.pop("capabilities_json", None) or "{}")
+            item["connection_config"] = json.loads(
+                item.pop("connection_config_json", None) or "{}"
+            )
+            if agent_type == "local":
+                # A local Agent's runtime is the user's machine, so its state
+                # is whatever the bridge last reported — never assumed online.
+                item["runtime"] = "local"
+                item["status"] = str(item.get("connection_status") or "unknown")
+            else:
+                item["runtime"] = "hosted"
+                item["provider"] = item.get("provider") or "openharness"
             custom.append(item)
         return built_in + custom
 
@@ -365,20 +409,45 @@ class CollaborationStore:
 
     def create_agent(
         self, *, name: str, profile: str, role: str, system_prompt: str, model: str,
-        avatar_path: str | None = None,
+        avatar_path: str | None = None, agent_type: str = "hosted",
+        provider: str | None = None, bridge_id: str | None = None,
+        workspace: str | None = None, capabilities: dict[str, Any] | None = None,
+        connection_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        agent_id = f"custom-{uuid4().hex[:10]}"
+        """Create an Agent of either kind.
+
+        A hosted Agent is described by its model and prompt. A local one is
+        described by which provider on which bridge, in which workspace — its
+        prompt and model belong to the CLI on the user's machine, not here.
+        """
+
+        prefix = "local" if agent_type == "local" else "custom"
+        agent_id = f"{prefix}-{uuid4().hex[:10]}"
         timestamp = _now()
         with self._lock, self._connect() as connection:
             connection.execute(
                 """INSERT INTO workbench_agents(
                     agent_id, name, profile, role, system_prompt, model, avatar_path,
-                    enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                    enabled, created_at, updated_at, agent_type, provider, bridge_id,
+                    workspace, capabilities_json, connection_config_json, connection_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (agent_id, name, profile, role, system_prompt, model, avatar_path,
-                 timestamp, timestamp),
+                 timestamp, timestamp, agent_type, provider, bridge_id, workspace,
+                 _json(capabilities or {}), _json(connection_config or {}),
+                 "unknown" if agent_type == "local" else None),
             )
         return self.get_agent(agent_id) or {}
+
+    def set_agent_connection_status(self, agent_id: str, status: str) -> dict[str, Any] | None:
+        """Record what the bridge last said about a local Agent."""
+
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE workbench_agents SET connection_status=?, updated_at=? "
+                "WHERE agent_id=? AND agent_type='local'",
+                (status, _now(), agent_id),
+            )
+        return self.get_agent(agent_id) if cursor.rowcount else None
 
     def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         return next((item for item in self.list_agents() if item["agent_id"] == agent_id), None)

@@ -59,6 +59,9 @@ MAX_FILE_REQUEST_BYTES = 28 * 1024 * 1024
 AVATAR_ROOT = PROJECT_ROOT / ".openharness" / "data" / "uploads" / "avatars"
 FILE_ROOT = PROJECT_ROOT / ".openharness" / "data" / "uploads" / "files"
 SKILL_ROOT = PROJECT_ROOT / ".openharness" / "data" / "agent-skills"
+#: Where the page looks for the user's Local Agent Bridge. The browser talks to
+#: it directly; this server never proxies to the user's machine.
+LOCAL_BRIDGE_PORT = 18789
 MAX_SKILL_BYTES = 5 * 1024 * 1024
 # A Skill plugin is text or a packaged folder; refuse anything executable.
 SKILL_SUFFIXES = {".md", ".markdown", ".json", ".yaml", ".yml", ".txt", ".zip"}
@@ -620,6 +623,108 @@ def _relationship_graph(channel_id: str) -> dict[str, Any]:
         "tasks": task_index,
         "messages": message_index,
     }
+
+
+#: Credential stores. Refused wherever they appear in the path, because
+#: nesting a "project" under one is exactly how a workspace boundary gets
+#: sidestepped.
+CREDENTIAL_DIR_NAMES = frozenset({
+    ".ssh", ".aws", ".gnupg", ".gpg", ".kube", ".docker",
+    ".mozilla", ".thunderbird", "keychains", ".password-store",
+})
+
+#: Broad containers holding both sensitive and ordinary data. Refused only when
+#: the workspace *is* one of them or sits directly inside — matching them
+#: anywhere would reject every path under AppData, including the system temp
+#: directory, which is not a security win.
+BROAD_SYSTEM_DIR_NAMES = frozenset({
+    "appdata", "library", ".config", "system32", "windows",
+    "system volume information", "program files", "program files (x86)",
+})
+
+
+def _validate_workspace(raw: str) -> str:
+    """Check the workspace a local Agent will be confined to.
+
+    The bridge enforces the boundary at execution time; this refuses the
+    obviously unsafe choices before an Agent is ever created.
+    """
+
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError("workspace is required")
+    if len(text) > 500:
+        raise ValueError("workspace path is too long")
+
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("workspace 必须是绝对路径")
+
+    resolved = candidate.resolve()
+    lowered = [part.lower() for part in resolved.parts]
+
+    credential_hit = set(lowered) & CREDENTIAL_DIR_NAMES
+    if credential_hit:
+        raise ValueError(f"该目录涉及敏感数据，不能作为工作区：{sorted(credential_hit)[0]}")
+
+    # A drive or filesystem root would hand over the whole machine.
+    if resolved.parent == resolved:
+        raise ValueError("不能把整个磁盘根目录作为工作区")
+    if str(resolved) == str(Path.home()):
+        raise ValueError("不能把用户主目录作为工作区，请选择具体项目目录")
+
+    # Only the container itself and its immediate children are refused.
+    for name in (lowered[-1], lowered[-2] if len(lowered) >= 2 else ""):
+        if name in BROAD_SYSTEM_DIR_NAMES:
+            raise ValueError(f"该目录属于系统区域，不能作为工作区：{name}")
+    return str(resolved)
+
+
+def _create_local_agent(body: dict[str, Any], avatar_path: str | None) -> dict[str, Any]:
+    """Register an Agent that runs on the user's machine.
+
+    The provider must be one the bridge actually knows; accepting an arbitrary
+    string would create an Agent nothing can ever run.
+    """
+
+    from openharness.local_bridge.adapters import available_providers, get_adapter
+
+    provider = str(body.get("provider") or "").strip()
+    if provider not in available_providers():
+        raise ValueError(
+            f"未知的本地 Agent 类型：{provider or '(缺失)'}；"
+            f"当前支持：{'、'.join(available_providers())}"
+        )
+    adapter = get_adapter(provider)
+    workspace = _validate_workspace(body.get("workspace", ""))
+
+    bridge_id = str(body.get("bridge_id") or "").strip()[:120] or "local"
+    permission_mode = str(body.get("permission_mode") or "ask").strip()
+    if permission_mode not in {"ask", "accept_edits", "read_only"}:
+        raise ValueError("permission_mode 必须是 ask、accept_edits 或 read_only")
+
+    # Trust the adapter for capabilities rather than whatever the page sent:
+    # the client cannot grant an Agent an ability it does not have.
+    capabilities = adapter.capabilities().to_dict() if adapter else {}
+
+    return STORE.create_agent(
+        name=_required_text(body, "name", 80),
+        profile=str(body.get("profile") or f"运行在本机的 {provider} Agent").strip()[:500],
+        role=str(body.get("role") or (adapter.display_name if adapter else provider))[:120],
+        # The prompt and model belong to the local CLI, not to this record.
+        system_prompt="",
+        model="",
+        avatar_path=avatar_path,
+        agent_type="local",
+        provider=provider,
+        bridge_id=bridge_id,
+        workspace=workspace,
+        capabilities=capabilities,
+        connection_config={
+            "permission_mode": permission_mode,
+            "session_mode": str(body.get("session_mode") or "new")[:40],
+        },
+    )
 
 
 def _channel_attachments(channel_id: str, raw_ids: Any) -> list[dict[str, Any]]:
@@ -1772,7 +1877,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             files_scope = None if query.get("files", [""])[0] == "all" else channel_id
             snapshot = _ensure_flow_events_projected("research-room")
             _sync_agent_files(channel_id, snapshot.get("run_id") or RUN_STATE.get("run_id"))
-            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "files": STORE.list_files(files_scope), "removed_agents": STORE.removed_builtin_agents(), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
+            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "files": STORE.list_files(files_scope), "removed_agents": STORE.removed_builtin_agents(), "bridge_port": LOCAL_BRIDGE_PORT, "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
         elif path == "/api/channels":
             self._send(200, STORE.list_channels())
         elif path.startswith("/api/channels/") and path.endswith("/messages"):
@@ -1805,6 +1910,22 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 "agent": agent,
                 "messages": STORE.list_messages(channel["channel_id"]),
             })
+        elif path == "/api/local-providers":
+            # The catalogue of local Agent types this platform can register.
+            # Detection of what is actually installed happens on the bridge.
+            from openharness.local_bridge.adapters import available_providers, get_adapter
+
+            catalogue = []
+            for provider in available_providers():
+                adapter = get_adapter(provider)
+                if adapter is None:
+                    continue
+                catalogue.append({
+                    "provider": adapter.provider,
+                    "display_name": adapter.display_name,
+                    "capabilities": adapter.capabilities().to_dict(),
+                })
+            self._send(200, {"providers": catalogue, "bridge_port": LOCAL_BRIDGE_PORT})
         elif path == "/api/models":
             self._send(200, _model_settings_payload())
         elif path == "/api/tasks":
@@ -2044,6 +2165,18 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             })
             return
         if path == "/api/agents":
+            # A local Agent is described by which provider, on which bridge, in
+            # which workspace. Its model and prompt live in the CLI on the
+            # user's machine, so the hosted validation does not apply to it.
+            if str(body.get("agent_type") or "hosted") == "local":
+                try:
+                    avatar_path = _save_avatar(str(body.get("avatar_data_url") or ""))
+                    agent = _create_local_agent(body, avatar_path)
+                except ValueError as exc:
+                    self._send(400, {"error": str(exc)})
+                    return
+                self._send(201, agent)
+                return
             try:
                 avatar_path = _save_avatar(str(body.get("avatar_data_url") or ""))
                 model = _required_text(body, "model", 120)

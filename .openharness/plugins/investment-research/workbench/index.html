@@ -32,6 +32,8 @@
     <symbol id="i-report" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
     <symbol id="i-reply" viewBox="0 0 24 24"><path d="m9 17-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 0 10h-1"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.66V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.66"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
     <symbol id="i-panel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></symbol>
     <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.17 2.83a3.12 3.12 0 0 0-4.42 0L3 16.59V21h4.41L21.17 7.25a3.12 3.12 0 0 0 0-4.42z"/><path d="m15.5 4.5 4 4"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
@@ -80,10 +82,37 @@
   </div>
   <dialog id="agent-dialog" class="workbench-dialog"><form id="agent-form"><div class="dialog-head"><div><strong id="agent-dialog-title">创建 Agent</strong><span id="agent-dialog-subtitle">配置一个可以加入频道协作的研究成员</span></div><button type="button" data-close="agent-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><label>名称<input name="name" maxlength="80" required></label><label>个人简介<textarea name="profile" maxlength="500" required></textarea></label><label>职责<input name="role" maxlength="120" required></label><label>系统提示词<textarea name="system_prompt" rows="6" maxlength="12000" required></textarea></label><label>模型<select name="model"><option value="ark-code-latest">Ark Code Latest · Auto</option></select><small id="model-description" class="model-description">默认使用效果与速度双维度智能调度。</small></label><label>头像图片<div class="avatar-editor"><img id="agent-avatar-preview" alt="头像预览" hidden><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>不选择新图片时保留现有头像，最大 2 MB</small></div></label><div class="dialog-actions"><button type="button" class="secondary" data-close="agent-dialog">取消</button><button id="agent-submit" class="primary" type="submit">创建 Agent</button></div></form></dialog>
   <dialog id="channel-dialog" class="workbench-dialog"><form id="channel-form"><div class="dialog-head"><div><strong id="channel-dialog-title">创建研究频道</strong><span id="channel-dialog-subtitle">一个频道对应一个研究课题和根任务</span></div><button type="button" data-close="channel-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><label>频道名称<input name="name" maxlength="80" required></label><label>研究课题<input name="topic" maxlength="240" required></label><label>课题说明<textarea name="description" maxlength="1000"></textarea></label><fieldset id="channel-members-field"><legend>选择 Agent（至少一个）</legend><div id="channel-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="channel-dialog">取消</button><button id="channel-submit" class="primary" type="submit">创建频道</button></div></form></dialog>
+  <dialog id="agent-kind-dialog" class="workbench-dialog"><div class="dialog-head"><div><strong>请选择 Agent 创建方式</strong><span>两种 Agent 之后在同一个列表里管理和对话</span></div><button type="button" data-close="agent-kind-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><div class="kind-choices"><button type="button" class="kind-card" id="choose-hosted"><span class="kind-icon kind-icon-hosted"><svg class="icon"><use href="#i-sparkle"/></svg></span><strong>创建普通 Agent</strong><p>使用模型、Prompt、Skill、Tools 创建由本平台托管运行的 Agent。</p><em>Hosted · OpenHarness</em></button><button type="button" class="kind-card" id="choose-local"><span class="kind-icon kind-icon-local"><svg class="icon"><use href="#i-monitor"/></svg></span><strong>连接本地 Agent</strong><p>连接你电脑上已安装的 Codex、OpenClaw 等 Agent，它继续运行在本机。</p><em>Local · 需要 Local Bridge</em></button></div></dialog>
+
+  <dialog id="local-agent-dialog" class="workbench-dialog local-dialog"><div class="dialog-head"><div><strong>连接本地 Agent</strong><span id="local-step-hint">第 1 步 · 连接本机 Bridge</span></div><button type="button" data-close="local-agent-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div>
+    <ol class="local-steps"><li data-step="bridge" class="active">连接 Bridge</li><li data-step="detect">选择 Agent</li><li data-step="configure">配置</li></ol>
+    <section class="local-step" data-step-panel="bridge">
+      <div id="bridge-status" class="bridge-status">正在查找本机 Bridge…</div>
+      <div id="bridge-pair" class="bridge-pair" hidden><p class="muted">Bridge 已在你的终端里打印了一个 6 位配对码，请输入：</p><div class="pair-row"><input id="pair-code" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="off"><button type="button" id="pair-confirm" class="primary">确认配对</button></div><p id="pair-error" class="pair-error" hidden></p></div>
+      <div class="local-actions"><button type="button" id="bridge-retry" class="secondary"><svg class="icon"><use href="#i-refresh"/></svg> 重新检测</button><button type="button" id="bridge-pair-start" class="primary" hidden>发起配对</button><button type="button" id="bridge-next" class="primary" hidden>下一步</button></div>
+    </section>
+    <section class="local-step" data-step-panel="detect" hidden>
+      <div id="detect-list" class="detect-list">正在检测本机 Agent…</div>
+      <div class="local-actions"><button type="button" id="detect-refresh" class="secondary"><svg class="icon"><use href="#i-refresh"/></svg> 重新检测</button></div>
+    </section>
+    <section class="local-step" data-step-panel="configure" hidden>
+      <form id="local-agent-form">
+        <label>Agent 名称<input name="name" maxlength="80" required placeholder="例如：My Coding Agent"></label>
+        <label>描述<input name="profile" maxlength="500" placeholder="这个 Agent 负责什么"></label>
+        <label>工作目录 Workspace<input name="workspace" maxlength="500" required placeholder="D:\Projects\my-app"><small>Agent 的操作会被限制在这个目录内；不要选择磁盘根目录、用户主目录或凭据目录。</small></label>
+        <label>权限模式<select name="permission_mode"><option value="ask">危险操作前询问（推荐）</option><option value="accept_edits">自动接受文件修改</option><option value="read_only">只读，不允许修改</option></select></label>
+        <label>头像图片<div class="avatar-editor"><img id="local-avatar-preview" alt="头像预览" hidden><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>可不选，最大 2 MB</small></div></label>
+        <p id="local-form-error" class="pair-error" hidden></p>
+        <div class="dialog-actions"><button type="button" class="secondary" data-close="local-agent-dialog">取消</button><button class="primary" type="submit">创建本地 Agent</button></div>
+      </form>
+    </section>
+  </dialog>
+
   <dialog id="dm-dialog" class="workbench-dialog"><form id="dm-form"><div class="dialog-head"><div><strong>发起私信</strong><span>选择一个 Agent，开一条只有你和它的对话</span></div><button type="button" data-close="dm-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><fieldset><legend>选择对话对象</legend><div id="dm-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="dm-dialog">取消</button><button class="primary" type="submit">开始对话</button></div></form></dialog>
   <div id="toast" class="toast"></div>
   <!-- D3 v7 (ISC licence), vendored because this server has no outbound fetch. -->
   <script src="/vendor/d3.v7.min.js"></script>
   <script src="/app.js"></script>
+  <script src="/local-agent.js"></script>
 </body>
 </html>

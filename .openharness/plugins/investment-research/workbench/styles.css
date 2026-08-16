@@ -141,6 +141,56 @@ html,body{height:100%;overflow:hidden}
 .rail-expanded .rail .rail-btn .icon,.rail-expanded .rail .rail-toggle .icon{margin:0}
 .rail-expanded .brand-mark{align-self:flex-start;margin-left:5px}
 
+/* Choosing how to create an Agent. The two paths differ enough that the choice
+   is made once, up front, rather than as a toggle inside one form. */
+.kind-choices{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:20px}
+.kind-card{display:flex;flex-direction:column;align-items:flex-start;gap:7px;text-align:left;border:1px solid var(--line);border-radius:11px;background:#fff;padding:16px;cursor:pointer;font:inherit;color:var(--ink)}
+.kind-card:hover{border-color:#C8102E;box-shadow:var(--shadow)}
+.kind-card strong{font-size:15px}
+.kind-card p{margin:0;font-size:12px;color:var(--muted);line-height:1.6}
+.kind-card em{font-style:normal;font-size:10px;letter-spacing:.04em;color:#9f102b;background:#fff0f3;border-radius:4px;padding:2px 7px}
+.kind-icon{display:grid;place-items:center;width:38px;height:38px;border-radius:10px}
+.kind-icon .icon{width:20px;height:20px;color:#fff}
+.kind-icon-hosted{background:#C8102E}
+.kind-icon-local{background:#7257a8}
+@media(max-width:700px){.kind-choices{grid-template-columns:1fr}}
+
+/* Connecting a local Agent: bridge → detect → configure. */
+.local-dialog{width:min(620px,calc(100vw - 32px))}
+.local-steps{display:flex;gap:8px;list-style:none;margin:0;padding:14px 22px 0;counter-reset:step}
+.local-steps li{counter-increment:step;flex:1;font-size:11px;color:var(--muted);border-top:2px solid var(--line);padding-top:7px}
+.local-steps li::before{content:counter(step) ". "}
+.local-steps li.active{color:#C8102E;border-top-color:#C8102E;font-weight:650}
+.local-step{padding:16px 22px 22px;display:grid;gap:12px}
+.local-step form{display:grid;gap:14px;padding:0}
+.bridge-status{border:1px solid var(--line);border-radius:9px;padding:12px;font-size:13px;background:#fff}
+.bridge-status[data-tone="ok"]{border-color:#8fc7ad;background:#f2f9f5;color:#1c6b4a}
+.bridge-status[data-tone="warn"]{border-color:#e8c878;background:#fff9ec;color:#8a5f00}
+.bridge-status[data-tone="offline"],.bridge-status[data-tone="error"]{border-color:#edc5ce;background:#fff5f6;color:#9f102b}
+.bridge-pair{border:1px dashed #e5c6ce;border-radius:9px;padding:12px;background:#fffafb}
+.bridge-pair p{margin:0 0 9px;font-size:12px}
+.pair-row{display:flex;gap:8px}
+.pair-row input{flex:1;border:1px solid var(--line);border-radius:7px;padding:9px 11px;font:16px/1 "Segoe UI",monospace;letter-spacing:.35em;text-align:center}
+.pair-error{margin:9px 0 0;color:#9f102b;font-size:12px}
+.local-actions{display:flex;gap:8px;justify-content:flex-end}
+.detect-list{display:grid;gap:8px}
+.detect-row{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:9px;background:#fff;padding:11px 13px}
+.detect-row.detect-off{opacity:.62}
+.detect-copy{flex:1;min-width:0}
+.detect-copy strong{display:block;font-size:13px}
+.detect-copy small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.detect-dot{width:9px;height:9px;border-radius:50%;background:#c9b8bd;flex:0 0 auto}
+.detect-dot.detect-available{background:#1c6b4a}
+.detect-dot.detect-error{background:#c88a18}
+.detect-hint{color:var(--muted);font-size:11px}
+.runtime-badge{margin-left:6px;font-size:10px;color:#5a4880;background:#efeafa;border-radius:4px;padding:1px 6px}
+.kv-path{font-size:11px;word-break:break-all;text-align:right;max-width:62%}
+.agent-row[data-runtime="local"] .status-dot{background:#7257a8}
+.agent-row[data-runtime="local"][data-status="online"] .status-dot{background:#1c6b4a}
+.agent-row[data-runtime="local"][data-status="offline"] .status-dot,
+.agent-row[data-runtime="local"][data-status="bridge_offline"] .status-dot,
+.agent-row[data-runtime="local"][data-status="unknown"] .status-dot{background:#b9a7ad}
+
 /* Inline comments. Commenting under an Agent queues it a task, so the thread
    and the work are the same object — no separate thread pane, no task chips. */
 .message-meta{margin-top:4px}
