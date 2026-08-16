@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', skills: {} };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', skills: {} };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -484,9 +484,14 @@ function setPane(pane){
   document.querySelectorAll('.pane-view').forEach(view=>{ view.hidden=view.dataset.paneView!==pane; });
   const composer=$('composer');
   if(composer) composer.hidden=pane!=='chat';
-  // Search takes over the whole column, so the channel tabs step aside.
+  // Search and the graph take over the column, so the channel chrome steps aside.
   const tabs=$('pane-tabs');
-  if(tabs) tabs.hidden=pane==='search';
+  if(tabs) tabs.hidden=pane==='search' || pane==='graph';
+  const head=document.querySelector('.channel-head');
+  const banner=$('run-banner');
+  const chromeHidden=pane==='graph';
+  if(head) head.hidden=chromeHidden;
+  if(banner) banner.hidden=chromeHidden;
   renderSidebar();
   if(pane==='tasks') renderTaskBoard();
   if(pane==='files') renderFileBoard();
@@ -670,45 +675,105 @@ function setupSearch(){
 // record — a task's creator/assignee pair, or a message and the Agents it
 // mentioned.  Nodes sit on a circle so the layout is stable between refreshes
 // instead of jittering the way a force simulation would.
-const GRAPH_VIEWBOX={width:900, height:520};
-function graphNodePositions(nodes){
-  const centreX=GRAPH_VIEWBOX.width/2, centreY=GRAPH_VIEWBOX.height/2;
-  const radius=Math.min(centreX,centreY)-70;
-  if(nodes.length===1) return new Map([[nodes[0].id,{x:centreX,y:centreY}]]);
-  return new Map(nodes.map((node,index)=>{
-    const angle=(index/nodes.length)*Math.PI*2 - Math.PI/2;
-    return [node.id,{x:centreX+radius*Math.cos(angle), y:centreY+radius*Math.sin(angle)}];
-  }));
-}
 const GRAPH_NODE_FILL={agent:'#C8102E', human:'#7257a8', system:'#6d8c7c'};
-function graphSvg(graph){
-  const nodes=graph.nodes||[];
-  if(!nodes.length) return '<div class="board-empty board-empty-wide">这个频道还没有产生协作记录。派一个任务或 @一个 Agent 之后，关系会出现在这里。</div>';
-  const positions=graphNodePositions(nodes);
-  const maxWeight=Math.max(1,...(graph.edges||[]).map(edge=>edge.weight));
-  const edges=(graph.edges||[]).map(edge=>{
-    const from=positions.get(edge.source), to=positions.get(edge.target);
-    if(!from || !to) return '';
-    // Stop short of the node circle so the arrowhead stays visible.
-    const dx=to.x-from.x, dy=to.y-from.y;
-    const length=Math.hypot(dx,dy) || 1;
-    const endX=to.x-(dx/length)*30, endY=to.y-(dy/length)*30;
-    const width=1+(edge.weight/maxWeight)*4;
-    const dashed=edge.relations.includes('task')?'':'stroke-dasharray="5 4"';
-    return `<line x1="${from.x}" y1="${from.y}" x2="${endX}" y2="${endY}" stroke="#d08a99" stroke-width="${width.toFixed(1)}" ${dashed} marker-end="url(#graph-arrow)"><title>${esc(edge.source)} → ${esc(edge.target)}：${edge.weight} 次（${esc(edge.relations.join('、'))}）</title></line>`;
-  }).join('');
-  const marks=nodes.map(node=>{
-    const point=positions.get(node.id);
-    const fill=GRAPH_NODE_FILL[node.type] || '#58746a';
-    // The clip path must be declared before the image that references it,
-    // otherwise the avatar renders as an unclipped square.
-    const image=node.avatar_path
-      ? `<clipPath id="graph-clip-${esc(node.id)}"><circle cx="${point.x}" cy="${point.y}" r="22"></circle></clipPath><image href="/${esc(node.avatar_path)}" x="${point.x-22}" y="${point.y-22}" width="44" height="44" preserveAspectRatio="xMidYMid slice" clip-path="url(#graph-clip-${esc(node.id)})"></image>`
-      : `<text x="${point.x}" y="${point.y+5}" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">${esc(initials(node.id))}</text>`;
-    return `<g class="graph-node" data-graph-node="${esc(node.id)}"><circle cx="${point.x}" cy="${point.y}" r="22" fill="${fill}"></circle>${image}<text x="${point.x}" y="${point.y+40}" text-anchor="middle" font-size="12" fill="#24151a">${esc(node.name)}</text><text x="${point.x}" y="${point.y+56}" text-anchor="middle" font-size="10" fill="#75666b">${node.connections} 个连接</text><title>${esc(node.name)} · ${esc(node.role)}｜派出 ${node.out_degree}，收到 ${node.in_degree}</title></g>`;
-  }).join('');
-  return `<svg class="graph-svg" viewBox="0 0 ${GRAPH_VIEWBOX.width} ${GRAPH_VIEWBOX.height}" role="img" aria-label="Agent 协作关系图"><defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c07f8e"></path></marker></defs>${edges}${marks}</svg>`;
+const GRAPH_NODE_RADIUS=22;
+let graphSimulation=null;
+
+// D3 owns the layout: a force simulation settles the nodes, and each one can be
+// dragged and pinned. Re-rendering tears the previous simulation down first, or
+// two of them would fight over the same nodes.
+function mountForceGraph(container, graph){
+  if(graphSimulation){ graphSimulation.stop(); graphSimulation=null; }
+  const nodes=(graph.nodes||[]).map(node=>({...node}));
+  const byId=new Map(nodes.map(node=>[node.id,node]));
+  const links=(graph.edges||[])
+    .filter(edge=>byId.has(edge.source) && byId.has(edge.target))
+    .map(edge=>({...edge}));
+  if(!nodes.length){
+    container.innerHTML='<div class="board-empty board-empty-wide">这个范围还没有产生协作记录。派一个任务或 @一个 Agent 之后，关系会出现在这里。</div>';
+    return;
+  }
+  const width=container.clientWidth || 900;
+  const height=container.clientHeight || 560;
+  const maxWeight=Math.max(1,...links.map(link=>link.weight));
+
+  const svg=d3.select(container).append('svg')
+    .attr('class','graph-svg')
+    .attr('viewBox',[0,0,width,height])
+    .attr('role','img')
+    .attr('aria-label','Agent 协作关系图');
+
+  const defs=svg.append('defs');
+  defs.append('marker')
+    .attr('id','graph-arrow').attr('viewBox','0 0 10 10')
+    .attr('refX',GRAPH_NODE_RADIUS+9).attr('refY',5)
+    .attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto-start-reverse')
+    .append('path').attr('d','M 0 0 L 10 5 L 0 10 z').attr('fill','#c07f8e');
+  // One clip path per avatar keeps the image inside its circle.
+  nodes.filter(node=>node.avatar_path).forEach(node=>{
+    defs.append('clipPath').attr('id',`clip-${node.id}`)
+      .append('circle').attr('r',GRAPH_NODE_RADIUS);
+  });
+
+  const viewport=svg.append('g');
+  svg.call(d3.zoom().scaleExtent([0.3,3]).on('zoom',event=>viewport.attr('transform',event.transform)));
+
+  const link=viewport.append('g').selectAll('line').data(links).join('line')
+    .attr('stroke','#d08a99')
+    .attr('stroke-width',d=>1+(d.weight/maxWeight)*4)
+    .attr('stroke-dasharray',d=>d.relations.includes('task')?null:'5 4')
+    .attr('marker-end','url(#graph-arrow)');
+  link.append('title').text(d=>`${d.source} → ${d.target}：${d.weight} 次（${d.relations.join('、')}）`);
+
+  const node=viewport.append('g').selectAll('g').data(nodes).join('g')
+    .attr('class','graph-node')
+    .call(d3.drag()
+      .on('start',(event,d)=>{
+        if(!event.active) graphSimulation.alphaTarget(0.3).restart();
+        d.fx=d.x; d.fy=d.y;
+      })
+      .on('drag',(event,d)=>{ d.fx=event.x; d.fy=event.y; })
+      .on('end',(event,d)=>{
+        if(!event.active) graphSimulation.alphaTarget(0);
+        // Keep the node where it was dropped; double-click releases it.
+        d.fx=event.x; d.fy=event.y;
+      }))
+    .on('click',(event,d)=>{ if(d.type==='agent') showAgent(d.id); })
+    .on('dblclick',(event,d)=>{ d.fx=null; d.fy=null; graphSimulation.alpha(0.3).restart(); });
+
+  node.append('circle')
+    .attr('r',GRAPH_NODE_RADIUS)
+    .attr('fill',d=>GRAPH_NODE_FILL[d.type] || '#58746a');
+  node.filter(d=>d.avatar_path).append('image')
+    .attr('href',d=>`/${d.avatar_path}`)
+    .attr('x',-GRAPH_NODE_RADIUS).attr('y',-GRAPH_NODE_RADIUS)
+    .attr('width',GRAPH_NODE_RADIUS*2).attr('height',GRAPH_NODE_RADIUS*2)
+    .attr('preserveAspectRatio','xMidYMid slice')
+    .attr('clip-path',d=>`url(#clip-${d.id})`);
+  node.filter(d=>!d.avatar_path).append('text')
+    .attr('text-anchor','middle').attr('dy',5)
+    .attr('fill','#fff').attr('font-size',13).attr('font-weight',700)
+    .text(d=>initials(d.id));
+  node.append('text')
+    .attr('text-anchor','middle').attr('dy',GRAPH_NODE_RADIUS+18)
+    .attr('font-size',12).attr('fill','#24151a').text(d=>d.name);
+  node.append('text')
+    .attr('text-anchor','middle').attr('dy',GRAPH_NODE_RADIUS+34)
+    .attr('font-size',10).attr('fill','#75666b').text(d=>`${d.connections} 个连接`);
+  node.append('title').text(d=>`${d.name} · ${d.role}｜派出 ${d.out_degree}，收到 ${d.in_degree}`);
+
+  graphSimulation=d3.forceSimulation(nodes)
+    .force('link',d3.forceLink(links).id(d=>d.id).distance(150).strength(0.35))
+    .force('charge',d3.forceManyBody().strength(-620))
+    .force('center',d3.forceCenter(width/2,height/2))
+    .force('collide',d3.forceCollide(GRAPH_NODE_RADIUS+26))
+    .on('tick',()=>{
+      link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+          .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+      node.attr('transform',d=>`translate(${d.x},${d.y})`);
+    });
 }
+
 function renderGraphBoard(){
   const board=$('graph-board');
   const counter=$('tab-edge-count');
@@ -717,18 +782,26 @@ function renderGraphBoard(){
   if(!board) return;
   if(!graph){ board.innerHTML='<div class="board-empty board-empty-wide">正在加载关系图…</div>'; return; }
   const stats=graph.stats||{};
+  const scope=state.graphChannel;
+  const options=[{channel_id:'',name:'全部频道'},...state.channels].map(channel=>
+    `<option value="${esc(channel.channel_id)}" ${channel.channel_id===scope?'selected':''}>${channel.channel_id?(channel.kind==='direct'?'@':'#'):''}${esc(channel.name)}</option>`
+  ).join('');
   const members=(graph.top_members||[]).map(node=>`<div class="graph-rank-row"><span class="graph-dot" style="background:${GRAPH_NODE_FILL[node.type]||'#58746a'}"></span><span>${esc(node.name)}</span><b>${node.connections}</b></div>`).join('') || '<p class="muted">暂无成员。</p>';
   const channels=(graph.channels||[]).map(channel=>`<div class="graph-rank-row"><span>#${esc(channel.name)}</span><b>${channel.message_count} 条</b></div>`).join('') || '<p class="muted">暂无可见频道。</p>';
-  board.innerHTML=`<div class="graph-layout"><div class="graph-canvas"><div class="graph-canvas-head"><span>关系 <b>${(graph.edges||[]).length}</b></span><button type="button" id="graph-refresh" class="secondary">${icon('refresh')} 刷新</button></div>${graphSvg(graph)}<div class="graph-legend"><span><i class="graph-line-solid"></i>任务派发</span><span><i class="graph-line-dashed"></i>@提及</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.agent}"></i>Agent</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.human}"></i>人类</span></div></div><aside class="graph-side"><div class="graph-stats"><div class="graph-stat"><b>${stats.humans ?? 0}</b><span>人类</span></div><div class="graph-stat"><b>${stats.agents ?? 0}</b><span>AGENT</span></div><div class="graph-stat"><b>${stats.connections ?? 0}</b><span>连接</span></div></div><div class="graph-panel"><h3>连接最多的成员</h3>${members}</div><div class="graph-panel"><h3>最大的频道</h3>${channels}</div></aside></div>`;
+
+  board.innerHTML=`<div class="graph-toolbar"><span class="graph-title">${icon('graph')} 关系图 <em>EXPERIMENTAL</em></span><label class="search-filter">${icon('hash')}<select id="graph-channel">${options}</select></label><span class="graph-inline-stats"><b>${stats.humans ?? 0}</b> 人类 <b>${stats.agents ?? 0}</b> AGENT <b>${stats.connections ?? 0}</b> 连接</span><button type="button" id="graph-refresh" class="secondary">${icon('refresh')} 刷新</button></div><div class="graph-layout"><div class="graph-canvas"><div id="graph-canvas-host" class="graph-canvas-host"></div><div class="graph-legend"><span><i class="graph-line-solid"></i>任务派发</span><span><i class="graph-line-dashed"></i>@提及</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.agent}"></i>Agent</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.human}"></i>人类</span><span class="graph-hint">拖动结点可固定位置，双击释放，滚轮缩放</span></div></div><aside class="graph-side"><div class="graph-panel"><h3>连接最多的成员</h3>${members}</div><div class="graph-panel"><h3>最大的频道</h3>${channels}</div></aside></div>`;
+
   $('graph-refresh')?.addEventListener('click',()=>loadGraph());
-  board.querySelectorAll('[data-graph-node]').forEach(group=>group.addEventListener('click',()=>{
-    const node=graph.nodes.find(item=>item.id===group.dataset.graphNode);
-    if(node?.type==='agent') showAgent(node.id);
-  }));
+  $('graph-channel')?.addEventListener('change',event=>{
+    state.graphChannel=event.target.value;
+    loadGraph();
+  });
+  mountForceGraph($('graph-canvas-host'), graph);
 }
 async function loadGraph(){
   try{
-    const response=await fetch('/api/graph',{cache:'no-store'});
+    const query=state.graphChannel ? `?channel_id=${encodeURIComponent(state.graphChannel)}` : '';
+    const response=await fetch(`/api/graph${query}`,{cache:'no-store'});
     if(!response.ok) throw new Error('graph unavailable');
     state.graph=await response.json();
   }catch(_error){ state.graph={nodes:[],edges:[],stats:{}}; }
@@ -818,11 +891,13 @@ function setupAttachments(){
 // channels, the files pane needs a channel filter, the graph pane needs the
 // member roster, and the task and search panes are workspace-wide and take the
 // full width instead.
+// The graph is a whole-window view: it drops both the sidebar and the context
+// pane so nothing competes with the canvas.
 const SIDEBAR_BY_PANE={
   chat:{title:'聊天', subtitle:'本地工作区', action:'新建私信'},
   files:{title:'文件', subtitle:'所有频道的文件', action:null},
-  graph:{title:'成员', subtitle:'跨频道协作关系', action:null},
 };
+const FULL_BLEED_PANES=new Set(['graph']);
 function sectionHtml(key, label, count, body, action=''){
   const collapsed=state.collapsed[key];
   return `<div class="sidebar-section" data-section="${esc(key)}"><div class="section-title"><button class="section-toggle" type="button" data-toggle-section="${esc(key)}">${icon('chevron',collapsed?'chevron-collapsed':'')} ${esc(label)}</button><span>${count!=null?`<b>${count}</b>`:''}${action}</span></div><div class="section-body" ${collapsed?'hidden':''}>${body}</div></div>`;
@@ -852,8 +927,14 @@ function renderSidebar(){
   const shell=document.querySelector('.app-shell');
   const sidebar=$('sidebar');
   const config=SIDEBAR_BY_PANE[state.activePane];
-  if(shell) shell.classList.toggle('no-sidebar',!config);
+  const fullBleed=FULL_BLEED_PANES.has(state.activePane);
+  if(shell){
+    shell.classList.toggle('no-sidebar',!config);
+    shell.classList.toggle('full-bleed',fullBleed);
+  }
   if(sidebar) sidebar.hidden=!config;
+  const context=document.querySelector('.context-pane');
+  if(context) context.hidden=fullBleed;
   if(!config || !sidebar) return;
   $('sidebar-title').textContent=config.title;
   $('sidebar-subtitle').textContent=config.subtitle;

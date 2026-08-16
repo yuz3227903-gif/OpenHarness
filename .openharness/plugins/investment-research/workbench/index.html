@@ -81,6 +81,8 @@
   <dialog id="channel-dialog" class="workbench-dialog"><form id="channel-form"><div class="dialog-head"><div><strong>创建研究频道</strong><span>一个频道对应一个研究课题和根任务</span></div><button type="button" data-close="channel-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><label>频道名称<input name="name" maxlength="80" required></label><label>研究课题<input name="topic" maxlength="240" required></label><label>课题说明<textarea name="description" maxlength="1000"></textarea></label><fieldset><legend>选择 Agent（至少一个）</legend><div id="channel-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="channel-dialog">取消</button><button class="primary" type="submit">创建频道</button></div></form></dialog>
   <dialog id="dm-dialog" class="workbench-dialog"><form id="dm-form"><div class="dialog-head"><div><strong>发起私信</strong><span>选择一个 Agent，开一条只有你和它的对话</span></div><button type="button" data-close="dm-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><fieldset><legend>选择对话对象</legend><div id="dm-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="dm-dialog">取消</button><button class="primary" type="submit">开始对话</button></div></form></dialog>
   <div id="toast" class="toast"></div>
+  <!-- D3 v7 (ISC licence), vendored because this server has no outbound fetch. -->
+  <script src="/vendor/d3.v7.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
