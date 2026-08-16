@@ -104,12 +104,11 @@ function showAgent(id){
     : `<div class="profile-avatar profile-avatar-fallback" style="background:${agentColors[id] || '#58746a'}">${esc(initials(id))}</div>`;
   // Model and avatar are operator choices for every Agent, built-in included.
   // Prompt and contract stay editable only for custom Agents.
-  $('context-content').innerHTML=`<div class="context-card"><div class="profile-head">${avatar}<label class="avatar-replace">更换头像<input id="agent-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></div><h2>${esc(a.name||labels[id]||id)}</h2><p class="muted">${esc(a.role||roles[id]||'Agent')}</p><div class="kv"><span>Agent ID</span><strong>${esc(id)}</strong></div><div class="kv"><span>类型</span><strong>${isCustom?'自定义':'系统内置'}</strong></div><div class="kv"><span>当前模型</span><strong>${esc(model)}</strong></div><h3>个人简介</h3><p>${esc(a.profile||'暂无简介')}</p>${isCustom?`<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`:`<h3>工具白名单</h3><div>${(a.allowed_tools||[]).map(t=>`<span class="tool-tag">${esc(t)}</span>`).join('')||'<span class="muted">当前角色无直接工具</span>'}</div>`}<h3>切换模型</h3><select id="agent-model-select">${modelOptionsHtml(model)}</select><h3>状态</h3><p><span class="status-dot"></span> ${esc(taskStatusText(a.status))} · ${esc(a.task_phase||'等待频道任务')}</p><div class="context-actions"><button id="save-agent-model" class="primary" type="button">保存模型</button>${isCustom?'<button id="edit-agent" class="secondary" type="button">编辑资料</button>':''}</div></div><div class="context-card"><div class="skill-head"><h2>Skill 插件</h2><label class="attach-btn" title="上传 Skill 插件">${icon('upload')} 上传<input id="skill-input" type="file" accept=".md,.markdown,.json,.yaml,.yml,.txt,.zip" hidden></label></div><p class="muted">上传 SKILL.md 或打包的插件；启用后随该 Agent 的角色提示词一起加载。</p><div id="skill-list" class="skill-list"><p class="muted">正在加载插件…</p></div></div><div class="context-card dm-card"><h2>单独对话</h2><p class="muted">只有你和 ${esc(a.name||id)} 的一对一频道，不进入项目频道。</p><div id="dm-list" class="dm-list"><p class="muted">正在加载对话…</p></div><form id="dm-composer" class="thread-composer"><textarea id="dm-input" rows="3" placeholder="直接跟 ${esc(a.name||id)} 说，例如：帮我核一下这条数据的来源"></textarea><div class="thread-composer-footer"><span>发送后会为它单独建一个任务。</span><button type="submit" class="send">${icon('send')} 发送</button></div></form></div>`;
+  $('context-content').innerHTML=`<div class="context-card"><div class="profile-head">${avatar}<label class="avatar-replace">更换头像<input id="agent-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></div><h2>${esc(a.name||labels[id]||id)}</h2><p class="muted">${esc(a.role||roles[id]||'Agent')}</p><div class="kv"><span>Agent ID</span><strong>${esc(id)}</strong></div><div class="kv"><span>类型</span><strong>${isCustom?'自定义':'系统内置'}</strong></div><div class="kv"><span>当前模型</span><strong>${esc(model)}</strong></div><h3>个人简介</h3><p>${esc(a.profile||'暂无简介')}</p>${isCustom?`<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`:`<h3>工具白名单</h3><div>${(a.allowed_tools||[]).map(t=>`<span class="tool-tag">${esc(t)}</span>`).join('')||'<span class="muted">当前角色无直接工具</span>'}</div>`}<h3>切换模型</h3><select id="agent-model-select">${modelOptionsHtml(model)}</select><h3>状态</h3><p><span class="status-dot"></span> ${esc(taskStatusText(a.status))} · ${esc(a.task_phase||'等待频道任务')}</p><div class="context-actions"><button id="save-agent-model" class="primary" type="button">保存模型</button>${isCustom?'<button id="edit-agent" class="secondary" type="button">编辑资料</button>':''}</div></div><div class="context-card"><div class="skill-head"><h2>Skill 插件</h2><label class="attach-btn" title="上传 Skill 插件">${icon('upload')} 上传<input id="skill-input" type="file" accept=".md,.markdown,.json,.yaml,.yml,.txt,.zip" hidden></label></div><p class="muted">上传 SKILL.md 或打包的插件；启用后随该 Agent 的角色提示词一起加载。</p><div id="skill-list" class="skill-list"><p class="muted">正在加载插件…</p></div></div>`;
   $('edit-agent')?.addEventListener('click',()=>openAgentEditor(id));
   $('save-agent-model')?.addEventListener('click',()=>saveAgentModel(id));
   $('agent-avatar-input')?.addEventListener('change',event=>saveAgentAvatar(id,event));
   setupSkills(id);
-  setupDirectMessages(id);
 }
 
 // Skill plugins are instruction files attached to one Agent. The workbench
@@ -180,48 +179,9 @@ async function saveAgentAvatar(agentId,event){
   }catch(error){ toast(error.message || '头像更新失败'); }
 }
 
-// A direct message is a private 1:1 channel per Agent.  It reuses the same
-// task pipeline as an @mention, so the reply is a real run, not a chat echo.
-function directMessageHtml(message){
-  const mine=message.author_type==='human';
-  const body=esc(message.body).replace(/(@[A-Za-z_]+)/g,'<span class="mention">$1</span>');
-  return `<div class="dm-message ${mine?'dm-mine':''}"><div class="dm-message-head"><strong>${esc(labels[message.author_id]||message.author_id)}</strong><time>${esc(new Date(message.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}))}</time></div><div class="dm-message-body">${body}</div></div>`;
-}
-async function loadDirectMessages(agentId){
-  const list=$('dm-list');
-  if(!list) return;
-  try{
-    const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages`,{cache:'no-store'});
-    if(!response.ok) throw new Error('unavailable');
-    const data=await response.json();
-    list.innerHTML=(data.messages||[]).length
-      ? data.messages.map(directMessageHtml).join('')
-      : '<p class="muted">还没有单独对话。发第一条消息给它。</p>';
-    list.scrollTop=list.scrollHeight;
-  }catch(_error){
-    list.innerHTML='<p class="muted">单独对话暂时不可用，请刷新后重试。</p>';
-  }
-}
-function setupDirectMessages(agentId){
-  loadDirectMessages(agentId);
-  const form=$('dm-composer');
-  const input=$('dm-input');
-  if(!form || !input) return;
-  form.addEventListener('submit',async event=>{
-    event.preventDefault();
-    const body=input.value.trim();
-    if(!body) return;
-    const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages`,{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({body, as_of_date:state.run?.as_of_date || new Date().toISOString().slice(0,10)}),
-    });
-    const result=await response.json();
-    if(!response.ok){ toast(result.error || '发送失败'); return; }
-    input.value='';
-    await loadDirectMessages(agentId);
-    toast(result.notice || (result.status==='agent_started' ? '已单独派给它一个任务' : '消息已发送'));
-  });
-}
+// The per-Agent DM composer lived in the profile pane; commenting under a
+// message is now the way to queue an Agent work, so its helpers are gone.
+// The 私信 channels themselves remain, opened from the sidebar.
 async function saveAgentModel(agentId){
   const model=$('agent-model-select').value;
   const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({model})});

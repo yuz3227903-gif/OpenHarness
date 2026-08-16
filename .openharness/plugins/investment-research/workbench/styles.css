@@ -385,17 +385,7 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .avatar-replace:hover{background:#fde8ed;border-color:#C8102E}
 #agent-model-select{width:100%;border:1px solid var(--line);border-radius:7px;padding:8px 9px;font:inherit;background:#fff;color:var(--ink)}
 
-/* Private 1:1 conversation with a single Agent, under its profile. */
-.dm-card{display:flex;flex-direction:column}
-.dm-list{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:9px;background:#fff;margin-bottom:9px}
-.dm-message{border-radius:8px;padding:7px 9px;margin-bottom:7px;background:#fff5f6}
-.dm-message.dm-mine{background:#f2f7f4}
-.dm-message:last-child{margin-bottom:0}
-.dm-message-head{display:flex;align-items:baseline;gap:7px;font-size:11px}
-.dm-message-head strong{font-size:12px}
-.dm-message-head time{color:var(--muted);margin-left:auto}
-.dm-message-body{margin-top:3px;font-size:12px;white-space:pre-wrap;word-break:break-word}
-.dm-message-body .mention{color:#C8102E;font-weight:700}
+
 
 /* Right side thread: compact enough to scan, detailed enough to audit a handoff. */
 .thread-card{display:flex;flex-direction:column;gap:14px}.thread-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.thread-title h2{margin:2px 0 0}.thread-card section{border-top:1px solid var(--line);padding-top:12px}.thread-card section:first-of-type{border-top:0;padding-top:0}.thread-card h3{margin:0 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.thread-message{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0;background:#fff}.thread-message.thread-root{border-left:3px solid var(--red);background:#fff7f8}.thread-message-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px}.thread-message-head strong{font-size:13px}.thread-message-head span{color:var(--blue);border:1px solid #cbdcf2;border-radius:4px;padding:1px 4px}.thread-message-head time{color:var(--muted);margin-left:auto}.thread-message-body{white-space:pre-wrap;word-break:break-word;margin-top:6px}.thread-mentions{margin-top:7px;display:flex;flex-wrap:wrap;gap:4px}.thread-warning{margin-top:8px;padding:7px 8px;border-radius:6px;background:#fff2f3;color:#9f102b;font-size:12px}.thread-item{border:1px solid var(--line);border-radius:7px;padding:9px;margin:7px 0;background:#fff}.thread-item strong,.thread-item span,.thread-item small{display:block}.thread-item span,.thread-item small{font-size:11px;color:var(--muted);margin-top:2px}.thread-item p{margin:6px 0 0;font-size:12px;white-space:pre-wrap}.thread-refs{display:flex;flex-wrap:wrap;gap:3px}
