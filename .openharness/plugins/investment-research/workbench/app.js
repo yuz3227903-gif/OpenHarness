@@ -1,8 +1,11 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {} };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
 const roles = { planner:'任务规划 Agent', fundamental:'公司基本面 Agent', industry_competition:'行业竞品 Agent', market_catalyst:'市场催化 Agent', risk:'风险 Agent', reviewer_arbiter:'审查仲裁 Agent', report_writer:'报告 Agent' };
+// Agents that accept a directly assigned task. Planner is excluded: it owns the
+// full flow and is started from the channel, not from a comment.
+const DIRECT_AGENT_IDS = new Set(['fundamental','industry_competition','market_catalyst','risk','reviewer_arbiter','report_writer']);
 function esc(value){ return String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 // Reference one symbol from the inline Lucide sprite in index.html.
 function icon(name, extraClass=''){ return `<svg class="icon ${extraClass}" aria-hidden="true"><use href="#i-${name}"/></svg>`; }
@@ -16,7 +19,77 @@ function toast(text){ $('toast').textContent=text; $('toast').classList.add('sho
 function kindLabel(kind){ return ({system_message:'工作台状态',user_message:'用户',agent_message:'Agent',task_dispatch:'任务派发',progress_update:'流程状态',task_update:'任务状态',review_issue:'审查 / 返工',artifact_delivery:'成果交付',report_delivery:'报告交付',run_failed:'运行失败'}[kind] || kind); }
 function modelOptionsHtml(selected){ return state.modelSettings.models.map(model=>`<option value="${esc(model.id)}" ${model.id===selected?'selected':''}>${esc(model.name)} · ${esc(model.id)}${model.status==='retiring'?'（即将下线）':''}</option>`).join(''); }
 function renderAgents(){ $('agent-count').textContent=state.agents.length; $('agent-list').innerHTML=state.agents.map(a=>`<div class="agent-row" data-agent="${esc(a.agent_id)}"><div class="agent-avatar" style="background:${agentColors[a.agent_id] || '#58746a'}">${esc(initials(a.agent_id))}</div><div class="agent-copy"><strong>${esc(a.name || labels[a.agent_id] || a.agent_id)}</strong><span>${esc(a.role || roles[a.agent_id] || 'Agent')}</span></div><i class="status-dot"></i></div>`).join(''); document.querySelectorAll('[data-agent]').forEach(el=>el.addEventListener('click',()=>showAgent(el.dataset.agent))); }
-function renderMessages(){ const list=$('message-list'); list.innerHTML=state.messages.map(m=>{ const name=labels[m.author_id] || m.author_id; const body=esc(m.body).replace(/(@[A-Za-z_]+)/g,'<span class="mention">$1</span>'); const meta=[]; if(m.metadata?.task_id) meta.push(`<span class="ref-chip">任务 ${esc(m.metadata.task_id)}</span>`); if(m.metadata?.run_id) meta.push(`<span class="ref-chip">Run ${esc(m.metadata.run_id)}</span>`); return `<article class="message" data-message="${esc(m.message_id)}"><div class="message-avatar" style="background:${agentColors[m.author_id] || '#6e7b76'}">${esc(initials(m.author_id))}</div><div class="message-main"><div class="message-top"><strong>${esc(name)}</strong><time>${new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time><span class="message-kind">${esc(kindLabel(m.message_kind))}</span></div><div class="message-body">${body}</div><div class="message-meta">${meta.join('')}<button class="secondary" data-message-detail="${esc(m.message_id)}">${icon('reply')} 查看线程</button></div></div></article>`; }).join(''); document.querySelectorAll('[data-message-detail]').forEach(el=>el.addEventListener('click',()=>showMessage(el.dataset.messageDetail))); list.scrollTop=list.scrollHeight; }
+// A message carries its own comment queue. Commenting on what an Agent said
+// assigns that Agent a task, so the conversation and the work are one thing —
+// there is no separate thread view or task chip to chase.
+function renderMessages(){
+  const list=$('message-list');
+  list.innerHTML=state.messages.map(m=>{
+    const name=labels[m.author_id] || m.author_id;
+    const body=esc(m.body).replace(/(@[A-Za-z_]+)/g,'<span class="mention">$1</span>');
+    const replies=state.threads[m.message_id] || [];
+    const open=state.openComment===m.message_id;
+    const canAssign=DIRECT_AGENT_IDS.has(m.author_id);
+    const summary=replies.length
+      ? `${icon('reply')} ${replies.length} 条评论`
+      : `${icon('reply')} 评论`;
+    const repliesHtml=replies.map(reply=>{
+      const queued=reply.metadata?.queue_position;
+      const badge=queued?`<span class="queue-badge">队列第 ${esc(queued)} 位</span>`:'';
+      return `<div class="comment"><span class="comment-avatar" style="background:${agentColors[reply.author_id] || '#6e7b76'}">${esc(initials(reply.author_id))}</span><div class="comment-main"><div class="comment-top"><strong>${esc(labels[reply.author_id]||reply.author_id)}</strong><time>${esc(new Date(reply.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}))}</time>${badge}</div><div class="comment-body">${esc(reply.body).replace(/(@[A-Za-z_]+)/g,'<span class="mention">$1</span>')}</div></div></div>`;
+    }).join('');
+    const composer=open
+      ? `<form class="comment-composer" data-comment-form="${esc(m.message_id)}"><textarea rows="2" placeholder="${canAssign?`给 ${esc(name)} 派一条任务，它会按顺序处理…`:'写下评论…'}"></textarea><div class="comment-footer"><span>${canAssign?`发送后会给 ${esc(name)} 建一条任务，多条按队列依次执行`:'这条消息的作者不接收任务，评论只作记录'}</span><button type="submit" class="send">${icon('send')} 发送</button></div></form>`
+      : '';
+    return `<article class="message" data-message="${esc(m.message_id)}"><div class="message-avatar" style="background:${agentColors[m.author_id] || '#6e7b76'}">${esc(initials(m.author_id))}</div><div class="message-main"><div class="message-top"><strong>${esc(name)}</strong><time>${new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><div class="message-body">${body}</div><div class="message-meta"><button class="comment-toggle ${open?'active':''}" data-comment-toggle="${esc(m.message_id)}">${summary}</button></div>${replies.length||open?`<div class="comment-thread">${repliesHtml}${composer}</div>`:''}</div></article>`;
+  }).join('');
+  list.querySelectorAll('[data-comment-toggle]').forEach(el=>el.addEventListener('click',()=>toggleComments(el.dataset.commentToggle)));
+  list.querySelectorAll('[data-comment-form]').forEach(form=>form.addEventListener('submit',event=>{
+    event.preventDefault();
+    submitComment(form.dataset.commentForm, form.querySelector('textarea'));
+  }));
+  list.scrollTop=list.scrollHeight;
+}
+
+async function toggleComments(messageId){
+  state.openComment=state.openComment===messageId ? null : messageId;
+  if(state.openComment) await loadThread(messageId);
+  renderMessages();
+  document.querySelector(`[data-comment-form="${messageId}"] textarea`)?.focus();
+}
+
+async function loadThread(messageId){
+  try{
+    const response=await fetch(`/api/threads/${encodeURIComponent(messageId)}?channel_id=${encodeURIComponent(state.channelId)}`,{cache:'no-store'});
+    if(!response.ok) return;
+    const data=await response.json();
+    state.threads={...state.threads,[messageId]:data.replies||[]};
+  }catch(_error){ /* the comment box still opens; the list simply stays empty */ }
+}
+
+async function submitComment(messageId, textarea){
+  const body=textarea.value.trim();
+  if(!body) return;
+  const parent=state.messages.find(item=>item.message_id===messageId);
+  // Commenting under an Agent assigns that Agent the work, whoever is asking.
+  const target=DIRECT_AGENT_IDS.has(parent?.author_id) ? [parent.author_id] : [];
+  textarea.disabled=true;
+  const response=await fetch(`/api/channels/${encodeURIComponent(state.channelId)}/messages`,{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({body, thread_id:messageId, mentions:target,
+      as_of_date:state.run?.as_of_date || new Date().toISOString().slice(0,10)}),
+  });
+  const result=await response.json();
+  textarea.disabled=false;
+  if(!response.ok){ toast(result.error || '评论失败'); return; }
+  textarea.value='';
+  await loadThread(messageId);
+  await loadWorkspace(false);
+  renderMessages();
+  toast(result.notice || (result.status==='agents_started'
+    ? `已给 ${labels[parent.author_id]||parent.author_id} 排入一条任务`
+    : '评论已发送'));
+}
 function renderRun(){ const r=state.run || {}; const banner=$('run-banner'); if(r.error){ banner.className='run-banner failed'; $('run-label').textContent='本次运行失败，但记录已保留'; $('run-meta').textContent=r.error; } else if(r.running){ banner.className='run-banner running'; $('run-label').textContent='研究流程运行中'; $('run-meta').textContent=`${r.company || ''} · ${r.as_of_date || ''}`; } else if(r.report_available){ const fallback=Boolean(r.summary && r.summary.fallback_used); banner.className='run-banner'; $('run-label').textContent=fallback?'降级报告已交付':'报告已交付'; $('run-meta').textContent=`Run ${r.run_id || ''}`; } else { banner.className='run-banner'; $('run-label').textContent='等待研究任务'; $('run-meta').textContent='演示数据 / 本地真实运行入口'; } }
 function renderContext(){ const r=state.run||{}; const current=state.tasks.find(t=>t.status==='running') || state.tasks[0]; $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div>${current?`<h3>最近任务</h3><div class="kv"><span>任务</span><strong>${esc(current.title)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(current.assignee_id)}</strong></div>`:''}<h3>两种协作方式</h3><p><strong>@Planner</strong> 会启动七个 Agent 的完整研究闭环；<strong>@Fundamental 等其他 Agent</strong> 会复用频道最近一次 Run 的参数卡和证据，单独执行补充任务。一次 @多个 Agent 时会并行派发。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`; const btn=$('context-report'); if(btn) btn.addEventListener('click',openReport); }
 function showAgent(id){
@@ -203,8 +276,8 @@ document.addEventListener('DOMContentLoaded',async()=>{ await loadWorkspace(); a
 
 function showTask(taskId){ const task=state.tasks.find(item=>item.task_id===taskId); if(!task)return; $('context-content').innerHTML=`<div class="context-card"><h2>任务详情</h2><p>${esc(task.title)}</p><div class="kv"><span>任务 ID</span><strong>${esc(task.task_id)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[task.assignee_id]||task.assignee_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(task.status)}</strong></div><div class="kv"><span>运行 ID</span><strong>${esc(task.run_id||'等待运行')}</strong></div><h3>任务说明</h3><p>这是由频道消息触发的研究任务。任务状态来自本地 SQLite 协作记录，不是静态图片。</p></div>`; }
 function showArtifact(artifactId){ const artifact=state.artifacts.find(item=>item.artifact_id===artifactId); if(!artifact)return; $('context-content').innerHTML=`<div class="context-card"><h2>交付成果</h2><p>${esc(artifact.title)}</p><div class="kv"><span>成果 ID</span><strong>${esc(artifact.artifact_id)}</strong></div><div class="kv"><span>提交 Agent</span><strong>${esc(labels[artifact.agent_id]||artifact.agent_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(artifact.status)}</strong></div><h3>成果摘要</h3><p>${esc(artifact.summary)}</p><h3>关联编号</h3><div>${(artifact.refs||[]).map(item=>`<span class="tool-tag">${esc(item)}</span>`).join('')||'<span class="muted">暂未记录</span>'}</div></div>`; }
-const baseRenderMessages = renderMessages;
-renderMessages = function(){ baseRenderMessages(); document.querySelectorAll('.message').forEach(article=>{ const message=state.messages.find(item=>item.message_id===article.dataset.message); if(!message)return; const meta=message.metadata||{}; if(meta.task_id){ const card=document.createElement('div'); card.className='task-card'; card.innerHTML=`<span>任务 ${esc(meta.task_id)}</span><button data-task-detail="${esc(meta.task_id)}">查看任务</button>`; article.querySelector('.message-main').appendChild(card); } if(meta.artifact_id){ const card=document.createElement('div'); card.className='artifact-card'; card.innerHTML=`<strong>交付成果：${esc(meta.artifact_id)}</strong><button data-artifact-detail="${esc(meta.artifact_id)}">查看成果</button>`; article.querySelector('.message-main').appendChild(card); } }); document.querySelectorAll('[data-task-detail]').forEach(el=>el.addEventListener('click',()=>showTask(el.dataset.taskDetail))); document.querySelectorAll('[data-artifact-detail]').forEach(el=>el.addEventListener('click',()=>showArtifact(el.dataset.artifactDetail))); };
+// The timeline used to append a task card and an artifact card under every
+// message. Both are reachable from the task pane, so the chat stays clean.
 
 // The chat list is the only scrolling surface.  Run controls stay in the header.
 function renderRun(){
@@ -387,11 +460,11 @@ function formatElapsed(seconds){
 // The roster lives inside the pane-aware sidebar now, so both renderers point
 // at the same place instead of writing to a container that no longer exists.
 renderAgents = function(){ renderSidebar(); };
+// Task state belongs to the task pane. The context pane keeps only what the
+// chat itself cannot show: the run and how to work with the Agents.
 renderContext = function(){
   const r=state.run||{};
-  const current=state.tasks.find(t=>t.status==='running') || state.tasks.find(t=>t.status==='queued') || state.tasks[0];
-  const metadata=current?.metadata || {};
-  $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>流程状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div>${current?`<h3>最近任务</h3><div class="kv"><span>任务</span><strong>${esc(current.title)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[current.assignee_id]||current.assignee_id)}</strong></div><div class="kv"><span>任务状态</span><strong>${esc(taskStatusText(current.status))}</strong></div>${metadata.phase?`<div class="kv"><span>当前阶段</span><strong>${esc(metadata.phase)}</strong></div>`:''}${metadata.elapsed_seconds!=null?`<div class="kv"><span>已运行</span><strong>${esc(formatElapsed(metadata.elapsed_seconds))}</strong></div>`:''}${metadata.last_activity_at?`<div class="kv"><span>最近活动</span><strong>${esc(metadata.last_activity_at)}</strong></div>`:''}`:''}<h3>协作方式</h3><p><strong>@Planner</strong> 启动完整研究；<strong>@其他 Agent</strong> 复用当前 Run 的参数卡和证据执行直接任务。页面显示的工具和证据只来自真实运行回执。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`;
+  $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>流程状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div><h3>协作方式</h3><p><strong>@Planner</strong> 启动完整研究；<strong>@其他 Agent</strong> 复用当前 Run 的参数卡和证据执行直接任务。在某条发言下评论，等于给这位 Agent 排一条任务。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`;
   const btn=$('context-report');
   if(btn) btn.addEventListener('click',openReport);
 };
@@ -865,8 +938,11 @@ function renderGraphBoard(){
   if(!graph){ board.innerHTML='<div class="board-empty board-empty-wide">正在加载关系图…</div>'; return; }
   const stats=graph.stats||{};
   const scope=state.graphChannel;
-  const options=[{channel_id:'',name:'全部频道'},...state.channels].map(channel=>
-    `<option value="${esc(channel.channel_id)}" ${channel.channel_id===scope?'selected':''}>${channel.channel_id?(channel.kind==='direct'?'@':'#'):''}${esc(channel.name)}</option>`
+  // Direct messages are excluded: a 1:1 conversation has no collaboration
+  // structure to draw, so scoping the graph to one is never informative.
+  const scopable=state.channels.filter(channel=>channel.kind!=='direct');
+  const options=[{channel_id:'',name:'全部频道'},...scopable].map(channel=>
+    `<option value="${esc(channel.channel_id)}" ${channel.channel_id===scope?'selected':''}>${channel.channel_id?'#':''}${esc(channel.name)}</option>`
   ).join('');
   board.innerHTML=`<div class="graph-toolbar"><span class="graph-title">${icon('graph')} 关系图 <em>EXPERIMENTAL</em></span><label class="search-filter">${icon('hash')}<select id="graph-channel">${options}</select></label><span class="graph-inline-stats"><b>${stats.humans ?? 0}</b> 人类 <b>${stats.agents ?? 0}</b> AGENT <b>${stats.connections ?? 0}</b> 连接</span><button type="button" id="graph-refresh" class="secondary">${icon('refresh')} 刷新</button></div><div class="graph-layout"><div class="graph-canvas"><div id="graph-canvas-host" class="graph-canvas-host"></div><div class="graph-legend"><span><i class="graph-line-solid"></i>任务派发</span><span><i class="graph-line-dashed"></i>@提及</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.agent}"></i>Agent</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.human}"></i>人类</span><span class="graph-hint">点击结点看资料，点击连线看任务；拖动固定，双击释放，滚轮缩放</span></div></div><aside class="graph-side" id="graph-side"></aside></div>`;
 

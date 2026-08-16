@@ -5,6 +5,9 @@ from __future__ import annotations
 import threading
 import time
 from datetime import date
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 import pytest
 
@@ -303,6 +306,40 @@ class TestRemovingBuiltinAgents:
         store.set_builtin_agent_removed("risk", False)
         restored = next(item for item in store.list_agents() if item["agent_id"] == "risk")
         assert restored["model"] == "deepseek-v4-pro"
+
+
+class TestInlineComments:
+    """A comment under an Agent's message is that Agent's next task."""
+
+    APP = (
+        PROJECT_ROOT / ".openharness" / "plugins" / "investment-research"
+        / "workbench" / "app.js"
+    )
+
+    def test_a_comment_targets_the_message_author(self):
+        source = self.APP.read_text(encoding="utf-8")
+        # The mention sent with the comment is the parent message's author, so
+        # the work lands on whoever said the thing being commented on.
+        assert "DIRECT_AGENT_IDS.has(parent?.author_id) ? [parent.author_id] : []" in source
+
+    def test_a_comment_is_posted_into_the_message_thread(self):
+        source = self.APP.read_text(encoding="utf-8")
+        assert "thread_id:messageId" in source
+
+    def test_planner_is_not_assignable_from_a_comment(self):
+        source = self.APP.read_text(encoding="utf-8")
+        block = source.split("const DIRECT_AGENT_IDS", 1)[1].split("\n", 1)[0]
+        assert "planner" not in block
+
+    def test_the_chat_no_longer_carries_task_chrome(self):
+        source = self.APP.read_text(encoding="utf-8")
+        for removed in ("data-task-detail", "data-artifact-detail", "查看线程", "查看任务"):
+            assert removed not in source, removed
+
+    def test_the_server_accepts_an_explicit_mention_list(self):
+        # The comment names its target rather than relying on the body text.
+        assert server._parse_mentions("没有 @ 的正文", ["risk"]) == ["risk"]
+        assert server._parse_mentions("没有 @ 的正文", None) == []
 
 
 class TestOrphanedTaskReconciliation:

@@ -115,6 +115,26 @@ html,body{height:100%;overflow:hidden}
 .attachment-file{display:inline-flex;flex-direction:column;border:1px solid var(--line);border-left:3px solid #C8102E;border-radius:7px;padding:7px 11px;text-decoration:none;color:var(--ink);background:#fff7f8}
 .attachment-file b{font-size:12px}.attachment-file small{color:var(--muted);font-size:10px}
 
+/* Inline comments. Commenting under an Agent queues it a task, so the thread
+   and the work are the same object — no separate thread pane, no task chips. */
+.message-meta{margin-top:4px}
+.comment-toggle{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;color:var(--muted);font:inherit;font-size:11px;padding:3px 6px;border-radius:5px;cursor:pointer}
+.comment-toggle:hover,.comment-toggle.active{background:#fde8ed;color:#9f102b}
+.comment-toggle .icon{width:13px;height:13px}
+.comment-thread{margin:7px 0 2px;border-left:2px solid #f1cbd4;padding-left:11px}
+.comment{display:flex;gap:8px;padding:5px 0}
+.comment-avatar{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;color:#fff;font-size:9px;font-weight:700;flex:0 0 auto}
+.comment-main{min-width:0;flex:1}
+.comment-top{display:flex;align-items:baseline;gap:7px;font-size:11px}
+.comment-top strong{font-size:12px}
+.comment-top time{color:var(--muted)}
+.queue-badge{margin-left:auto;font-size:10px;color:#9f102b;background:#fff0f3;border-radius:9px;padding:1px 7px}
+.comment-body{font-size:12px;margin-top:2px;white-space:pre-wrap;word-break:break-word}
+.comment-composer{margin-top:6px;border:1px solid #e5c6ce;border-radius:8px;background:#fff;padding:7px}
+.comment-composer textarea{display:block;width:100%;resize:vertical;min-height:46px;border:0;outline:0;font:12px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--ink)}
+.comment-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:10px}
+.comment-footer .send{padding:5px 9px;font-size:11px;white-space:nowrap}
+
 /* Lucide icon sprite. Strokes inherit the text colour so an icon always matches
    the label beside it, and no rule here changes the existing palette. */
 .icon-sprite{position:absolute;width:0;height:0;overflow:hidden}

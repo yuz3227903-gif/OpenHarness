@@ -51,7 +51,12 @@ def test_workbench_renders_structured_agent_handoff_details():
     assert "线程交接" in app
     assert "thread-composer" in app
     assert "thread_id:rootMessageId" in app
-    assert "查看线程" in app
+    # The in-chat "查看线程" button is gone: replies are inline comments under
+    # the message, and commenting on an Agent queues it a task. The detail pane
+    # it used to open is still reachable from a search hit.
+    assert "data-comment-toggle" in app
+    assert "submitComment" in app
+    assert "showMessage(ref.thread_id || ref.message_id)" in app
 
 
 def test_workbench_exposes_safe_thread_context_endpoint():
