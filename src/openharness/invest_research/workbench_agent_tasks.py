@@ -31,59 +31,69 @@ class DirectAgentTaskError(ValueError):
 
 
 def direct_task_budget(agent_id: str) -> dict[str, Any]:
-    """Return a bounded budget for one user-triggered direct Agent task."""
+    """Return a bounded budget for one user-triggered direct Agent task.
+
+    The budget stays below a full research run, but it has to be large enough
+    for the role to finish. The first version was far tighter than the role
+    definitions allow — Fundamental was capped at 6 turns against a definition
+    ceiling of 16, while a real run of the same role used 13 tool calls — so a
+    direct task failed on the budget rather than on the work. These numbers sit
+    just under each definition's maxTurns.
+    """
 
     budgets: dict[str, dict[str, Any]] = {
         "fundamental": {
-            "max_turns": 6,
+            "max_turns": 12,
             "max_output_tokens": 6_000,
             "tool_call_limits": {
-                "tavily_search": 2,
-                "web_fetch": 2,
-                "read_uploaded_file": 1,
-                "calculator": 3,
-                "evidence_query": 2,
+                "tavily_search": 4,
+                "web_fetch": 4,
+                "read_uploaded_file": 2,
+                "calculator": 4,
+                "evidence_query": 4,
             },
         },
         "industry_competition": {
-            "max_turns": 6,
+            "max_turns": 12,
             "max_output_tokens": 6_000,
             "tool_call_limits": {
-                "tavily_search": 2,
-                "web_fetch": 2,
-                "read_uploaded_file": 1,
-                "calculator": 2,
-                "evidence_query": 2,
+                "tavily_search": 4,
+                "web_fetch": 4,
+                "read_uploaded_file": 2,
+                "calculator": 3,
+                "evidence_query": 4,
             },
         },
         "market_catalyst": {
-            "max_turns": 5,
+            "max_turns": 10,
             "max_output_tokens": 6_000,
             "tool_call_limits": {
-                "tavily_search": 2,
-                "web_fetch": 2,
-                "read_uploaded_file": 1,
-                "calculator": 1,
-                "evidence_query": 2,
+                "tavily_search": 4,
+                "web_fetch": 3,
+                "read_uploaded_file": 2,
+                "calculator": 2,
+                "evidence_query": 3,
             },
         },
         "risk": {
-            "max_turns": 4,
+            "max_turns": 10,
             "max_output_tokens": 5_000,
             "tool_call_limits": {
-                "evidence_query": 3,
+                # Risk argues against upstream work; it never searches.
+                "evidence_query": 6,
                 "tavily_search": 0,
                 "web_fetch": 0,
                 "read_uploaded_file": 0,
-                "calculator": 1,
+                "calculator": 2,
             },
         },
         "reviewer_arbiter": {
-            "max_turns": 3,
+            "max_turns": 8,
             "max_output_tokens": 5_000,
-            "tool_call_limits": {"evidence_query": 2},
+            "tool_call_limits": {"evidence_query": 4},
         },
         "report_writer": {
+            # Its definition caps at 2 turns; it writes from delivered material.
             "max_turns": 2,
             "max_output_tokens": 8_000,
             "tool_call_limits": {},

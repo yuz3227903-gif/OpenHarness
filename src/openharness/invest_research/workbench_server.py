@@ -967,6 +967,36 @@ def _replay_flow_events(
         STORE.add_event(channel_id=channel_id, event_type="flow_event", payload={"message": message, "flow_event": flow_event})
 
 
+def _direct_failure_message(result: Any) -> str:
+    """Explain a failed direct task in terms the operator can act on.
+
+    The raw runtime error names an internal condition. Say what ran out and
+    what to do about it, while still carrying the original text so the cause
+    stays auditable.
+    """
+
+    error = str(getattr(result, "error", "") or "")
+    failure_class = str(getattr(result, "failure_class", "") or "unknown")
+    retry_count = getattr(result, "retry_count", 0)
+
+    advice = ""
+    if "MaxTurnsExceeded" in error or "maximum turn limit" in error:
+        advice = "这次的问题超出了该角色单次直接任务的回合预算。把问题拆小一点再派，或改用 @Planner 走完整研究。"
+    elif failure_class == "timeout":
+        advice = "模型或工具调用超时。稍后重试；若反复超时，缩小问题范围。"
+    elif failure_class in {"network", "rate_limit"}:
+        advice = "与模型服务的连接不稳定或触发限流，稍后重试。"
+    elif failure_class == "provider_auth":
+        advice = "模型服务认证失败，请检查 Provider 配置。"
+    elif failure_class == "empty_response":
+        advice = "模型返回了空回复，已自动重试仍未成功。可以再派一次。"
+
+    detail = f"（失败分类：{failure_class}，已重试：{retry_count} 次）"
+    if advice:
+        return f"这项直接任务未完成：{advice}\n原始错误：{error or result.status} {detail}"
+    return f"这项直接任务未完成：{error or result.status}。{detail}"
+
+
 def _agent_handoff_targets(
     body: str, from_agent_id: str, structured_output: Any = None,
 ) -> list[str]:
@@ -1265,11 +1295,7 @@ def _run_direct_agent_task(
                 author_id=agent_id,
                 author_type="agent",
                 message_kind="task_update",
-                body=(
-                    f"这项直接任务未完成：{result.error or result.status}。"
-                    f"（失败分类：{result.failure_class or 'unknown'}，"
-                    f"已重试：{result.retry_count} 次）"
-                ),
+                body=_direct_failure_message(result),
                 metadata={
                     "task_id": task_id,
                     "run_id": run_id,

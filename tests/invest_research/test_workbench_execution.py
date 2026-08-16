@@ -115,6 +115,93 @@ class TestRenderSkillsPrompt:
         assert len(rendered) < 40_000
 
 
+class TestDirectTaskBudget:
+    """A direct task must fail on the work, not on an arbitrary budget."""
+
+    AGENTS_DIR = (
+        PROJECT_ROOT / ".openharness" / "plugins" / "investment-research" / "agents"
+    )
+
+    def _definition_max_turns(self, agent_id):
+        text = (self.AGENTS_DIR / f"{agent_id}.md").read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if line.startswith("maxTurns:"):
+                return int(line.split(":", 1)[1])
+        raise AssertionError(f"no maxTurns in {agent_id}.md")
+
+    @pytest.mark.parametrize("agent_id", sorted(server.DIRECT_AGENT_IDS))
+    def test_the_budget_never_exceeds_the_role_definition(self, agent_id):
+        from openharness.invest_research.workbench_agent_tasks import direct_task_budget
+
+        budget = direct_task_budget(agent_id)
+        ceiling = self._definition_max_turns(agent_id)
+        assert budget["max_turns"] <= ceiling, (
+            f"{agent_id}: budget {budget['max_turns']} exceeds definition {ceiling}"
+        )
+
+    @pytest.mark.parametrize(
+        ("agent_id", "observed_tool_calls"),
+        [
+            # Tool calls each role actually made in a completed research run.
+            ("fundamental", 13),
+            ("industry_competition", 17),
+            ("market_catalyst", 4),
+            ("risk", 1),
+            ("reviewer_arbiter", 1),
+        ],
+    )
+    def test_the_budget_is_within_reach_of_real_usage(self, agent_id, observed_tool_calls):
+        """Not equal to it — a direct task is narrower than a full run — but
+        close enough that an ordinary question does not hit the cap."""
+        from openharness.invest_research.workbench_agent_tasks import direct_task_budget
+
+        budget = direct_task_budget(agent_id)
+        assert budget["max_turns"] >= min(observed_tool_calls, 8), (
+            f"{agent_id}: {budget['max_turns']} turns is too tight against "
+            f"{observed_tool_calls} observed tool calls"
+        )
+
+    def test_risk_still_cannot_search(self):
+        from openharness.invest_research.workbench_agent_tasks import direct_task_budget
+
+        limits = direct_task_budget("risk")["tool_call_limits"]
+        assert limits["tavily_search"] == 0
+        assert limits["web_fetch"] == 0
+
+
+class TestDirectFailureMessage:
+    class _Result:
+        def __init__(self, error, failure_class="unknown", retry_count=0):
+            self.error = error
+            self.failure_class = failure_class
+            self.retry_count = retry_count
+            self.status = "failed"
+
+    def test_a_budget_failure_says_what_to_do(self):
+        message = server._direct_failure_message(
+            self._Result("Risk runtime failed (MaxTurnsExceeded): Exceeded maximum turn limit (4)",
+                         "tool_error")
+        )
+        assert "回合预算" in message
+        assert "拆小" in message
+        # The original error stays for auditing.
+        assert "MaxTurnsExceeded" in message
+
+    @pytest.mark.parametrize(
+        ("failure_class", "expected"),
+        [("timeout", "超时"), ("rate_limit", "限流"), ("provider_auth", "认证失败"),
+         ("empty_response", "空回复")],
+    )
+    def test_each_known_failure_class_is_explained(self, failure_class, expected):
+        message = server._direct_failure_message(self._Result("boom", failure_class))
+        assert expected in message
+
+    def test_an_unknown_failure_still_reports_the_error(self):
+        message = server._direct_failure_message(self._Result("something odd", "unknown"))
+        assert "something odd" in message
+        assert "unknown" in message
+
+
 class TestSkillReachesTheModel:
     """The Skill must be in the prompt the runtime actually hands the model.
 
