@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, railExpanded: false, bridgePort: 18789, agentFilter: 'all' };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, railExpanded: false, bridgePort: 18789, agentFilter: 'all', paneMode: 'inline' };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -579,19 +579,33 @@ function setupThreadComposer(rootMessageId){
   });
 }
 
-// Chat / Tasks / Files share the centre column.  Only the chat pane owns the
-// composer, so switching to a board never leaves a send box pointing at a view
-// that cannot receive a message.
-function setPane(pane){
+// The centre column can change in two different ways, and they are not the
+// same gesture:
+//
+//   inline — the tabs above the timeline swap what the open channel shows.
+//            You are still inside that channel, so its header, its tabs, the
+//            sidebar and the context pane all stay exactly where they were.
+//   full   — the left rail switches the whole workspace to another view.
+//            That one takes over the page.
+//
+// Only the chat pane owns the composer, so switching to a board never leaves a
+// send box pointing at a view that cannot receive a message.
+function setPane(pane, mode='full'){
+  // Chat is the channel itself, so the rail's 聊天 button lands back inside it
+  // rather than opening a second, chrome-less copy.
+  state.paneMode=(mode==='inline' || pane==='chat') ? 'inline' : 'full';
   state.activePane=pane;
-  document.querySelectorAll('.pane-tab').forEach(tab=>tab.classList.toggle('active',tab.dataset.pane===pane));
-  document.querySelectorAll('.rail-btn').forEach(button=>button.classList.toggle('active',button.dataset.pane===pane));
+  const inline=state.paneMode==='inline';
+  document.querySelectorAll('.pane-tab').forEach(tab=>tab.classList.toggle('active',inline && tab.dataset.pane===pane));
+  // While a tab drives the column the rail still points at 聊天 — that is where
+  // the user is. Highlighting 任务 there would claim a jump that did not happen.
+  const railPane=inline ? 'chat' : pane;
+  document.querySelectorAll('.rail-btn').forEach(button=>button.classList.toggle('active',button.dataset.pane===railPane));
   document.querySelectorAll('.pane-view').forEach(view=>{ view.hidden=view.dataset.paneView!==pane; });
   const composer=$('composer');
   if(composer) composer.hidden=pane!=='chat';
-  // Every pane except chat takes over the column, so the channel chrome and
-  // the pane tabs step aside — a files view shows files and nothing else.
-  const chromeHidden=pane!=='chat';
+  // The channel chrome only steps aside for a rail switch.
+  const chromeHidden=!inline;
   const tabs=$('pane-tabs');
   if(tabs) tabs.hidden=chromeHidden;
   const head=document.querySelector('.channel-head');
@@ -635,10 +649,12 @@ function setupRail(){
 }
 
 function setupPaneTabs(){
-  document.querySelectorAll('.pane-tab').forEach(tab=>tab.addEventListener('click',()=>setPane(tab.dataset.pane)));
+  // A tab swaps the open channel's content in place; the rail switches the
+  // whole workspace. Same panes, deliberately different gestures.
+  document.querySelectorAll('.pane-tab').forEach(tab=>tab.addEventListener('click',()=>setPane(tab.dataset.pane,'inline')));
   // The rail declares its target pane, so inserting a button never shifts the
   // mapping the way an index-based lookup did.
-  document.querySelectorAll('.rail-btn').forEach(button=>button.addEventListener('click',()=>setPane(button.dataset.pane)));
+  document.querySelectorAll('.rail-btn').forEach(button=>button.addEventListener('click',()=>setPane(button.dataset.pane,'full')));
   $('open-graph')?.addEventListener('click',()=>setPane('graph'));
   $('search-close')?.addEventListener('click',()=>setPane('chat'));
   document.addEventListener('keydown',event=>{
@@ -1183,8 +1199,11 @@ function filterAgents(agents){
 function renderSidebar(){
   const shell=document.querySelector('.app-shell');
   const sidebar=$('sidebar');
-  const config=SIDEBAR_BY_PANE[state.activePane];
-  const fullBleed=FULL_BLEED_PANES.has(state.activePane);
+  // An inline swap happens inside the open channel, so the surrounding columns
+  // belong to chat no matter which board the tabs are showing.
+  const pane=state.paneMode==='inline' ? 'chat' : state.activePane;
+  const config=SIDEBAR_BY_PANE[pane];
+  const fullBleed=FULL_BLEED_PANES.has(pane);
   if(shell){
     shell.classList.toggle('no-sidebar',!config);
     shell.classList.toggle('full-bleed',fullBleed);
