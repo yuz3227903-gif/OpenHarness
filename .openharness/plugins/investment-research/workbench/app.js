@@ -834,13 +834,19 @@ function dmButtonHtml(channel){
   const agentId=channel.channel_id.replace(/^dm-/,'');
   const agent=state.agents.find(item=>item.agent_id===agentId);
   const avatar=agent?.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agentId));
-  return `<button class="channel dm-channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}"><span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span> ${esc(channel.name)}</button>`;
+  const role=agent?.role || roles[agentId] || '';
+  return `<button class="channel dm-channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}"><span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span><b>${esc(channel.name)}</b>${role?`<em>${esc(role)}</em>`:''}</button>`;
 }
 function agentRowHtml(agent){
   const status=agent.status || 'online';
   const detail=status==='running' && agent.task_phase ? agent.task_phase : taskStatusText(status);
+  const name=agent.name || labels[agent.agent_id] || agent.agent_id;
+  const role=agent.role || roles[agent.agent_id] || 'Agent';
   const avatar=agent.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agent.agent_id));
-  return `<div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(agent.name || labels[agent.agent_id] || agent.agent_id)}</strong><span>${esc(agent.role || roles[agent.agent_id] || 'Agent')}</span><small class="agent-status-label">${esc(detail)}</small></div><i class="status-dot"></i></div>`;
+  // Name and role sit side by side on one line. A busy Agent shows its live
+  // status in the role's place instead, so the roster never hides real state
+  // to save a line — CSS picks one of the two from data-status.
+  return `<div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" title="${esc(name)} · ${esc(role)}｜${esc(detail)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(name)}</strong><span class="agent-role-label">${esc(role)}</span><small class="agent-status-label">${esc(detail)}</small></div><i class="status-dot"></i></div>`;
 }
 function renderSidebar(){
   const shell=document.querySelector('.app-shell');

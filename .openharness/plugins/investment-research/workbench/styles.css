@@ -136,8 +136,10 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .file-glyph{color:#c07f8e}
 .attachment-file{flex-direction:row;align-items:center;gap:8px}
 .attachment-file .icon{color:#C8102E}
-.workspace-head button,.section-title button{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;color:var(--green)}
-.workspace-head button:hover,.section-title button:hover{background:#fde8ed}
+/* Only the round add buttons, never the collapsible section title button —
+   `display:grid` on that one stacked its chevron above its label. */
+.workspace-head button,.section-title .section-add{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;color:var(--green)}
+.workspace-head button:hover,.section-title .section-add:hover{background:#fde8ed}
 .context-head span{display:inline-flex;align-items:center;gap:7px}
 .context-head button{display:grid;place-items:center;width:26px;height:26px;border-radius:6px}
 .context-head button:hover{background:#fde8ed;color:#C8102E}
@@ -152,18 +154,45 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .app-shell.no-sidebar{grid-template-columns:64px minmax(620px,1fr) 330px}
 @media(max-width:1300px){.app-shell.no-sidebar{grid-template-columns:58px minmax(580px,1fr) 290px}}
 
-/* Collapsible sidebar sections. */
-.section-title{gap:6px}
-.section-toggle{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;padding:0;cursor:pointer}
-.section-toggle:hover{color:#C8102E}
-.section-toggle .icon{width:13px;height:13px;transition:transform .15s ease}
+/* Collapsible sidebar sections.
+   The base sheet sizes `.section-title span` at 22px because it used to hold a
+   single "+" glyph. That span now wraps the count and the add button, so the
+   size is reset here — inherited at 22px it squeezed the title button until
+   the Chinese label broke one character per line. */
+.section-title{gap:6px;font-size:11px}
+.section-title span{font-size:11px;display:inline-flex;align-items:center;gap:2px;flex:0 0 auto}
+.section-title b{font-size:11px;font-weight:500;color:var(--muted)}
+/* Two class names so this outranks the base sheet's `.section-title button`,
+   which sizes the add buttons at 20px. */
+.section-title .section-toggle{display:inline-flex;align-items:center;gap:5px;flex:1 1 auto;min-width:0;width:auto;height:auto;white-space:nowrap;border:0;background:transparent;color:var(--muted);font:inherit;font-size:11px;text-transform:inherit;letter-spacing:inherit;padding:0;cursor:pointer}
+.section-title .section-toggle:hover{color:#C8102E;background:transparent}
+.section-toggle .icon{width:12px;height:12px;flex:0 0 auto;transition:transform .15s ease}
 .section-toggle .chevron-collapsed{transform:rotate(-90deg)}
-.section-add{display:grid;place-items:center;width:24px;height:24px;border:0;background:transparent;border-radius:6px;color:var(--green);cursor:pointer}
+.section-add{display:grid;place-items:center;width:22px;height:22px;border:0;background:transparent;border-radius:6px;color:var(--green);cursor:pointer;font-size:0}
+.section-add .icon{width:14px;height:14px}
 .section-add:hover{background:#fde8ed}
 .section-body{margin-top:4px}
 .sidebar-hint{color:var(--muted);font-size:11px;margin:6px 8px}
 .channel-count{margin-left:auto;color:var(--muted);font-weight:500;font-size:11px}
 .file-channel{color:var(--muted)}
+
+/* Sidebar rows read left to right on one line: icon, name, then the muted
+   detail beside the name rather than stacked under it. */
+.channel{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.workspace-head strong{font-size:15px}
+.workspace-head span{font-size:11px}
+.agent-row{gap:8px;padding:6px 8px}
+.agent-avatar{width:24px;height:24px;border-radius:6px;font-size:10px}
+.agent-copy{display:flex;align-items:baseline;gap:6px;min-width:0;flex:1}
+/* The name identifies the row, so the trailing detail gives up width first. */
+.agent-copy strong{display:inline;font-size:13px;font-weight:650;flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.agent-copy .agent-role-label,.agent-copy .agent-status-label{display:inline;font-size:11px;color:var(--muted);flex:1 1 0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Exactly one trailing label shows: the role when idle, the live status when
+   the Agent is actually doing something. */
+.agent-copy .agent-status-label{display:none}
+.agent-row:not([data-status="online"]) .agent-copy .agent-role-label{display:none}
+.agent-row:not([data-status="online"]) .agent-copy .agent-status-label{display:inline;color:#C8102E}
+.agent-row .status-dot{flex:0 0 auto}
 
 /* Skill plugins attached to one Agent. */
 .skill-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
@@ -227,10 +256,11 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .task-status-running{background:#e6f0fb;color:#2f6bb0}.task-status-review{background:#fff3dc;color:#8a5f00}.task-status-done{background:#e6f4ec;color:#1c6b4a}
 
 /* Direct-message list in the sidebar, beside the project channels. */
-.dm-channel{gap:8px}
-.dm-avatar{display:grid;place-items:center;width:20px;height:20px;border-radius:5px;color:#fff;font-size:9px;font-weight:700;overflow:hidden;flex:0 0 auto}
+.dm-channel{gap:7px}
+.dm-avatar{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;color:#fff;font-size:9px;font-weight:700;overflow:hidden;flex:0 0 auto}
 .dm-avatar img{width:100%;height:100%;object-fit:cover}
-.section-title b{font-weight:500;color:var(--muted)}
+.dm-channel b{font-size:13px;font-weight:650;flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.dm-channel em{font-style:normal;font-size:11px;color:var(--muted);flex:1 1 0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* Relationship graph: entry point in the sidebar, canvas in the centre pane. */
 .graph-entry{display:flex;align-items:center;gap:7px;width:100%;border:1px solid #f1b2bf;background:#fde8ed;color:#9f102b;border-radius:8px;padding:9px 11px;margin-bottom:18px;font:inherit;font-weight:650;cursor:pointer}
