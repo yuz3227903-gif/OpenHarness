@@ -94,6 +94,16 @@ class CollaborationStore:
                     title TEXT NOT NULL, summary TEXT NOT NULL, status TEXT NOT NULL,
                     refs_json TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS workbench_files (
+                    file_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, message_id TEXT,
+                    task_id TEXT, run_id TEXT, owner_id TEXT NOT NULL, owner_type TEXT NOT NULL,
+                    source TEXT NOT NULL, filename TEXT NOT NULL, stored_name TEXT NOT NULL,
+                    media_type TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '', metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_workbench_files_channel
+                    ON workbench_files(channel_id, created_at);
                 """
             )
             channel_columns = {
@@ -489,6 +499,63 @@ class CollaborationStore:
         for row in rows:
             item = dict(row)
             item["refs"] = json.loads(item.pop("refs_json"))
+            item["metadata"] = json.loads(item.pop("metadata_json"))
+            result.append(item)
+        return result
+
+    def add_file(
+        self, *, channel_id: str, owner_id: str, owner_type: str, source: str,
+        filename: str, stored_name: str, media_type: str, size_bytes: int,
+        file_id: str | None = None, message_id: str | None = None,
+        task_id: str | None = None, run_id: str | None = None, summary: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Register one channel file.
+
+        ``file_id`` may be supplied so an Agent artefact that is re-synced on
+        every refresh keeps a stable identity instead of duplicating a row.
+        """
+
+        file_id = file_id or f"FILE-{uuid4().hex[:12].upper()}"
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT INTO workbench_files(
+                    file_id, channel_id, message_id, task_id, run_id, owner_id, owner_type,
+                    source, filename, stored_name, media_type, size_bytes, summary,
+                    metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_id) DO UPDATE SET
+                    size_bytes=excluded.size_bytes, summary=excluded.summary,
+                    metadata_json=excluded.metadata_json""",
+                (file_id, channel_id, message_id, task_id, run_id, owner_id, owner_type,
+                 source, filename, stored_name, media_type, int(size_bytes), summary,
+                 _json(metadata or {}), _now()),
+            )
+        return self.get_file(file_id) or {}
+
+    def get_file(self, file_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workbench_files WHERE file_id=?", (file_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["metadata"] = json.loads(item.pop("metadata_json"))
+        return item
+
+    def list_files(self, channel_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM workbench_files"
+        values: tuple[Any, ...] = ()
+        if channel_id:
+            query += " WHERE channel_id=?"
+            values = (channel_id,)
+        query += " ORDER BY created_at DESC LIMIT 200"
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(query, values).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
             item["metadata"] = json.loads(item.pop("metadata_json"))
             result.append(item)
         return result

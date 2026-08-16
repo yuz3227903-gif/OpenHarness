@@ -22,7 +22,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
+from uuid import uuid4
 
 from openharness.invest_research.collaboration_store import CollaborationStore
 from openharness.invest_research.evidence_store import EvidenceStore
@@ -45,7 +46,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 WEB_ROOT = PROJECT_ROOT / ".openharness" / "plugins" / "investment-research" / "workbench"
 MAX_REQUEST_BYTES = 3 * 1024 * 1024
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
+# Channel attachments travel as base64 data URLs, which inflate the payload by
+# roughly a third.  Keep the raw file cap and the request cap separate so a
+# 20 MB document is not rejected by the JSON body guard.
+MAX_FILE_BYTES = 20 * 1024 * 1024
+MAX_FILE_REQUEST_BYTES = 28 * 1024 * 1024
 AVATAR_ROOT = PROJECT_ROOT / ".openharness" / "data" / "uploads" / "avatars"
+FILE_ROOT = PROJECT_ROOT / ".openharness" / "data" / "uploads" / "files"
 FLOW_IDLE_TIMEOUT_SECONDS = 360
 STORE = CollaborationStore(PROJECT_ROOT)
 EVIDENCE_STORE = EvidenceStore.for_project(PROJECT_ROOT)
@@ -111,6 +118,128 @@ def _save_avatar(data_url: str) -> str | None:
     filename = f"avatar-{int(time.time() * 1000)}-{len(payload)}{extensions[match.group(1)]}"
     (AVATAR_ROOT / filename).write_bytes(payload)
     return f"uploads/avatars/{filename}"
+
+
+_SAFE_FILENAME = re.compile(r"[^A-Za-z0-9一-鿿._-]+")
+_DATA_URL = re.compile(r"data:([\w.+-]+/[\w.+-]+)?(;charset=[\w-]+)?;base64,([A-Za-z0-9+/=\r\n]+)")
+
+
+def _safe_filename(name: str) -> str:
+    """Reduce a browser-supplied name to a short, path-free display name."""
+
+    cleaned = _SAFE_FILENAME.sub("_", Path(str(name or "")).name).strip("._") or "file"
+    return cleaned[:120]
+
+
+def _store_channel_upload(
+    *, channel_id: str, filename: str, data_url: str, message_id: str | None = None,
+    owner_id: str = "owner", owner_type: str = "human", summary: str = "",
+) -> dict[str, Any]:
+    """Decode one base64 attachment onto disk and register it in the channel."""
+
+    match = _DATA_URL.fullmatch(str(data_url or "").strip())
+    if not match:
+        raise ValueError("attachment must be a base64 data URL")
+    try:
+        payload = base64.b64decode(match.group(3), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("attachment payload is not valid base64") from exc
+    if not payload:
+        raise ValueError("attachment is empty")
+    if len(payload) > MAX_FILE_BYTES:
+        raise ValueError("attachment must be 20 MB or smaller")
+
+    display_name = _safe_filename(filename)
+    channel_dir = FILE_ROOT / _safe_filename(channel_id)
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{int(time.time() * 1000)}-{uuid4().hex[:8]}-{display_name}"
+    (channel_dir / stored_name).write_bytes(payload)
+    return STORE.add_file(
+        channel_id=channel_id,
+        message_id=message_id,
+        owner_id=owner_id,
+        owner_type=owner_type,
+        source="upload",
+        filename=display_name,
+        stored_name=f"{_safe_filename(channel_id)}/{stored_name}",
+        media_type=match.group(1) or "application/octet-stream",
+        size_bytes=len(payload),
+        summary=summary,
+    )
+
+
+def _resolve_stored_file(record: dict[str, Any]) -> Path | None:
+    """Map a file record onto a real path, refusing anything outside the roots."""
+
+    stored = str(record.get("stored_name") or "")
+    if not stored:
+        return None
+    root = FILE_ROOT if record.get("source") == "upload" else PROJECT_ROOT
+    candidate = (root / stored).resolve()
+    resolved_root = root.resolve()
+    if resolved_root not in candidate.parents:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+_AGENT_FILE_SOURCES = (
+    ("report.md", "agent_report", "研究报告"),
+    ("summary.json", "agent_intermediate", "运行摘要"),
+    ("report-context.json", "agent_intermediate", "报告材料包"),
+)
+
+
+def _sync_agent_files(channel_id: str, run_id: str | None) -> None:
+    """Register the artefacts a Run wrote on disk as channel files.
+
+    ``file_id`` is derived from the Run and file name so repeated syncs update
+    the same row instead of appending a duplicate on every workspace refresh.
+    """
+
+    if not run_id:
+        return
+    run_directory = PROJECT_ROOT / ".openharness" / "validation" / run_id
+    if not run_directory.is_dir():
+        return
+    for name, source, title in _AGENT_FILE_SOURCES:
+        candidate = run_directory / name
+        if not candidate.is_file():
+            continue
+        try:
+            relative = candidate.resolve().relative_to(PROJECT_ROOT)
+        except ValueError:
+            continue
+        STORE.add_file(
+            file_id=f"FILE-{run_id}-{name.replace('.', '-').upper()}",
+            channel_id=channel_id,
+            run_id=run_id,
+            owner_id="report_writer" if source == "agent_report" else "system",
+            owner_type="agent" if source == "agent_report" else "system",
+            source=source,
+            filename=name,
+            stored_name=relative.as_posix(),
+            media_type="text/markdown" if name.endswith(".md") else "application/json",
+            size_bytes=candidate.stat().st_size,
+            summary=f"{title} · Run {run_id}",
+        )
+
+
+def _channel_attachments(channel_id: str, raw_ids: Any) -> list[dict[str, Any]]:
+    """Resolve client-supplied attachment IDs to files this channel really owns."""
+
+    if not isinstance(raw_ids, list):
+        return []
+    attachments: list[dict[str, Any]] = []
+    for value in raw_ids[:10]:
+        record = STORE.get_file(str(value))
+        if record is None or record.get("channel_id") != channel_id:
+            continue
+        attachments.append({
+            "file_id": record["file_id"], "filename": record["filename"],
+            "stored_name": record["stored_name"], "media_type": record["media_type"],
+            "size_bytes": record["size_bytes"], "summary": record.get("summary", ""),
+        })
+    return attachments
 
 
 def _required_text(body: dict[str, Any], field: str, limit: int) -> str:
@@ -1017,12 +1146,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _body(self) -> dict[str, Any] | None:
+    def _body(self, max_bytes: int = MAX_REQUEST_BYTES) -> dict[str, Any] | None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
-        if length <= 0 or length > MAX_REQUEST_BYTES:
+        if length <= 0 or length > max_bytes:
             return None
         try:
             value = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -1035,8 +1164,10 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         path = unquote(parsed.path)
         query = parse_qs(parsed.query)
         if path == "/api/workspace":
+            channel_id = query.get("channel_id", ["research-room"])[0]
             snapshot = _ensure_flow_events_projected("research-room")
-            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
+            _sync_agent_files(channel_id, snapshot.get("run_id") or RUN_STATE.get("run_id"))
+            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "files": STORE.list_files(channel_id), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
         elif path == "/api/channels":
             self._send(200, STORE.list_channels())
         elif path.startswith("/api/channels/") and path.endswith("/messages"):
@@ -1057,6 +1188,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._send(200, STORE.list_tasks(query.get("channel_id", [None])[0]))
         elif path == "/api/artifacts":
             self._send(200, STORE.list_artifacts(query.get("channel_id", [None])[0]))
+        elif path == "/api/files":
+            channel_id = query.get("channel_id", ["research-room"])[0]
+            _sync_agent_files(channel_id, RUN_STATE.get("run_id"))
+            self._send(200, STORE.list_files(channel_id))
+        elif path.startswith("/api/files/") and path.endswith("/download"):
+            self._serve_file(path.split("/")[3])
         elif path == "/api/research/status":
             self._send(200, _snapshot())
         elif path == "/api/research/report":
@@ -1131,6 +1268,28 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         content_types = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "application/javascript; charset=utf-8"}
         self._send(200, candidate.read_bytes(), content_types.get(candidate.suffix, "application/octet-stream"))
 
+    def _serve_file(self, file_id: str) -> None:
+        record = STORE.get_file(file_id)
+        if record is None:
+            self._send(404, {"error": "file not found"})
+            return
+        candidate = _resolve_stored_file(record)
+        if candidate is None:
+            self._send(410, {"error": "file is no longer available on disk"})
+            return
+        data = candidate.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", str(record.get("media_type") or "application/octet-stream"))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        # RFC 5987 keeps Chinese file names intact across browsers.
+        self.send_header(
+            "Content-Disposition",
+            f"attachment; filename*=UTF-8''{quote(str(record.get('filename') or 'file'))}",
+        )
+        self.end_headers()
+        self.wfile.write(data)
+
     def _serve_avatar(self, path: str) -> None:
         filename = Path(path).name
         candidate = (AVATAR_ROOT / filename).resolve()
@@ -1143,9 +1302,27 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
-        body = self._body()
+        is_upload = path.startswith("/api/channels/") and path.endswith("/files")
+        body = self._body(MAX_FILE_REQUEST_BYTES if is_upload else MAX_REQUEST_BYTES)
         if body is None:
             self._send(400, {"error": "invalid JSON request"})
+            return
+        if is_upload:
+            channel_id = path.split("/")[3]
+            try:
+                record = _store_channel_upload(
+                    channel_id=channel_id,
+                    filename=str(body.get("filename") or ""),
+                    data_url=str(body.get("data_url") or ""),
+                    summary=str(body.get("summary") or "").strip()[:500],
+                )
+            except ValueError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            STORE.add_event(
+                channel_id=channel_id, event_type="file_created", payload={"file": record}
+            )
+            self._send(201, record)
             return
         if path == "/api/research/pause":
             status, payload = _set_pause(True)
@@ -1205,10 +1382,20 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             if requested_thread_id and STORE.get_thread(requested_thread_id, channel_id) is None:
                 self._send(404, {"error": "thread not found"})
                 return
+            attachments = _channel_attachments(channel_id, body.get("attachment_ids"))
             message = STORE.add_message(
                 channel_id=channel_id, author_id="owner", author_type="human", message_kind="user_message",
-                body=str(body.get("body") or "").strip(), mentions=_parse_mentions(str(body.get("body") or ""), body.get("mentions")), thread_id=requested_thread_id, metadata={"demo": False},
+                body=str(body.get("body") or "").strip(), mentions=_parse_mentions(str(body.get("body") or ""), body.get("mentions")), thread_id=requested_thread_id,
+                metadata={"demo": False, "attachments": attachments},
             )
+            for attachment in attachments:
+                STORE.add_file(
+                    file_id=attachment["file_id"], channel_id=channel_id,
+                    message_id=message["message_id"], owner_id="owner", owner_type="human",
+                    source="upload", filename=attachment["filename"],
+                    stored_name=attachment["stored_name"], media_type=attachment["media_type"],
+                    size_bytes=attachment["size_bytes"], summary=attachment.get("summary", ""),
+                )
             STORE.add_event(
                 channel_id=channel_id,
                 event_type="message_created",

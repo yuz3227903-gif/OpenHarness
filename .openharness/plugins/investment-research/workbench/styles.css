@@ -60,5 +60,60 @@ html,body{height:100%;overflow:hidden}
 /* Thread replies stay local to the current handoff and do not compete with the main composer. */
 .thread-composer-section{position:sticky;bottom:-20px;background:#fffafb;padding-bottom:2px}.thread-composer{border:1px solid #e5c6ce;border-radius:8px;background:#fff;padding:8px}.thread-composer textarea{display:block;width:100%;resize:vertical;min-height:58px;border:0;outline:0;font:12px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--ink)}.thread-agent-quick{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}.thread-agent-quick button{border:1px solid #ecc7d0;background:#fff7f8;color:#9f102b;border-radius:4px;padding:3px 5px;font-size:10px;cursor:pointer}.thread-agent-quick button:hover{background:#fde8ed;border-color:#C8102E}.thread-composer-footer{display:flex;gap:8px;align-items:center;justify-content:space-between;color:var(--muted);font-size:10px}.thread-composer-footer .send{padding:6px 9px;font-size:11px;white-space:nowrap}
 
+/* Centre column tabs: chat, task board and channel files share one surface. */
+.pane-tabs{flex:0 0 auto;display:flex;gap:4px;padding:12px 28px 0;border-bottom:1px solid var(--line)}
+.pane-tab{border:1px solid transparent;border-bottom:0;background:transparent;color:var(--muted);border-radius:7px 7px 0 0;padding:8px 16px;font:inherit;cursor:pointer}
+.pane-tab b{font-weight:600;font-size:11px;background:#fde8ed;color:#9f102b;border-radius:9px;padding:1px 6px;margin-left:4px}
+.pane-tab:hover{background:#fff6f8;color:#9f102b}
+.pane-tab.active{background:#fff;border-color:var(--line);color:#C8102E;font-weight:650;margin-bottom:-1px}
+.pane-view[hidden]{display:none}
+.composer[hidden]{display:none}
+
+/* Task board: one column per real task state, cards update from SSE. */
+.task-board{flex:1;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(4,minmax(210px,1fr));gap:14px;padding:18px 28px 24px;align-items:start}
+.board-column{background:#fffafb;border:1px solid var(--line);border-radius:10px;padding:10px;min-height:120px}
+.board-column header{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.board-column header b{color:var(--muted);font-size:12px;font-weight:600}
+.board-chip{font-size:11px;font-weight:700;border-radius:5px;padding:3px 9px;background:#fde8ed;color:#9f102b}
+.board-chip-running{background:#e6f0fb;color:#2f6bb0}.board-chip-review{background:#fff3dc;color:#8a5f00}.board-chip-done{background:#e6f4ec;color:#1c6b4a}
+.board-column-body{display:flex;flex-direction:column;gap:8px}
+.board-card{background:#fff;border:1px solid var(--line);border-left:3px solid #C8102E;border-radius:8px;padding:10px;cursor:pointer}
+.board-card:hover{border-color:#C8102E;box-shadow:var(--shadow)}
+.board-card[data-status="running"]{border-left-color:#3578c6}
+.board-card[data-status="completed"],.board-card[data-status="complete"]{border-left-color:#1c6b4a}
+.board-card[data-status="failed"]{border-left-color:#8b2940}
+.board-card-id{color:var(--muted);font-size:10px;letter-spacing:.03em}
+.board-card strong{display:block;margin:3px 0 8px;font-size:13px;word-break:break-word}
+.board-card-foot{display:flex;justify-content:space-between;gap:8px;font-size:11px}
+.board-assignee{color:#9f102b}.board-status{color:var(--muted)}
+.board-card small{display:block;color:var(--muted);font-size:10px;margin-top:4px}
+.board-empty{color:var(--muted);font-size:12px;border:1px dashed var(--line);border-radius:8px;padding:16px 10px;text-align:center}
+.board-empty-wide{margin:24px 28px}
+
+/* Channel files: uploads plus everything the Agents wrote for this channel. */
+.file-board{flex:1;min-height:0;overflow:auto;padding:18px 28px 24px}
+.file-table{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+.file-row{display:grid;grid-template-columns:minmax(160px,2.4fr) 1.1fr 1fr .7fr 1.3fr .6fr;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #f6eaee;font-size:12px}
+.file-row:last-child{border-bottom:0}
+.file-head{background:#fff5f6;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.05em;font-size:11px}
+.file-name{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-source{font-style:normal;border-radius:4px;padding:2px 7px;font-size:11px;background:#fde8ed;color:#9f102b}
+.file-source-agent_report{background:#e6f4ec;color:#1c6b4a}.file-source-agent_intermediate{background:#fff3dc;color:#8a5f00}
+.file-download{color:#C8102E;text-decoration:none;font-weight:650}.file-download:hover{text-decoration:underline}
+
+/* Composer attachments stage before send so body and files commit together. */
+.attach-btn{display:inline-block;border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:6px;padding:7px 11px;cursor:pointer;font-size:12px}
+.attach-btn:hover{background:#fde8ed;border-color:#C8102E;color:#9f102b}
+.attachment-tray{display:flex;flex-wrap:wrap;gap:6px;padding:4px 13px 0}
+.attachment-chip{display:inline-flex;align-items:center;gap:5px;background:#fff0f3;border:1px solid #edc5ce;border-radius:14px;padding:3px 5px 3px 10px;font-size:11px;color:#5d2632}
+.attachment-chip small{color:var(--muted)}
+.attachment-chip button{border:0;background:transparent;color:#9f102b;cursor:pointer;font-size:14px;line-height:1;padding:0 4px}
+.message-attachments{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.attachment-thumb{display:block;width:132px;border:1px solid var(--line);border-radius:8px;overflow:hidden;text-decoration:none;color:var(--ink);background:#fff}
+.attachment-thumb img{display:block;width:100%;height:88px;object-fit:cover}
+.attachment-thumb span{display:block;padding:5px 7px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attachment-file{display:inline-flex;flex-direction:column;border:1px solid var(--line);border-left:3px solid #C8102E;border-radius:7px;padding:7px 11px;text-decoration:none;color:var(--ink);background:#fff7f8}
+.attachment-file b{font-size:12px}.attachment-file small{color:var(--muted);font-size:10px}
+
 /* Right side thread: compact enough to scan, detailed enough to audit a handoff. */
 .thread-card{display:flex;flex-direction:column;gap:14px}.thread-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.thread-title h2{margin:2px 0 0}.thread-card section{border-top:1px solid var(--line);padding-top:12px}.thread-card section:first-of-type{border-top:0;padding-top:0}.thread-card h3{margin:0 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.thread-message{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0;background:#fff}.thread-message.thread-root{border-left:3px solid var(--red);background:#fff7f8}.thread-message-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px}.thread-message-head strong{font-size:13px}.thread-message-head span{color:var(--blue);border:1px solid #cbdcf2;border-radius:4px;padding:1px 4px}.thread-message-head time{color:var(--muted);margin-left:auto}.thread-message-body{white-space:pre-wrap;word-break:break-word;margin-top:6px}.thread-mentions{margin-top:7px;display:flex;flex-wrap:wrap;gap:4px}.thread-warning{margin-top:8px;padding:7px 8px;border-radius:6px;background:#fff2f3;color:#9f102b;font-size:12px}.thread-item{border:1px solid var(--line);border-radius:7px;padding:9px;margin:7px 0;background:#fff}.thread-item strong,.thread-item span,.thread-item small{display:block}.thread-item span,.thread-item small{font-size:11px;color:var(--muted);margin-top:2px}.thread-item p{margin:6px 0 0;font-size:12px;white-space:pre-wrap}.thread-refs{display:flex;flex-wrap:wrap;gap:3px}

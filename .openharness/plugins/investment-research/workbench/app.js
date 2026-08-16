@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [] };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -29,7 +29,7 @@ async function saveAgentModel(agentId){
   await loadWorkspace(false); showAgent(agentId); toast(`已将 ${result.name || agentId} 切换为 ${model}`);
 }
 function showMessage(id){ const m=state.messages.find(x=>x.message_id===id); if(!m)return; $('context-content').innerHTML=`<div class="context-card"><h2>${esc(kindLabel(m.message_kind))}</h2><p>${esc(m.body)}</p><h3>消息信息</h3><div class="kv"><span>作者</span><strong>${esc(labels[m.author_id]||m.author_id)}</strong></div><div class="kv"><span>时间</span><strong>${esc(m.created_at)}</strong></div><div class="kv"><span>关联任务</span><strong>${esc(m.metadata?.task_id||'无')}</strong></div><p class="muted">详细线程能力会在下一阶段加入；当前先把主频道、任务状态和真实运行结果打通。</p></div>`; }
-async function loadWorkspace(show=true){ const res=await fetch('/api/workspace',{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); renderAgents(); renderRun(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
+async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
 async function loadMessages(){ const res=await fetch(`/api/channels/${state.channelId}/messages`); state.messages=await res.json(); renderMessages(); }
 async function openReport(){ const res=await fetch(`/api/research/report?run_id=${encodeURIComponent(state.run.run_id||'')}`); if(!res.ok){toast('当前还没有报告');return;} const text=await res.text(); const win=window.open(); win.document.write(`<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;padding:28px">${esc(text)}</pre>`); win.document.close(); }
 function setupComposer(){
@@ -51,12 +51,15 @@ function setupComposer(){
   $('composer').addEventListener('submit',async e=>{
     e.preventDefault();
     const body=input.value.trim();
-    if(!body)return;
+    const attachmentIds=state.pendingAttachments.map(item=>item.file_id);
+    if(!body && !attachmentIds.length)return;
     const company=body.includes('科大讯飞')?'科大讯飞':body.includes('宁德时代')?'宁德时代':'科大讯飞';
-    const res=await fetch(`/api/channels/${state.channelId}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,company,as_of_date:new Date().toISOString().slice(0,10)})});
+    const res=await fetch(`/api/channels/${state.channelId}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,company,as_of_date:new Date().toISOString().slice(0,10),attachment_ids:attachmentIds})});
     const data=await res.json();
     if(!res.ok){toast(data.error||'发送失败');return;}
     input.value='';
+    state.pendingAttachments=[];
+    renderAttachmentTray();
     menu.style.display='none';
     await loadWorkspace();
     await loadMessages();
@@ -244,8 +247,9 @@ document.addEventListener('visibilitychange',()=>{
 // based on server-published elapsed_seconds; it never claims a tool ran unless
 // the runtime returned a real tool trace.
 const taskStatusLabels = {
-  queued:'排队中', running:'执行中', completed:'已交付', complete:'已交付',
+  queued:'排队中', pending:'待办', running:'执行中', completed:'已交付', complete:'已交付',
   failed:'失败', blocked:'已阻塞', online:'在线',
+  review:'待确认', awaiting_review:'待确认', partial:'部分完成',
 };
 function taskStatusText(status){ return taskStatusLabels[status] || status || '在线'; }
 function formatElapsed(seconds){
@@ -357,6 +361,131 @@ function setupThreadComposer(rootMessageId){
   });
 }
 
+// Chat / Tasks / Files share the centre column.  Only the chat pane owns the
+// composer, so switching to a board never leaves a send box pointing at a view
+// that cannot receive a message.
+function setPane(pane){
+  state.activePane=pane;
+  document.querySelectorAll('.pane-tab').forEach(tab=>tab.classList.toggle('active',tab.dataset.pane===pane));
+  document.querySelectorAll('.pane-view').forEach(view=>{ view.hidden=view.dataset.paneView!==pane; });
+  const composer=$('composer');
+  if(composer) composer.hidden=pane!=='chat';
+  if(pane==='tasks') renderTaskBoard();
+  if(pane==='files') renderFileBoard();
+}
+function setupPaneTabs(){
+  document.querySelectorAll('.pane-tab').forEach(tab=>tab.addEventListener('click',()=>setPane(tab.dataset.pane)));
+  document.querySelectorAll('.rail-btn').forEach((button,index)=>button.addEventListener('click',()=>{
+    document.querySelectorAll('.rail-btn').forEach(item=>item.classList.remove('active'));
+    button.classList.add('active');
+    setPane(['chat','tasks','files'][index] || 'chat');
+  }));
+  setPane('chat');
+}
+
+// The board mirrors the four states an Agent task really moves through.  A
+// status the backend has not published yet lands in 待办 rather than vanishing.
+const TASK_COLUMNS=[
+  {key:'queued', label:'待办', statuses:['queued','pending','blocked']},
+  {key:'running', label:'进行中', statuses:['running']},
+  {key:'review', label:'待确认', statuses:['review','awaiting_review','partial']},
+  {key:'done', label:'完成', statuses:['completed','complete','failed']},
+];
+function taskColumnKey(status){
+  const found=TASK_COLUMNS.find(column=>column.statuses.includes(String(status||'').toLowerCase()));
+  return found ? found.key : 'queued';
+}
+function taskCardHtml(task){
+  const metadata=task.metadata||{};
+  const assignee=labels[task.assignee_id]||task.assignee_id||'未指派';
+  const elapsed=metadata.elapsed_seconds!=null?`<small>已运行 ${esc(formatElapsed(metadata.elapsed_seconds))}</small>`:'';
+  const phase=metadata.phase?`<small>阶段：${esc(metadata.phase)}</small>`:'';
+  return `<article class="board-card" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><div class="board-card-id">${esc(task.task_id)}</div><strong>${esc(task.title)}</strong><div class="board-card-foot"><span class="board-assignee">${esc(assignee)}</span><span class="board-status">${esc(taskStatusText(task.status))}</span></div>${phase}${elapsed}</article>`;
+}
+function renderTaskBoard(){
+  const board=$('task-board');
+  const counter=$('tab-task-count');
+  if(counter) counter.textContent=state.tasks.length;
+  if(!board) return;
+  board.innerHTML=TASK_COLUMNS.map(column=>{
+    const items=state.tasks.filter(task=>taskColumnKey(task.status)===column.key);
+    const cards=items.map(taskCardHtml).join('') || `<div class="board-empty">没有${esc(column.label)}的任务。</div>`;
+    return `<section class="board-column" data-column="${esc(column.key)}"><header><span class="board-chip board-chip-${esc(column.key)}">${esc(column.label)}</span><b>${items.length}</b></header><div class="board-column-body">${cards}</div></section>`;
+  }).join('');
+  board.querySelectorAll('[data-board-task]').forEach(card=>card.addEventListener('click',()=>showTask(card.dataset.boardTask)));
+}
+
+// Every file the channel produced or received, whoever created it.
+const FILE_SOURCE_LABELS={upload:'用户上传', agent_report:'Agent 报告', agent_intermediate:'Agent 中间文件'};
+function formatBytes(size){
+  const value=Number(size)||0;
+  if(value<1024) return `${value} B`;
+  if(value<1024*1024) return `${(value/1024).toFixed(1)} KB`;
+  return `${(value/1024/1024).toFixed(1)} MB`;
+}
+function renderFileBoard(){
+  const board=$('file-board');
+  const counter=$('tab-file-count');
+  if(counter) counter.textContent=state.files.length;
+  if(!board) return;
+  if(!state.files.length){
+    board.innerHTML='<div class="board-empty board-empty-wide">这个频道还没有文件。在聊天框上传，或等 Agent 产出报告后自动同步到这里。</div>';
+    return;
+  }
+  board.innerHTML=`<div class="file-table"><div class="file-row file-head"><span>文件</span><span>来源</span><span>创建者</span><span>大小</span><span>时间</span><span></span></div>${state.files.map(file=>{
+    const owner=labels[file.owner_id]||file.owner_id;
+    const source=FILE_SOURCE_LABELS[file.source]||file.source;
+    return `<div class="file-row"><span class="file-name" title="${esc(file.summary||file.filename)}">${esc(file.filename)}</span><span><em class="file-source file-source-${esc(file.source)}">${esc(source)}</em></span><span>${esc(owner)}</span><span>${esc(formatBytes(file.size_bytes))}</span><span>${esc(new Date(file.created_at).toLocaleString())}</span><span><a class="file-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">下载</a></span></div>`;
+  }).join('')}</div>`;
+}
+
+// Attachments upload before the message is sent, so the message body and its
+// files commit together and a failed upload never produces a dangling chip.
+function fileDataUrl(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(String(reader.result));
+    reader.onerror=()=>reject(new Error(`${file.name} 读取失败`));
+    reader.readAsDataURL(file);
+  });
+}
+function renderAttachmentTray(){
+  const tray=$('attachment-tray');
+  if(!tray) return;
+  tray.hidden=!state.pendingAttachments.length;
+  tray.innerHTML=state.pendingAttachments.map(item=>`<span class="attachment-chip">${esc(item.filename)} <small>${esc(formatBytes(item.size_bytes))}</small><button type="button" data-drop-attachment="${esc(item.file_id)}">×</button></span>`).join('');
+  tray.querySelectorAll('[data-drop-attachment]').forEach(button=>button.addEventListener('click',()=>{
+    state.pendingAttachments=state.pendingAttachments.filter(item=>item.file_id!==button.dataset.dropAttachment);
+    renderAttachmentTray();
+  }));
+}
+async function uploadAttachments(fileList){
+  for(const file of [...fileList].slice(0,10)){
+    if(file.size>20*1024*1024){ toast(`${file.name} 超过 20 MB，未上传`); continue; }
+    try{
+      const dataUrl=await fileDataUrl(file);
+      const response=await fetch(`/api/channels/${encodeURIComponent(state.channelId)}/files`,{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({filename:file.name, data_url:dataUrl}),
+      });
+      const result=await response.json();
+      if(!response.ok) throw new Error(result.error || '上传失败');
+      state.pendingAttachments=[...state.pendingAttachments,result];
+    }catch(error){ toast(error.message || `${file.name} 上传失败`); }
+  }
+  renderAttachmentTray();
+  await loadWorkspace(false);
+}
+function setupAttachments(){
+  const input=$('attachment-input');
+  if(!input) return;
+  input.addEventListener('change',async event=>{
+    const files=event.target.files;
+    if(files && files.length) await uploadAttachments(files);
+    event.target.value='';
+  });
+}
+
 function renderChannels(){
   const list=$('channel-list');
   if(!list) return;
@@ -464,3 +593,25 @@ function setupCreationDialogs(){
 }
 
 document.addEventListener('DOMContentLoaded',setupCreationDialogs);
+document.addEventListener('DOMContentLoaded',()=>{ setupPaneTabs(); setupAttachments(); });
+
+// Attachments belong to the message they were sent with, so they render in the
+// timeline instead of only appearing in the files tab.
+const renderMessagesBeforeAttachments = renderMessages;
+renderMessages = function(){
+  renderMessagesBeforeAttachments();
+  document.querySelectorAll('.message').forEach(article=>{
+    const message=state.messages.find(item=>item.message_id===article.dataset.message);
+    const attachments=message?.metadata?.attachments || [];
+    if(!attachments.length) return;
+    const strip=document.createElement('div');
+    strip.className='message-attachments';
+    strip.innerHTML=attachments.map(item=>{
+      const href=`/api/files/${encodeURIComponent(item.file_id)}/download`;
+      return String(item.media_type||'').startsWith('image/')
+        ? `<a class="attachment-thumb" href="${href}" target="_blank" rel="noreferrer"><img src="${href}" alt="${esc(item.filename)}"><span>${esc(item.filename)}</span></a>`
+        : `<a class="attachment-file" href="${href}"><b>${esc(item.filename)}</b><small>${esc(formatBytes(item.size_bytes))}</small></a>`;
+    }).join('');
+    article.querySelector('.message-main').appendChild(strip);
+  });
+};
