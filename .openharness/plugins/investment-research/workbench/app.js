@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [] };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -15,11 +15,78 @@ function renderContext(){ const r=state.run||{}; const current=state.tasks.find(
 function showAgent(id){
   const a=state.agents.find(x=>x.agent_id===id)||{};
   const isCustom=a.type==='custom';
-  const avatar=a.avatar_path?`<img class="profile-avatar" src="/${esc(a.avatar_path)}" alt="${esc(a.name||id)}">`:'';
   const model=a.model||state.modelSettings.default_model;
-  $('context-content').innerHTML=`<div class="context-card">${avatar}<h2>${esc(a.name||labels[id]||id)}</h2><p class="muted">${esc(a.role||roles[id]||'Agent')}</p><div class="kv"><span>Agent ID</span><strong>${esc(id)}</strong></div><div class="kv"><span>类型</span><strong>${isCustom?'自定义':'系统内置'}</strong></div><div class="kv"><span>当前模型</span><strong>${esc(model)}</strong></div><h3>个人简介</h3><p>${esc(a.profile||'暂无简介')}</p>${isCustom?`<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`:`<h3>工具白名单</h3><div>${(a.allowed_tools||[]).map(t=>`<span class="tool-tag">${esc(t)}</span>`).join('')||'<span class="muted">当前角色无直接工具</span>'}</div><h3>切换模型</h3><select id="agent-model-select">${modelOptionsHtml(model)}</select>`}<h3>状态</h3><p><span class="status-dot"></span> ${esc(a.status||'online')} · 等待频道任务</p><div class="context-actions">${isCustom?'<button id="edit-agent" class="primary" type="button">编辑 Agent</button>':'<button id="save-agent-model" class="primary" type="button">保存模型</button>'}</div></div>`;
+  const avatar=a.avatar_path
+    ? `<img class="profile-avatar" src="/${esc(a.avatar_path)}" alt="${esc(a.name||id)}">`
+    : `<div class="profile-avatar profile-avatar-fallback" style="background:${agentColors[id] || '#58746a'}">${esc(initials(id))}</div>`;
+  // Model and avatar are operator choices for every Agent, built-in included.
+  // Prompt and contract stay editable only for custom Agents.
+  $('context-content').innerHTML=`<div class="context-card"><div class="profile-head">${avatar}<label class="avatar-replace">更换头像<input id="agent-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></div><h2>${esc(a.name||labels[id]||id)}</h2><p class="muted">${esc(a.role||roles[id]||'Agent')}</p><div class="kv"><span>Agent ID</span><strong>${esc(id)}</strong></div><div class="kv"><span>类型</span><strong>${isCustom?'自定义':'系统内置'}</strong></div><div class="kv"><span>当前模型</span><strong>${esc(model)}</strong></div><h3>个人简介</h3><p>${esc(a.profile||'暂无简介')}</p>${isCustom?`<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`:`<h3>工具白名单</h3><div>${(a.allowed_tools||[]).map(t=>`<span class="tool-tag">${esc(t)}</span>`).join('')||'<span class="muted">当前角色无直接工具</span>'}</div>`}<h3>切换模型</h3><select id="agent-model-select">${modelOptionsHtml(model)}</select><h3>状态</h3><p><span class="status-dot"></span> ${esc(taskStatusText(a.status))} · ${esc(a.task_phase||'等待频道任务')}</p><div class="context-actions"><button id="save-agent-model" class="primary" type="button">保存模型</button>${isCustom?'<button id="edit-agent" class="secondary" type="button">编辑资料</button>':''}</div></div><div class="context-card dm-card"><h2>单独对话</h2><p class="muted">只有你和 ${esc(a.name||id)} 的一对一频道，不进入项目频道。</p><div id="dm-list" class="dm-list"><p class="muted">正在加载对话…</p></div><form id="dm-composer" class="thread-composer"><textarea id="dm-input" rows="3" placeholder="直接跟 ${esc(a.name||id)} 说，例如：帮我核一下这条数据的来源"></textarea><div class="thread-composer-footer"><span>发送后会为它单独建一个任务。</span><button type="submit" class="send">发送</button></div></form></div>`;
   $('edit-agent')?.addEventListener('click',()=>openAgentEditor(id));
   $('save-agent-model')?.addEventListener('click',()=>saveAgentModel(id));
+  $('agent-avatar-input')?.addEventListener('change',event=>saveAgentAvatar(id,event));
+  setupDirectMessages(id);
+}
+
+async function saveAgentAvatar(agentId,event){
+  const file=event.target.files?.[0];
+  event.target.value='';
+  if(!file) return;
+  try{
+    const avatar=await avatarDataUrl(file);
+    const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}`,{
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({avatar_data_url:avatar}),
+    });
+    const result=await response.json();
+    if(!response.ok) throw new Error(result.error || '头像更新失败');
+    await loadWorkspace(false);
+    showAgent(agentId);
+    toast(`${result.name || agentId} 的头像已更新`);
+  }catch(error){ toast(error.message || '头像更新失败'); }
+}
+
+// A direct message is a private 1:1 channel per Agent.  It reuses the same
+// task pipeline as an @mention, so the reply is a real run, not a chat echo.
+function directMessageHtml(message){
+  const mine=message.author_type==='human';
+  const body=esc(message.body).replace(/(@[A-Za-z_]+)/g,'<span class="mention">$1</span>');
+  return `<div class="dm-message ${mine?'dm-mine':''}"><div class="dm-message-head"><strong>${esc(labels[message.author_id]||message.author_id)}</strong><time>${esc(new Date(message.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}))}</time></div><div class="dm-message-body">${body}</div></div>`;
+}
+async function loadDirectMessages(agentId){
+  const list=$('dm-list');
+  if(!list) return;
+  try{
+    const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages`,{cache:'no-store'});
+    if(!response.ok) throw new Error('unavailable');
+    const data=await response.json();
+    list.innerHTML=(data.messages||[]).length
+      ? data.messages.map(directMessageHtml).join('')
+      : '<p class="muted">还没有单独对话。发第一条消息给它。</p>';
+    list.scrollTop=list.scrollHeight;
+  }catch(_error){
+    list.innerHTML='<p class="muted">单独对话暂时不可用，请刷新后重试。</p>';
+  }
+}
+function setupDirectMessages(agentId){
+  loadDirectMessages(agentId);
+  const form=$('dm-composer');
+  const input=$('dm-input');
+  if(!form || !input) return;
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();
+    const body=input.value.trim();
+    if(!body) return;
+    const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({body, as_of_date:state.run?.as_of_date || new Date().toISOString().slice(0,10)}),
+    });
+    const result=await response.json();
+    if(!response.ok){ toast(result.error || '发送失败'); return; }
+    input.value='';
+    await loadDirectMessages(agentId);
+    toast(result.notice || (result.status==='agent_started' ? '已单独派给它一个任务' : '消息已发送'));
+  });
 }
 async function saveAgentModel(agentId){
   const model=$('agent-model-select').value;
@@ -29,7 +96,7 @@ async function saveAgentModel(agentId){
   await loadWorkspace(false); showAgent(agentId); toast(`已将 ${result.name || agentId} 切换为 ${model}`);
 }
 function showMessage(id){ const m=state.messages.find(x=>x.message_id===id); if(!m)return; $('context-content').innerHTML=`<div class="context-card"><h2>${esc(kindLabel(m.message_kind))}</h2><p>${esc(m.body)}</p><h3>消息信息</h3><div class="kv"><span>作者</span><strong>${esc(labels[m.author_id]||m.author_id)}</strong></div><div class="kv"><span>时间</span><strong>${esc(m.created_at)}</strong></div><div class="kv"><span>关联任务</span><strong>${esc(m.metadata?.task_id||'无')}</strong></div><p class="muted">详细线程能力会在下一阶段加入；当前先把主频道、任务状态和真实运行结果打通。</p></div>`; }
-async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
+async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
 async function loadMessages(){ const res=await fetch(`/api/channels/${state.channelId}/messages`); state.messages=await res.json(); renderMessages(); }
 async function openReport(){ const res=await fetch(`/api/research/report?run_id=${encodeURIComponent(state.run.run_id||'')}`); if(!res.ok){toast('当前还没有报告');return;} const text=await res.text(); const win=window.open(); win.document.write(`<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;padding:28px">${esc(text)}</pre>`); win.document.close(); }
 function setupComposer(){
@@ -372,6 +439,7 @@ function setPane(pane){
   if(composer) composer.hidden=pane!=='chat';
   if(pane==='tasks') renderTaskBoard();
   if(pane==='files') renderFileBoard();
+  if(pane==='graph') loadGraph();
 }
 function setupPaneTabs(){
   document.querySelectorAll('.pane-tab').forEach(tab=>tab.addEventListener('click',()=>setPane(tab.dataset.pane)));
@@ -380,6 +448,7 @@ function setupPaneTabs(){
     button.classList.add('active');
     setPane(['chat','tasks','files'][index] || 'chat');
   }));
+  $('open-graph')?.addEventListener('click',()=>setPane('graph'));
   setPane('chat');
 }
 
@@ -413,6 +482,75 @@ function renderTaskBoard(){
     return `<section class="board-column" data-column="${esc(column.key)}"><header><span class="board-chip board-chip-${esc(column.key)}">${esc(column.label)}</span><b>${items.length}</b></header><div class="board-column-body">${cards}</div></section>`;
   }).join('');
   board.querySelectorAll('[data-board-task]').forEach(card=>card.addEventListener('click',()=>showTask(card.dataset.boardTask)));
+}
+
+// Relationship graph: who handed work to whom.  Every edge comes from a real
+// record — a task's creator/assignee pair, or a message and the Agents it
+// mentioned.  Nodes sit on a circle so the layout is stable between refreshes
+// instead of jittering the way a force simulation would.
+const GRAPH_VIEWBOX={width:900, height:520};
+function graphNodePositions(nodes){
+  const centreX=GRAPH_VIEWBOX.width/2, centreY=GRAPH_VIEWBOX.height/2;
+  const radius=Math.min(centreX,centreY)-70;
+  if(nodes.length===1) return new Map([[nodes[0].id,{x:centreX,y:centreY}]]);
+  return new Map(nodes.map((node,index)=>{
+    const angle=(index/nodes.length)*Math.PI*2 - Math.PI/2;
+    return [node.id,{x:centreX+radius*Math.cos(angle), y:centreY+radius*Math.sin(angle)}];
+  }));
+}
+const GRAPH_NODE_FILL={agent:'#C8102E', human:'#7257a8', system:'#6d8c7c'};
+function graphSvg(graph){
+  const nodes=graph.nodes||[];
+  if(!nodes.length) return '<div class="board-empty board-empty-wide">这个频道还没有产生协作记录。派一个任务或 @一个 Agent 之后，关系会出现在这里。</div>';
+  const positions=graphNodePositions(nodes);
+  const maxWeight=Math.max(1,...(graph.edges||[]).map(edge=>edge.weight));
+  const edges=(graph.edges||[]).map(edge=>{
+    const from=positions.get(edge.source), to=positions.get(edge.target);
+    if(!from || !to) return '';
+    // Stop short of the node circle so the arrowhead stays visible.
+    const dx=to.x-from.x, dy=to.y-from.y;
+    const length=Math.hypot(dx,dy) || 1;
+    const endX=to.x-(dx/length)*30, endY=to.y-(dy/length)*30;
+    const width=1+(edge.weight/maxWeight)*4;
+    const dashed=edge.relations.includes('task')?'':'stroke-dasharray="5 4"';
+    return `<line x1="${from.x}" y1="${from.y}" x2="${endX}" y2="${endY}" stroke="#d08a99" stroke-width="${width.toFixed(1)}" ${dashed} marker-end="url(#graph-arrow)"><title>${esc(edge.source)} → ${esc(edge.target)}：${edge.weight} 次（${esc(edge.relations.join('、'))}）</title></line>`;
+  }).join('');
+  const marks=nodes.map(node=>{
+    const point=positions.get(node.id);
+    const fill=GRAPH_NODE_FILL[node.type] || '#58746a';
+    // The clip path must be declared before the image that references it,
+    // otherwise the avatar renders as an unclipped square.
+    const image=node.avatar_path
+      ? `<clipPath id="graph-clip-${esc(node.id)}"><circle cx="${point.x}" cy="${point.y}" r="22"></circle></clipPath><image href="/${esc(node.avatar_path)}" x="${point.x-22}" y="${point.y-22}" width="44" height="44" preserveAspectRatio="xMidYMid slice" clip-path="url(#graph-clip-${esc(node.id)})"></image>`
+      : `<text x="${point.x}" y="${point.y+5}" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">${esc(initials(node.id))}</text>`;
+    return `<g class="graph-node" data-graph-node="${esc(node.id)}"><circle cx="${point.x}" cy="${point.y}" r="22" fill="${fill}"></circle>${image}<text x="${point.x}" y="${point.y+40}" text-anchor="middle" font-size="12" fill="#24151a">${esc(node.name)}</text><text x="${point.x}" y="${point.y+56}" text-anchor="middle" font-size="10" fill="#75666b">${node.connections} 个连接</text><title>${esc(node.name)} · ${esc(node.role)}｜派出 ${node.out_degree}，收到 ${node.in_degree}</title></g>`;
+  }).join('');
+  return `<svg class="graph-svg" viewBox="0 0 ${GRAPH_VIEWBOX.width} ${GRAPH_VIEWBOX.height}" role="img" aria-label="Agent 协作关系图"><defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c07f8e"></path></marker></defs>${edges}${marks}</svg>`;
+}
+function renderGraphBoard(){
+  const board=$('graph-board');
+  const counter=$('tab-edge-count');
+  const graph=state.graph;
+  if(counter) counter.textContent=graph?.stats?.connections ?? 0;
+  if(!board) return;
+  if(!graph){ board.innerHTML='<div class="board-empty board-empty-wide">正在加载关系图…</div>'; return; }
+  const stats=graph.stats||{};
+  const members=(graph.top_members||[]).map(node=>`<div class="graph-rank-row"><span class="graph-dot" style="background:${GRAPH_NODE_FILL[node.type]||'#58746a'}"></span><span>${esc(node.name)}</span><b>${node.connections}</b></div>`).join('') || '<p class="muted">暂无成员。</p>';
+  const channels=(graph.channels||[]).map(channel=>`<div class="graph-rank-row"><span>#${esc(channel.name)}</span><b>${channel.message_count} 条</b></div>`).join('') || '<p class="muted">暂无可见频道。</p>';
+  board.innerHTML=`<div class="graph-layout"><div class="graph-canvas"><div class="graph-canvas-head"><span>关系 <b>${(graph.edges||[]).length}</b></span><button type="button" id="graph-refresh" class="secondary">刷新</button></div>${graphSvg(graph)}<div class="graph-legend"><span><i class="graph-line-solid"></i>任务派发</span><span><i class="graph-line-dashed"></i>@提及</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.agent}"></i>Agent</span><span><i class="graph-dot" style="background:${GRAPH_NODE_FILL.human}"></i>人类</span></div></div><aside class="graph-side"><div class="graph-stats"><div class="graph-stat"><b>${stats.humans ?? 0}</b><span>人类</span></div><div class="graph-stat"><b>${stats.agents ?? 0}</b><span>AGENT</span></div><div class="graph-stat"><b>${stats.connections ?? 0}</b><span>连接</span></div></div><div class="graph-panel"><h3>连接最多的成员</h3>${members}</div><div class="graph-panel"><h3>最大的频道</h3>${channels}</div></aside></div>`;
+  $('graph-refresh')?.addEventListener('click',()=>loadGraph());
+  board.querySelectorAll('[data-graph-node]').forEach(group=>group.addEventListener('click',()=>{
+    const node=graph.nodes.find(item=>item.id===group.dataset.graphNode);
+    if(node?.type==='agent') showAgent(node.id);
+  }));
+}
+async function loadGraph(){
+  try{
+    const response=await fetch(`/api/graph?channel_id=${encodeURIComponent(state.channelId)}`,{cache:'no-store'});
+    if(!response.ok) throw new Error('graph unavailable');
+    state.graph=await response.json();
+  }catch(_error){ state.graph={nodes:[],edges:[],stats:{}}; }
+  renderGraphBoard();
 }
 
 // Every file the channel produced or received, whoever created it.
@@ -489,7 +627,8 @@ function setupAttachments(){
 function renderChannels(){
   const list=$('channel-list');
   if(!list) return;
-  list.innerHTML=state.channels.map(channel=>`<button class="channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}"><span>#</span> ${esc(channel.name)}</button>`).join('');
+  // Direct channels are reached from an Agent profile, not the channel list.
+  list.innerHTML=state.channels.filter(channel=>channel.kind!=='direct').map(channel=>`<button class="channel ${channel.channel_id===state.channelId?'active':''}" data-channel="${esc(channel.channel_id)}"><span>#</span> ${esc(channel.name)}</button>`).join('');
   list.querySelectorAll('[data-channel]').forEach(button=>button.addEventListener('click',async()=>{
     if(button.dataset.channel===state.channelId) return;
     state.channelId=button.dataset.channel;

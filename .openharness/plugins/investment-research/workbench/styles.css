@@ -115,5 +115,54 @@ html,body{height:100%;overflow:hidden}
 .attachment-file{display:inline-flex;flex-direction:column;border:1px solid var(--line);border-left:3px solid #C8102E;border-radius:7px;padding:7px 11px;text-decoration:none;color:var(--ink);background:#fff7f8}
 .attachment-file b{font-size:12px}.attachment-file small{color:var(--muted);font-size:10px}
 
+/* Relationship graph: entry point in the sidebar, canvas in the centre pane. */
+.graph-entry{display:flex;align-items:center;gap:7px;width:100%;border:1px solid #f1b2bf;background:#fde8ed;color:#9f102b;border-radius:8px;padding:9px 11px;margin-bottom:18px;font:inherit;font-weight:650;cursor:pointer}
+.graph-entry:hover{background:#f9dfe5;border-color:#C8102E}
+.graph-entry em{font-style:normal;font-size:9px;letter-spacing:.06em;background:#fff;border:1px solid #f1b2bf;border-radius:4px;padding:1px 5px;margin-left:auto;color:#9f102b}
+.graph-board{flex:1;min-height:0;overflow:auto;padding:18px 28px 24px}
+.graph-layout{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:16px;align-items:start}
+.graph-canvas{border:1px solid var(--line);border-radius:10px;background:#fffafb;padding:12px}
+.graph-canvas-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;color:var(--muted);font-size:12px}
+.graph-canvas-head b{color:var(--ink)}
+.graph-svg{display:block;width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:8px}
+.graph-node{cursor:pointer}
+.graph-node:hover circle{stroke:#C8102E;stroke-width:3}
+.graph-legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;color:var(--muted);font-size:11px}
+.graph-legend span{display:inline-flex;align-items:center;gap:5px}
+.graph-line-solid,.graph-line-dashed{display:inline-block;width:18px;height:0;border-top:2px solid #d08a99}
+.graph-line-dashed{border-top-style:dashed}
+.graph-dot{display:inline-block;width:9px;height:9px;border-radius:50%}
+.graph-side{display:flex;flex-direction:column;gap:12px}
+.graph-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.graph-stat{border:1px solid var(--line);border-radius:9px;background:#fff;padding:10px 6px;text-align:center}
+.graph-stat b{display:block;font-size:20px;color:#C8102E}
+.graph-stat span{display:block;color:var(--muted);font-size:10px;letter-spacing:.05em;margin-top:2px}
+.graph-panel{border:1px solid var(--line);border-radius:9px;background:#fff;padding:12px}
+.graph-panel h3{margin:0 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.graph-rank-row{display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid #f6eaee;font-size:12px}
+.graph-rank-row:last-child{border-bottom:0}
+.graph-rank-row b{margin-left:auto;color:#9f102b}
+@media(max-width:1500px){.graph-layout{grid-template-columns:minmax(0,1fr)}}
+
+/* Agent profile: avatar and model are operator-owned for every Agent. */
+.profile-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.profile-avatar-fallback{display:grid;place-items:center;color:#fff;font-weight:700;font-size:22px;margin-bottom:0}
+.profile-head .profile-avatar{margin-bottom:0}
+.avatar-replace{border:1px solid var(--line);background:#fff;color:#9f102b;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}
+.avatar-replace:hover{background:#fde8ed;border-color:#C8102E}
+#agent-model-select{width:100%;border:1px solid var(--line);border-radius:7px;padding:8px 9px;font:inherit;background:#fff;color:var(--ink)}
+
+/* Private 1:1 conversation with a single Agent, under its profile. */
+.dm-card{display:flex;flex-direction:column}
+.dm-list{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:9px;background:#fff;margin-bottom:9px}
+.dm-message{border-radius:8px;padding:7px 9px;margin-bottom:7px;background:#fff5f6}
+.dm-message.dm-mine{background:#f2f7f4}
+.dm-message:last-child{margin-bottom:0}
+.dm-message-head{display:flex;align-items:baseline;gap:7px;font-size:11px}
+.dm-message-head strong{font-size:12px}
+.dm-message-head time{color:var(--muted);margin-left:auto}
+.dm-message-body{margin-top:3px;font-size:12px;white-space:pre-wrap;word-break:break-word}
+.dm-message-body .mention{color:#C8102E;font-weight:700}
+
 /* Right side thread: compact enough to scan, detailed enough to audit a handoff. */
 .thread-card{display:flex;flex-direction:column;gap:14px}.thread-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.thread-title h2{margin:2px 0 0}.thread-card section{border-top:1px solid var(--line);padding-top:12px}.thread-card section:first-of-type{border-top:0;padding-top:0}.thread-card h3{margin:0 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.thread-message{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0;background:#fff}.thread-message.thread-root{border-left:3px solid var(--red);background:#fff7f8}.thread-message-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px}.thread-message-head strong{font-size:13px}.thread-message-head span{color:var(--blue);border:1px solid #cbdcf2;border-radius:4px;padding:1px 4px}.thread-message-head time{color:var(--muted);margin-left:auto}.thread-message-body{white-space:pre-wrap;word-break:break-word;margin-top:6px}.thread-mentions{margin-top:7px;display:flex;flex-wrap:wrap;gap:4px}.thread-warning{margin-top:8px;padding:7px 8px;border-radius:6px;background:#fff2f3;color:#9f102b;font-size:12px}.thread-item{border:1px solid var(--line);border-radius:7px;padding:9px;margin:7px 0;background:#fff}.thread-item strong,.thread-item span,.thread-item small{display:block}.thread-item span,.thread-item small{font-size:11px;color:var(--muted);margin-top:2px}.thread-item p{margin:6px 0 0;font-size:12px;white-space:pre-wrap}.thread-refs{display:flex;flex-wrap:wrap;gap:3px}

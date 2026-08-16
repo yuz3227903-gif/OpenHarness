@@ -116,6 +116,16 @@ class CollaborationStore:
                     connection.execute(
                         f"ALTER TABLE workbench_channels ADD COLUMN {name} {definition}"
                     )
+            # Built-in Agents have no row in workbench_agents, so their avatar
+            # lives beside their model override.
+            override_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(workbench_agent_overrides)")
+            }
+            if "avatar_path" not in override_columns:
+                connection.execute(
+                    "ALTER TABLE workbench_agent_overrides ADD COLUMN avatar_path TEXT"
+                )
 
     def _seed_defaults(self) -> None:
         # Keep seed values ASCII here; the UI supplies the Chinese display labels.
@@ -202,13 +212,15 @@ class CollaborationStore:
             ).fetchall()
         with self._lock, self._connect() as connection:
             overrides = {
-                row["agent_id"]: row["model"]
+                row["agent_id"]: dict(row)
                 for row in connection.execute(
-                    "SELECT agent_id, model FROM workbench_agent_overrides"
+                    "SELECT agent_id, model, avatar_path FROM workbench_agent_overrides"
                 ).fetchall()
             }
         for item in built_in:
-            item["model"] = overrides.get(item["agent_id"], item["model"])
+            override = overrides.get(item["agent_id"]) or {}
+            item["model"] = override.get("model") or item["model"]
+            item["avatar_path"] = override.get("avatar_path") or item["avatar_path"]
         custom = []
         for row in rows:
             item = dict(row)
@@ -241,6 +253,58 @@ class CollaborationStore:
                     (agent_id, model, timestamp),
                 )
         return self.get_agent(agent_id)
+
+    def update_agent_avatar(self, agent_id: str, avatar_path: str) -> dict[str, Any] | None:
+        """Set an Agent avatar, including the built-in roles.
+
+        Built-in Agents are defined in code and have no ``workbench_agents``
+        row, so their avatar is stored in the override table next to the model.
+        """
+
+        agent = self.get_agent(agent_id)
+        if agent is None:
+            return None
+        timestamp = _now()
+        with self._lock, self._connect() as connection:
+            custom = connection.execute(
+                "SELECT 1 FROM workbench_agents WHERE agent_id=?", (agent_id,)
+            ).fetchone()
+            if custom is not None:
+                connection.execute(
+                    "UPDATE workbench_agents SET avatar_path=?, updated_at=? WHERE agent_id=?",
+                    (avatar_path, timestamp, agent_id),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO workbench_agent_overrides(agent_id, model, avatar_path, updated_at)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(agent_id) DO UPDATE SET
+                         avatar_path=excluded.avatar_path, updated_at=excluded.updated_at""",
+                    (agent_id, str(agent.get("model") or ""), avatar_path, timestamp),
+                )
+        return self.get_agent(agent_id)
+
+    def ensure_direct_channel(self, agent_id: str, agent_name: str) -> dict[str, Any]:
+        """Return the 1:1 channel for one Agent, creating it on first use."""
+
+        channel_id = f"dm-{agent_id}"
+        with self._lock, self._connect() as connection:
+            timestamp = _now()
+            connection.execute(
+                """INSERT OR IGNORE INTO workbench_channels(
+                    channel_id, workspace_id, name, kind, project_company, topic,
+                    description, root_task_id, created_at
+                ) VALUES (?, 'default', ?, 'direct', NULL, ?, ?, NULL, ?)""",
+                (channel_id, agent_name, f"与 {agent_name} 的单独对话",
+                 "只有你和这个 Agent 可见的一对一频道。", timestamp),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO workbench_channel_members(channel_id, agent_id, created_at) VALUES (?, ?, ?)",
+                (channel_id, agent_id, timestamp),
+            )
+        return next(
+            item for item in self.list_channels() if item["channel_id"] == channel_id
+        )
 
     def create_agent(
         self, *, name: str, profile: str, role: str, system_prompt: str, model: str,

@@ -224,6 +224,92 @@ def _sync_agent_files(channel_id: str, run_id: str | None) -> None:
         )
 
 
+def _relationship_graph(channel_id: str) -> dict[str, Any]:
+    """Build the who-works-with-whom graph for one channel.
+
+    Two real collaboration records become edges: a task, whose creator handed
+    work to its assignee, and a message, whose author addressed the Agents it
+    mentioned.  Nothing is inferred — a pair with no record has no edge.
+    """
+
+    agents = {item["agent_id"]: item for item in STORE.list_agents()}
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def touch(member_id: str) -> str | None:
+        member_id = str(member_id or "").strip()
+        if not member_id or member_id == "unassigned":
+            return None
+        if member_id not in nodes:
+            agent = agents.get(member_id)
+            if agent is not None:
+                kind = "agent"
+                name = str(agent.get("name") or member_id)
+                role = str(agent.get("role") or "Agent")
+                avatar_path = agent.get("avatar_path")
+            elif member_id == "system":
+                kind, name, role, avatar_path = "system", "工作台", "系统事件", None
+            else:
+                kind, name, role, avatar_path = "human", "你", "频道所有者", None
+            nodes[member_id] = {
+                "id": member_id, "name": name, "role": role, "type": kind,
+                "avatar_path": avatar_path, "out_degree": 0, "in_degree": 0,
+                "connections": 0,
+            }
+        return member_id
+
+    def link(source: str, target: str, relation: str) -> None:
+        source_id, target_id = touch(source), touch(target)
+        if not source_id or not target_id or source_id == target_id:
+            return
+        key = (source_id, target_id)
+        edge = edges.setdefault(
+            key,
+            {"source": source_id, "target": target_id, "weight": 0, "relations": []},
+        )
+        edge["weight"] += 1
+        if relation not in edge["relations"]:
+            edge["relations"].append(relation)
+
+    for task in STORE.list_tasks(channel_id):
+        link(str(task.get("created_by") or ""), str(task.get("assignee_id") or ""), "task")
+    for message in STORE.list_messages(channel_id):
+        for mention in message.get("mentions") or []:
+            link(str(message.get("author_id") or ""), str(mention), "mention")
+
+    for edge in edges.values():
+        nodes[edge["source"]]["out_degree"] += edge["weight"]
+        nodes[edge["target"]]["in_degree"] += edge["weight"]
+    for node in nodes.values():
+        node["connections"] = node["out_degree"] + node["in_degree"]
+
+    channel_sizes = []
+    for channel in STORE.list_channels():
+        if channel.get("kind") == "direct":
+            continue
+        message_count = len(STORE.list_messages(channel["channel_id"], limit=500))
+        channel_sizes.append({
+            "channel_id": channel["channel_id"], "name": channel["name"],
+            "member_count": len(channel.get("member_ids") or []),
+            "message_count": message_count,
+        })
+    channel_sizes.sort(key=lambda item: item["message_count"], reverse=True)
+
+    ranked = sorted(nodes.values(), key=lambda item: item["connections"], reverse=True)
+    return {
+        "channel_id": channel_id,
+        "nodes": ranked,
+        "edges": sorted(edges.values(), key=lambda item: item["weight"], reverse=True),
+        "stats": {
+            "humans": sum(1 for node in nodes.values() if node["type"] == "human"),
+            "agents": sum(1 for node in nodes.values() if node["type"] == "agent"),
+            "connections": len(edges),
+        },
+        "top_members": ranked[:5],
+        "channels": channel_sizes[:5],
+    }
+
+
 def _channel_attachments(channel_id: str, raw_ids: Any) -> list[dict[str, Any]]:
     """Resolve client-supplied attachment IDs to files this channel really owns."""
 
@@ -1182,12 +1268,26 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self._send(200, payload)
         elif path == "/api/agents":
             self._send(200, STORE.list_agents())
+        elif path.startswith("/api/agents/") and path.endswith("/messages"):
+            agent_id = path.split("/")[3]
+            agent = STORE.get_agent(agent_id)
+            if agent is None:
+                self._send(404, {"error": "Agent not found"})
+                return
+            channel = STORE.ensure_direct_channel(agent_id, str(agent.get("name") or agent_id))
+            self._send(200, {
+                "channel": channel,
+                "agent": agent,
+                "messages": STORE.list_messages(channel["channel_id"]),
+            })
         elif path == "/api/models":
             self._send(200, _model_settings_payload())
         elif path == "/api/tasks":
             self._send(200, STORE.list_tasks(query.get("channel_id", [None])[0]))
         elif path == "/api/artifacts":
             self._send(200, STORE.list_artifacts(query.get("channel_id", [None])[0]))
+        elif path == "/api/graph":
+            self._send(200, _relationship_graph(query.get("channel_id", ["research-room"])[0]))
         elif path == "/api/files":
             channel_id = query.get("channel_id", ["research-room"])[0]
             _sync_agent_files(channel_id, RUN_STATE.get("run_id"))
@@ -1336,6 +1436,48 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             status, payload = _start_research(str(body.get("company") or "").strip(), str(body.get("as_of_date") or "").strip(), str(body.get("channel_id") or "research-room"), "owner")
             self._send(status, payload)
             return
+        if path.startswith("/api/agents/") and path.endswith("/messages"):
+            agent_id = path.split("/")[3]
+            agent = STORE.get_agent(agent_id)
+            if agent is None:
+                self._send(404, {"error": "Agent not found"})
+                return
+            text = str(body.get("body") or "").strip()
+            if not text:
+                self._send(400, {"error": "message body is required"})
+                return
+            channel = STORE.ensure_direct_channel(agent_id, str(agent.get("name") or agent_id))
+            channel_id = channel["channel_id"]
+            message = STORE.add_message(
+                channel_id=channel_id, author_id="owner", author_type="human",
+                message_kind="user_message", body=text, mentions=[agent_id],
+                metadata={"direct_message": True},
+            )
+            STORE.add_event(
+                channel_id=channel_id, event_type="message_created", payload={"message": message}
+            )
+            if agent_id not in DIRECT_AGENT_IDS:
+                self._send(201, {
+                    "message": message, "channel": channel, "status": "recorded",
+                    "notice": f"{agent.get('name') or agent_id} 不接受单独任务；请在项目频道 @Planner 启动完整研究。",
+                })
+                return
+            try:
+                as_of = date.fromisoformat(
+                    str(body.get("as_of_date") or time.strftime("%Y-%m-%d"))
+                )
+            except ValueError:
+                self._send(400, {"error": "as_of_date must use YYYY-MM-DD"})
+                return
+            tasks = _start_direct_agent_tasks(
+                channel_id=channel_id, root_message=message, agent_ids=[agent_id],
+                objective=text, as_of_date=as_of,
+            )
+            self._send(HTTPStatus.ACCEPTED, {
+                "message": message, "channel": channel, "status": "agent_started",
+                "agent_ids": [agent_id], "tasks": tasks,
+            })
+            return
         if path == "/api/agents":
             try:
                 avatar_path = _save_avatar(str(body.get("avatar_data_url") or ""))
@@ -1475,10 +1617,26 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "model is not available in the Ark Plan catalog"})
                 return
             if agent.get("type") != "custom":
-                if set(updates) != {"model"} or body.get("avatar_data_url"):
-                    self._send(400, {"error": "built-in Agents only allow model changes"})
+                # A built-in role's prompt and contract stay fixed, but the
+                # operator still owns its model choice and its avatar.
+                if set(updates) - {"model"}:
+                    self._send(400, {"error": "built-in Agents only allow model and avatar changes"})
                     return
-                self._send(200, STORE.update_agent_model(agent_id, str(updates["model"])))
+                if not updates and not body.get("avatar_data_url"):
+                    self._send(400, {"error": "nothing to update"})
+                    return
+                updated = agent
+                if "model" in updates:
+                    updated = STORE.update_agent_model(agent_id, str(updates["model"])) or agent
+                if body.get("avatar_data_url"):
+                    try:
+                        avatar_path = _save_avatar(str(body["avatar_data_url"]))
+                    except ValueError as exc:
+                        self._send(400, {"error": str(exc)})
+                        return
+                    if avatar_path:
+                        updated = STORE.update_agent_avatar(agent_id, avatar_path) or updated
+                self._send(200, updated)
                 return
             if body.get("avatar_data_url"):
                 try:
