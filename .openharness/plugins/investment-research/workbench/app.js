@@ -1,4 +1,4 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, skills: {} };
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {} };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -154,7 +154,7 @@ async function saveAgentModel(agentId){
   await loadWorkspace(false); showAgent(agentId); toast(`已将 ${result.name || agentId} 切换为 ${model}`);
 }
 function showMessage(id){ const m=state.messages.find(x=>x.message_id===id); if(!m)return; $('context-content').innerHTML=`<div class="context-card"><h2>${esc(kindLabel(m.message_kind))}</h2><p>${esc(m.body)}</p><h3>消息信息</h3><div class="kv"><span>作者</span><strong>${esc(labels[m.author_id]||m.author_id)}</strong></div><div class="kv"><span>时间</span><strong>${esc(m.created_at)}</strong></div><div class="kv"><span>关联任务</span><strong>${esc(m.metadata?.task_id||'无')}</strong></div><p class="muted">详细线程能力会在下一阶段加入；当前先把主频道、任务状态和真实运行结果打通。</p></div>`; }
-async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}&files=all`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); applyChannelHeader(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
+async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}&files=all`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.removedAgents=data.removed_agents||[]; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); applyChannelHeader(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
 async function loadMessages(){ const res=await fetch(`/api/channels/${state.channelId}/messages`); state.messages=await res.json(); renderMessages(); }
 async function openReport(){ const res=await fetch(`/api/research/report?run_id=${encodeURIComponent(state.run.run_id||'')}`); if(!res.ok){toast('当前还没有报告');return;} const text=await res.text(); const win=window.open(); win.document.write(`<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;padding:28px">${esc(text)}</pre>`); win.document.close(); }
 function setupComposer(){
@@ -819,7 +819,11 @@ function mountForceGraph(container, graph){
 
   node.append('circle')
     .attr('r',GRAPH_NODE_RADIUS)
-    .attr('fill',d=>GRAPH_NODE_FILL[d.type] || '#58746a');
+    // A removed Agent keeps its node because its past work is a real record,
+    // but it is greyed so it does not read as an active member.
+    .attr('fill',d=>d.removed ? '#b9a7ad' : (GRAPH_NODE_FILL[d.type] || '#58746a'))
+    .attr('stroke',d=>d.removed ? '#8d7b81' : null)
+    .attr('stroke-dasharray',d=>d.removed ? '3 3' : null);
   node.filter(d=>d.avatar_path).append('image')
     .attr('href',d=>`/${d.avatar_path}`)
     .attr('x',-GRAPH_NODE_RADIUS).attr('y',-GRAPH_NODE_RADIUS)
@@ -832,7 +836,9 @@ function mountForceGraph(container, graph){
     .text(d=>initials(d.id));
   node.append('text')
     .attr('text-anchor','middle').attr('dy',GRAPH_NODE_RADIUS+18)
-    .attr('font-size',12).attr('fill','#24151a').text(d=>d.name);
+    .attr('font-size',12)
+    .attr('fill',d=>d.removed ? '#8d7b81' : '#24151a')
+    .text(d=>d.removed ? `${d.name}（已移除）` : d.name);
   node.append('text')
     .attr('text-anchor','middle').attr('dy',GRAPH_NODE_RADIUS+34)
     .attr('font-size',10).attr('fill','#75666b').text(d=>`${d.connections} 个连接`);
@@ -1016,9 +1022,9 @@ function agentRowHtml(agent){
   const name=agent.name || labels[agent.agent_id] || agent.agent_id;
   const role=agent.role || roles[agent.agent_id] || 'Agent';
   const avatar=agent.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agent.agent_id));
-  // A built-in role is defined in the plugin, so it can be reconfigured but
-  // never edited or deleted here; only a custom Agent gets row actions.
-  const actions=agent.type==='custom' ? rowActionsHtml('agent',agent.agent_id) : '';
+  // Every Agent can be removed. Only a custom one can have its profile edited;
+  // a built-in role's prompt and contract belong to the plugin.
+  const actions=rowActionsHtml('agent',agent.agent_id,{edit:agent.type==='custom'});
   // Name and role sit side by side on one line. A busy Agent shows its live
   // status in the role's place instead, so the roster never hides real state
   // to save a line — CSS picks one of the two from data-status.
@@ -1047,10 +1053,14 @@ function renderSidebar(){
   const body=$('sidebar-body');
   const plus=id=>`<button id="${id}" class="section-add" type="button">${icon('plus')}</button>`;
 
+  // A removed built-in Agent stays listed so the removal is not a one-way door.
+  const removed=state.removedAgents || [];
+  const removedRows=removed.map(agent=>`<div class="row-wrap removed-row"><div class="agent-row"><div class="agent-avatar" style="background:#b9a7ad">${esc(initials(agent.agent_id))}</div><div class="agent-copy"><strong>${esc(agent.name||agent.agent_id)}</strong><span class="agent-role-label">${esc(agent.role||'Agent')}</span></div></div><span class="row-actions row-actions-static"><button type="button" class="row-action" data-restore-agent="${esc(agent.agent_id)}" title="恢复">${icon('refresh')}</button></span></div>`).join('');
   body.innerHTML=
     sectionHtml('channels','频道',projects.length,projects.map(channelButtonHtml).join(''),plus('create-channel'))+
     sectionHtml('dms','私信',directs.length,directs.map(dmButtonHtml).join('') || '<p class="sidebar-hint">还没有私信。点右上角 + 发起一条。</p>',plus('create-dm'))+
-    sectionHtml('agents','Agent',state.agents.length,state.agents.map(agentRowHtml).join(''),plus('create-agent'));
+    sectionHtml('agents','Agent',state.agents.length,state.agents.map(agentRowHtml).join(''),plus('create-agent'))+
+    (removed.length ? sectionHtml('removedAgents','已移除',removed.length,removedRows) : '');
   bindSidebar();
 }
 function bindSidebar(){
@@ -1087,6 +1097,10 @@ function bindSidebar(){
     event.stopPropagation();
     deleteAgent(button.dataset.deleteAgent);
   }));
+  document.querySelectorAll('[data-restore-agent]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    restoreAgent(button.dataset.restoreAgent);
+  }));
   bindChannelButtons();
 }
 
@@ -1113,12 +1127,26 @@ async function deleteChannel(channelId){
 
 async function deleteAgent(agentId){
   const agent=state.agents.find(item=>item.agent_id===agentId);
-  if(!window.confirm(`确定删除 Agent「${agent?.name||agentId}」吗？此操作无法恢复。`)) return;
+  const name=agent?.name || agentId;
+  // Removing a built-in role also removes it from the seven-Agent research
+  // flow, so say so rather than letting the run fail later.
+  const message=agent?.type==='custom'
+    ? `确定删除 Agent「${name}」吗？此操作无法恢复。`
+    : `确定把内置 Agent「${name}」移出工作区吗？\n它将不再出现，也不能接收任务，完整研究流程会缺少这个角色。\n插件定义保留在本地，之后可以恢复。`;
+  if(!window.confirm(message)) return;
   const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}`,{method:'DELETE'});
   const result=await response.json();
   if(!response.ok){ toast(result.error || '删除 Agent 失败'); return; }
   await loadWorkspace(false);
-  toast(`Agent「${agent?.name||agentId}」已删除`);
+  toast(result.notice || `Agent「${name}」已删除`);
+}
+
+async function restoreAgent(agentId){
+  const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/restore`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const result=await response.json();
+  if(!response.ok){ toast(result.error || '恢复失败'); return; }
+  await loadWorkspace(false);
+  toast(`「${result.name || agentId}」已恢复`);
 }
 function renderChannels(){ renderSidebar(); }
 

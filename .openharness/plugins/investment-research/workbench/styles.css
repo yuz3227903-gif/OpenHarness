@@ -185,6 +185,11 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .row-action:hover{color:#C8102E}
 .row-action.row-danger:hover{background:#fde8ed;color:#9f102b}
 .row-action .icon{width:13px;height:13px}
+/* A removed built-in Agent stays visible, greyed, with a restore button that
+   does not wait for hover — otherwise the removal looks permanent. */
+.removed-row{opacity:.62}
+.removed-row .agent-copy strong{text-decoration:line-through}
+.row-actions-static{display:inline-flex;position:static;margin-left:auto}
 .channel-count{margin-left:auto;color:var(--muted);font-weight:500;font-size:11px}
 .file-channel{color:var(--muted)}
 

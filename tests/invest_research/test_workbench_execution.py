@@ -233,6 +233,133 @@ class TestDirectTaskCleanup:
         assert not any("NameError" in str(item["body"]) for item in messages), messages
 
 
+class TestRemovingBuiltinAgents:
+    def test_a_built_in_agent_can_be_removed_and_restored(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        assert any(item["agent_id"] == "risk" for item in store.list_agents())
+
+        assert store.set_builtin_agent_removed("risk", True) is True
+        assert all(item["agent_id"] != "risk" for item in store.list_agents())
+        # The plugin definition is untouched, so the removal is reversible.
+        assert any(
+            item["agent_id"] == "risk" for item in store.list_agents(include_removed=True)
+        )
+
+        assert store.set_builtin_agent_removed("risk", False) is True
+        assert any(item["agent_id"] == "risk" for item in store.list_agents())
+
+    def test_removing_one_agent_leaves_the_others(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        before = len(store.list_agents())
+        store.set_builtin_agent_removed("risk", True)
+        assert len(store.list_agents()) == before - 1
+
+    def test_a_removed_agent_is_listed_for_restore(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        store.set_builtin_agent_removed("report_writer", True)
+        removed = store.removed_builtin_agents()
+        assert [item["agent_id"] for item in removed] == ["report_writer"]
+
+    def test_an_unknown_agent_cannot_be_removed(self, tmp_path):
+        assert CollaborationStore(tmp_path).set_builtin_agent_removed("nope", True) is False
+
+    def test_a_custom_agent_is_not_removed_by_the_builtin_flag(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        agent = store.create_agent(
+            name="自定义", profile="p", role="r", system_prompt="s", model="deepseek-v4-flash",
+        )
+        # A custom Agent is deleted outright, so the reversible flag must refuse it.
+        assert store.set_builtin_agent_removed(agent["agent_id"], True) is False
+        assert any(item["agent_id"] == agent["agent_id"] for item in store.list_agents())
+
+    def test_a_removed_agent_is_still_identified_as_an_agent(self, monkeypatch, tmp_path):
+        """Its past work is real, so the graph must not mislabel it.
+
+        The graph builds its identity lookup from the roster. If that lookup
+        excluded removed Agents, an unknown id would fall through to the
+        human-owner branch and the node would render as 你.
+        """
+
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        store.create_task(
+            channel_id="research-room", created_by="planner", assignee_id="risk",
+            title="历史任务",
+        )
+        store.set_builtin_agent_removed("risk", True)
+
+        graph = server._relationship_graph("")
+        node = next(item for item in graph["nodes"] if item["id"] == "risk")
+        assert node["type"] == "agent"
+        assert node["removed"] is True
+        assert node["name"] != "你"
+        # The edge that referenced it must survive.
+        assert any(edge["target"] == "risk" for edge in graph["edges"])
+
+    def test_a_removed_agent_keeps_its_model_override(self, tmp_path):
+        store = CollaborationStore(tmp_path)
+        store.update_agent_model("risk", "deepseek-v4-pro")
+        store.set_builtin_agent_removed("risk", True)
+        store.set_builtin_agent_removed("risk", False)
+        restored = next(item for item in store.list_agents() if item["agent_id"] == "risk")
+        assert restored["model"] == "deepseek-v4-pro"
+
+
+class TestOrphanedTaskReconciliation:
+    def test_a_task_left_running_by_a_dead_process_is_closed_out(self, monkeypatch, tmp_path):
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        stale = store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="risk",
+            title="上个进程的任务", status="running",
+        )
+        done = store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="risk",
+            title="已完成", status="completed",
+        )
+
+        interrupted = server.reconcile_orphaned_tasks()
+
+        assert interrupted == [stale["task_id"]]
+        assert store.get_task(stale["task_id"])["status"] == "failed"
+        assert store.get_task(stale["task_id"])["metadata"]["failure_class"] == "interrupted"
+        # A finished task is left exactly as it was.
+        assert store.get_task(done["task_id"])["status"] == "completed"
+
+    def test_reconciling_twice_is_a_no_op(self, monkeypatch, tmp_path):
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="risk",
+            title="上个进程的任务", status="running",
+        )
+        assert len(server.reconcile_orphaned_tasks()) == 1
+        assert server.reconcile_orphaned_tasks() == []
+
+    def test_a_stale_task_no_longer_blocks_removing_its_agent(self, monkeypatch, tmp_path):
+        """The reason this matters: removal refuses while a task is running."""
+
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="risk",
+            title="卡住的任务", status="running",
+        )
+        blocked = any(
+            task.get("assignee_id") == "risk" and task.get("status") == "running"
+            for task in store.list_tasks()
+        )
+        assert blocked is True
+
+        server.reconcile_orphaned_tasks()
+
+        still_blocked = any(
+            task.get("assignee_id") == "risk" and task.get("status") == "running"
+            for task in store.list_tasks()
+        )
+        assert still_blocked is False
+
+
 class TestChannelEditing:
     def test_renaming_a_channel_updates_its_topic(self, tmp_path):
         store = CollaborationStore(tmp_path)

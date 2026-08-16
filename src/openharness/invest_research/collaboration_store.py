@@ -135,6 +135,14 @@ class CollaborationStore:
                 connection.execute(
                     "ALTER TABLE workbench_agent_overrides ADD COLUMN avatar_path TEXT"
                 )
+            # A built-in Agent is defined by the plugin, so removing it from the
+            # workspace is a flag here rather than a row delete — that keeps the
+            # removal reversible.
+            if "removed" not in override_columns:
+                connection.execute(
+                    "ALTER TABLE workbench_agent_overrides "
+                    "ADD COLUMN removed INTEGER NOT NULL DEFAULT 0"
+                )
 
     def _seed_defaults(self) -> None:
         # Keep seed values ASCII here; the UI supplies the Chinese display labels.
@@ -204,7 +212,7 @@ class CollaborationStore:
                 ]
             return channels
 
-    def list_agents(self) -> list[dict[str, Any]]:
+    def list_agents(self, include_removed: bool = False) -> list[dict[str, Any]]:
         built_in = [
             {
                 "agent_id": entry.agent_id, "name": entry.display_name,
@@ -223,13 +231,16 @@ class CollaborationStore:
             overrides = {
                 row["agent_id"]: dict(row)
                 for row in connection.execute(
-                    "SELECT agent_id, model, avatar_path FROM workbench_agent_overrides"
+                    "SELECT agent_id, model, avatar_path, removed FROM workbench_agent_overrides"
                 ).fetchall()
             }
         for item in built_in:
             override = overrides.get(item["agent_id"]) or {}
             item["model"] = override.get("model") or item["model"]
             item["avatar_path"] = override.get("avatar_path") or item["avatar_path"]
+            item["removed"] = bool(override.get("removed"))
+        if not include_removed:
+            built_in = [item for item in built_in if not item["removed"]]
         custom = []
         for row in rows:
             item = dict(row)
@@ -237,8 +248,45 @@ class CollaborationStore:
             item["status"] = "online" if item.pop("enabled") else "disabled"
             item["enabled"] = item["status"] == "online"
             item["allowed_tools"] = []
+            item["removed"] = False
             custom.append(item)
         return built_in + custom
+
+    def set_builtin_agent_removed(self, agent_id: str, removed: bool) -> bool:
+        """Remove a built-in Agent from the workspace, or put it back.
+
+        The plugin definition on disk is untouched, so this is reversible; the
+        Agent simply stops appearing and stops accepting work.
+        """
+
+        known = {item["agent_id"] for item in self.list_agents(include_removed=True)}
+        if agent_id not in known:
+            return False
+        timestamp = _now()
+        with self._lock, self._connect() as connection:
+            custom = connection.execute(
+                "SELECT 1 FROM workbench_agents WHERE agent_id=?", (agent_id,)
+            ).fetchone()
+            if custom is not None:
+                return False
+            existing = connection.execute(
+                "SELECT model FROM workbench_agent_overrides WHERE agent_id=?", (agent_id,)
+            ).fetchone()
+            connection.execute(
+                """INSERT INTO workbench_agent_overrides(agent_id, model, removed, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(agent_id) DO UPDATE SET
+                     removed=excluded.removed, updated_at=excluded.updated_at""",
+                (agent_id, (existing["model"] if existing else DEFAULT_MODEL),
+                 1 if removed else 0, timestamp),
+            )
+        return True
+
+    def removed_builtin_agents(self) -> list[dict[str, Any]]:
+        return [
+            item for item in self.list_agents(include_removed=True)
+            if item.get("removed")
+        ]
 
     def update_agent_model(self, agent_id: str, model: str) -> dict[str, Any] | None:
         if self.get_agent(agent_id) is None:

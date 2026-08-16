@@ -476,7 +476,12 @@ def _relationship_graph(channel_id: str) -> dict[str, Any]:
     mentioned.  Nothing is inferred — a pair with no record has no edge.
     """
 
-    agents = {item["agent_id"]: item for item in STORE.list_agents()}
+    # Include removed Agents in the identity lookup. Their past tasks and
+    # mentions are real records, so dropping the node would leave dangling
+    # edges — and an unknown id would be mislabelled as the human owner. The
+    # node is marked instead, so the UI can show it as no longer in the
+    # workspace.
+    agents = {item["agent_id"]: item for item in STORE.list_agents(include_removed=True)}
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -509,6 +514,7 @@ def _relationship_graph(channel_id: str) -> dict[str, Any]:
                 "model": str((agent or {}).get("model") or ""),
                 "agent_type": str((agent or {}).get("type") or ""),
                 "status": str((agent or {}).get("status") or ""),
+                "removed": bool((agent or {}).get("removed")),
                 "allowed_tools": list((agent or {}).get("allowed_tools") or []),
                 "skills": [
                     {
@@ -1366,9 +1372,12 @@ def _start_direct_agent_tasks(
     """
 
     summary = _snapshot().get("summary")
+    # DIRECT_AGENT_IDS is the static role list; an Agent removed from this
+    # workspace must stop accepting work even though its role still exists.
+    available = {item["agent_id"] for item in STORE.list_agents()}
     tasks: list[dict[str, Any]] = []
     for agent_id in dict.fromkeys(agent_ids):
-        if agent_id not in DIRECT_AGENT_IDS:
+        if agent_id not in DIRECT_AGENT_IDS or agent_id not in available:
             continue
         task = STORE.create_task(
             channel_id=channel_id,
@@ -1737,7 +1746,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             files_scope = None if query.get("files", [""])[0] == "all" else channel_id
             snapshot = _ensure_flow_events_projected("research-room")
             _sync_agent_files(channel_id, snapshot.get("run_id") or RUN_STATE.get("run_id"))
-            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "files": STORE.list_files(files_scope), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
+            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "files": STORE.list_files(files_scope), "removed_agents": STORE.removed_builtin_agents(), "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
         elif path == "/api/channels":
             self._send(200, STORE.list_channels())
         elif path.startswith("/api/channels/") and path.endswith("/messages"):
@@ -1941,6 +1950,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             status, payload = _start_research(str(body.get("company") or "").strip(), str(body.get("as_of_date") or "").strip(), str(body.get("channel_id") or "research-room"), "owner")
             self._send(status, payload)
             return
+        if path.startswith("/api/agents/") and path.endswith("/restore"):
+            agent_id = path.split("/")[3]
+            if not STORE.set_builtin_agent_removed(agent_id, False):
+                self._send(404, {"error": "removable built-in Agent not found"})
+                return
+            self._send(200, STORE.get_agent(agent_id))
+            return
         if path.startswith("/api/agents/") and path.endswith("/skills"):
             agent_id = path.split("/")[3]
             if STORE.get_agent(agent_id) is None:
@@ -2102,12 +2118,19 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     objective=message["body"],
                     as_of_date=as_of,
                 )
+                if not tasks:
+                    # Every mentioned Agent was removed from the workspace.
+                    self._send(201, {
+                        "message": message, "status": "recorded",
+                        "notice": "被 @ 的 Agent 已移出工作区，没有创建任务。可在左侧「已移除」里恢复。",
+                    })
+                    return
                 self._send(
                     HTTPStatus.ACCEPTED,
                     {
                         "message": message,
                         "status": "agents_started",
-                        "agent_ids": direct_agents,
+                        "agent_ids": [task["assignee_id"] for task in tasks],
                         "tasks": tasks,
                     },
                 )
@@ -2246,19 +2269,64 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/agents/"):
             agent_id = path.split("/")[3]
             agent = STORE.get_agent(agent_id)
-            if not agent or agent.get("type") != "custom":
-                self._send(404, {"error": "custom Agent not found"})
+            if not agent:
+                self._send(404, {"error": "Agent not found"})
                 return
-            if any(task.get("assignee_id") == agent_id and task.get("status") == "running" for task in STORE.list_tasks()):
-                self._send(409, {"error": "running Agent cannot be deleted"})
+            if any(
+                task.get("assignee_id") == agent_id and task.get("status") == "running"
+                for task in STORE.list_tasks()
+            ):
+                self._send(409, {"error": "该 Agent 还有正在执行的任务，无法删除。"})
                 return
-            STORE.delete_agent(agent_id)
-            self._send(200, {"deleted": True, "agent_id": agent_id})
+            if agent.get("type") == "custom":
+                STORE.delete_agent(agent_id)
+                self._send(200, {"deleted": True, "agent_id": agent_id, "restorable": False})
+                return
+            # A built-in Agent belongs to the plugin. Removing it from the
+            # workspace is reversible; deleting its definition is not ours to do.
+            STORE.set_builtin_agent_removed(agent_id, True)
+            self._send(200, {
+                "deleted": True, "agent_id": agent_id, "restorable": True,
+                "notice": f"{agent.get('name') or agent_id} 已移出工作区，可随时恢复。",
+            })
             return
         self._send(404, {"error": "not found"})
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+
+def reconcile_orphaned_tasks() -> list[str]:
+    """Close out tasks left ``running`` by a previous process.
+
+    Task execution lives in this process, so nothing is working on them after a
+    restart. Left alone they claim to be running forever: the board shows a
+    phantom in-flight task and the Agent can never be removed, because removal
+    refuses while a task is running.
+    """
+
+    interrupted: list[str] = []
+    for task in STORE.list_tasks():
+        if task.get("status") != "running":
+            continue
+        metadata = {
+            **(task.get("metadata") or {}),
+            "interrupted": True,
+            "failure_class": "interrupted",
+            "error": "工作台重启，这条任务的执行进程已不存在。",
+        }
+        STORE.update_task(
+            task["task_id"], "failed",
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+        )
+        interrupted.append(task["task_id"])
+        channel_id = str(task.get("channel_id") or "")
+        if channel_id:
+            STORE.add_event(
+                channel_id=channel_id, event_type="task_interrupted",
+                payload={"task_id": task["task_id"], "agent_id": task.get("assignee_id")},
+            )
+    return interrupted
 
 
 def build_server(port: int = 8787) -> ThreadingHTTPServer:
@@ -2270,6 +2338,13 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--open-browser", action="store_true")
     args = parser.parse_args()
+    interrupted = reconcile_orphaned_tasks()
+    if interrupted:
+        print(
+            f"已将 {len(interrupted)} 条上次遗留的运行中任务标记为中断: "
+            f"{', '.join(interrupted)}",
+            flush=True,
+        )
     server = build_server(args.port)
     url = f"http://127.0.0.1:{args.port}/"
     print(f"OpenHarness workbench: {url}", flush=True)
