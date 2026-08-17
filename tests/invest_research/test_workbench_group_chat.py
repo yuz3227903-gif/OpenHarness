@@ -334,6 +334,59 @@ class TestSessionIsolation:
         assert "研究室的话题" not in recorder[0]["user"]
 
 
+class TestAttachedDocuments:
+    """A file handed over is only a message if the Agent sees inside it."""
+
+    def test_the_document_text_reaches_the_model(self, store, pool):
+        recorder = []
+        store.add_message(
+            channel_id="research-room", author_id="owner", author_type="human",
+            message_kind="user_message", body="看看这份纪要",
+            metadata={"attachments": [{"file_id": "F1", "filename": "纪要.txt"}]},
+        )
+        GroupDiscussion(
+            store=store, pool=pool, complete=scripted(["读过了"], recorder=recorder), rounds=1,
+            render_attachments=lambda items: "【附件：纪要.txt】\n毛利率下滑 3 个百分点",
+        ).run(
+            channel_id="research-room", topic="看看这份纪要", topic_message_id="MSG-1",
+            participants=[agent("risk")],
+        )
+        assert "毛利率下滑 3 个百分点" in recorder[0]["user"]
+
+    def test_a_file_with_no_words_is_still_a_topic(self, store, pool):
+        recorder = []
+        store.add_message(
+            channel_id="research-room", author_id="owner", author_type="human",
+            message_kind="user_message", body="",
+            metadata={"attachments": [{"file_id": "F1", "filename": "年报.txt"}]},
+        )
+        GroupDiscussion(
+            store=store, pool=pool, complete=scripted(["读过了"], recorder=recorder), rounds=1,
+            render_attachments=lambda items: "【附件：年报.txt】\n全年营收 200 亿",
+        ).run(
+            channel_id="research-room", topic="", topic_message_id="MSG-1",
+            participants=[agent("risk")],
+        )
+        assert "全年营收 200 亿" in recorder[0]["user"]
+        # An empty headline would read as a topic nobody set.
+        assert "用户发来的文件" in recorder[0]["user"]
+
+    def test_a_message_without_attachments_is_unchanged(self, store, pool):
+        recorder = []
+        store.add_message(
+            channel_id="research-room", author_id="owner", author_type="human",
+            message_kind="user_message", body="纯文字",
+        )
+        GroupDiscussion(
+            store=store, pool=pool, complete=scripted(["好"], recorder=recorder), rounds=1,
+            render_attachments=lambda items: "不应该被调用",
+        ).run(
+            channel_id="research-room", topic="纯文字", topic_message_id="MSG-1",
+            participants=[agent("risk")],
+        )
+        assert "不应该被调用" not in recorder[0]["user"]
+
+
 class TestPromptShape:
     def test_a_lone_speaker_is_not_given_a_roster(self, store, pool):
         recorder = []

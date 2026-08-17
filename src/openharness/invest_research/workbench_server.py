@@ -33,6 +33,7 @@ from openharness.invest_research.collaboration_store import CollaborationStore
 from openharness.invest_research.evidence_store import EvidenceStore
 from openharness.invest_research.workbench_chat_model import ChatModelError
 from openharness.invest_research.workbench_chat_model import complete as chat_complete
+from openharness.invest_research.workbench_documents import render_attachments
 from openharness.invest_research.workbench_group_chat import (
     DEFAULT_ROUNDS,
     GroupDiscussion,
@@ -203,6 +204,7 @@ def _start_direct_agent_reply(
         discussion = GroupDiscussion(
             store=STORE, pool=pool, complete=chat_complete,
             publish=_publish_discussion_event, rounds=1,
+            render_attachments=_render_message_attachments,
         )
         try:
             discussion.run(
@@ -350,6 +352,12 @@ def _publish_discussion_event(channel_id: str, event_type: str, payload: dict[st
     STORE.add_event(channel_id=channel_id, event_type=event_type, payload=payload)
 
 
+def _render_message_attachments(attachments: list[dict[str, Any]]) -> str:
+    """Put the contents of attached documents in front of the Agent."""
+
+    return render_attachments(attachments, file_root=FILE_ROOT)
+
+
 def _start_group_discussion(
     *, channel_id: str, message: dict[str, Any], participants: list[dict[str, Any]],
     rounds: int = DEFAULT_ROUNDS,
@@ -375,6 +383,7 @@ def _start_group_discussion(
             discussion = GroupDiscussion(
                 store=STORE, pool=pool, complete=chat_complete,
                 publish=_publish_discussion_event, rounds=rounds,
+                render_attachments=_render_message_attachments,
             )
             try:
                 outcome = discussion.run(
@@ -2766,16 +2775,29 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "Agent not found"})
                 return
             text = str(body.get("body") or "").strip()
-            if not text:
-                self._send(400, {"error": "message body is required"})
-                return
             channel = STORE.ensure_direct_channel(agent_id, str(agent.get("name") or agent_id))
             channel_id = channel["channel_id"]
+            # A direct message may be a document with no words. Handing over a
+            # file is itself the message, so it must not be rejected as empty.
+            attachments = _channel_attachments(channel_id, body.get("attachment_ids"))
+            if not text and not attachments:
+                self._send(400, {"error": "message body is required"})
+                return
             message = STORE.add_message(
                 channel_id=channel_id, author_id="owner", author_type="human",
                 message_kind="user_message", body=text, mentions=[agent_id],
-                metadata={"direct_message": True},
+                metadata={"direct_message": True, "attachments": attachments},
             )
+            for attachment in attachments:
+                # Bind the file to the message it arrived with, so the timeline
+                # can render it and the files tab shows where it came from.
+                STORE.add_file(
+                    file_id=attachment["file_id"], channel_id=channel_id,
+                    message_id=message["message_id"], owner_id="owner", owner_type="human",
+                    source="upload", filename=attachment["filename"],
+                    stored_name=attachment["stored_name"], media_type=attachment["media_type"],
+                    size_bytes=attachment["size_bytes"], summary=attachment.get("summary", ""),
+                )
             STORE.add_event(
                 channel_id=channel_id, event_type="message_created", payload={"message": message}
             )
@@ -3146,6 +3168,25 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             if FILE_ROOT.resolve() in uploads.parents and uploads.is_dir():
                 shutil.rmtree(uploads, ignore_errors=True)
             self._send(200, {"deleted": True, "channel_id": channel_id, "removed": removed})
+            return
+        if path.startswith("/api/files/") and len(path.split("/")) == 4:
+            file_id = path.split("/")[3]
+            record = STORE.get_file(file_id)
+            if record is None:
+                self._send(404, {"error": "file not found"})
+                return
+            stored = (FILE_ROOT / str(record.get("stored_name") or "")).resolve()
+            # The stored name came from this server, but a path is never trusted
+            # just because it was written down.
+            if FILE_ROOT.resolve() in stored.parents and stored.is_file():
+                stored.unlink(missing_ok=True)
+            STORE.delete_file(file_id)
+            STORE.add_event(
+                channel_id=str(record.get("channel_id") or ""),
+                event_type="file_deleted",
+                payload={"file_id": file_id, "filename": record.get("filename")},
+            )
+            self._send(200, {"deleted": True, "file_id": file_id})
             return
         if path.startswith("/api/skills/"):
             skill_id = path.split("/")[3]

@@ -2,6 +2,12 @@
    Separate file because this whole surface belongs to one feature — the rest
    of the workspace renders identically whether a local Agent exists or not. */
 
+/* ----------------------------------------------------------------- files */
+.file-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap}
+.file-delete{display:inline-grid;place-items:center;border:2px solid var(--divider);background:var(--surface);color:var(--muted);width:30px;height:28px;padding:0}
+.file-delete:hover{border-color:var(--danger);color:var(--danger);box-shadow:2px 2px 0 var(--danger)}
+.file-delete .icon{width:15px;height:15px}
+
 /* ---------------------------------------------------------------- roster */
 .runtime-badge{display:inline-block;margin-left:6px;border:1px solid var(--divider);background:var(--surface-muted);color:var(--muted);padding:0 5px;font-size:10px;font-weight:700}
 .roster-filter{display:flex;flex-wrap:wrap;gap:6px;padding:0 22px 12px}

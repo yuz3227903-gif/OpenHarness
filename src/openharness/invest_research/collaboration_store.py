@@ -862,7 +862,14 @@ class CollaborationStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(file_id) DO UPDATE SET
                     size_bytes=excluded.size_bytes, summary=excluded.summary,
-                    metadata_json=excluded.metadata_json""",
+                    metadata_json=excluded.metadata_json,
+                    -- A file is uploaded before the message that carries it
+                    -- exists, so the link arrives on this second write. Without
+                    -- it the row never learns which message it belongs to.
+                    -- COALESCE keeps the link when a later re-sync omits it.
+                    message_id=COALESCE(excluded.message_id, workbench_files.message_id),
+                    task_id=COALESCE(excluded.task_id, workbench_files.task_id),
+                    run_id=COALESCE(excluded.run_id, workbench_files.run_id)""",
                 (file_id, channel_id, message_id, task_id, run_id, owner_id, owner_type,
                  source, filename, stored_name, media_type, int(size_bytes), summary,
                  _json(metadata or {}), _now()),
@@ -895,6 +902,44 @@ class CollaborationStore:
             item["metadata"] = json.loads(item.pop("metadata_json"))
             result.append(item)
         return result
+
+    def delete_file(self, file_id: str) -> dict[str, Any] | None:
+        """Forget one file, and detach it from the message it arrived with.
+
+        A message keeps a copy of its attachments in metadata so the timeline
+        can render them without a second query. Leaving that copy behind would
+        show a deleted file as still attached, with a download that 404s.
+        """
+
+        record = self.get_file(file_id)
+        if record is None:
+            return None
+        with self._lock, self._connect() as connection:
+            connection.execute("DELETE FROM workbench_files WHERE file_id=?", (file_id,))
+            # Prefer the recorded link, but fall back to searching the channel:
+            # rows written before the link was stored would otherwise keep
+            # showing a deleted file with a download that 404s.
+            rows = connection.execute(
+                "SELECT message_id, metadata_json FROM workbench_messages WHERE message_id=?"
+                if record.get("message_id") else
+                "SELECT message_id, metadata_json FROM workbench_messages WHERE channel_id=?",
+                (record.get("message_id") or record.get("channel_id"),),
+            ).fetchall()
+            for row in rows:
+                metadata = json.loads(row["metadata_json"] or "{}")
+                attachments = metadata.get("attachments") or []
+                remaining = [
+                    item for item in attachments
+                    if isinstance(item, dict) and item.get("file_id") != file_id
+                ]
+                if len(remaining) == len(attachments):
+                    continue
+                metadata["attachments"] = remaining
+                connection.execute(
+                    "UPDATE workbench_messages SET metadata_json=? WHERE message_id=?",
+                    (_json(metadata), row["message_id"]),
+                )
+        return record
 
     def add_agent_skill(
         self, *, agent_id: str, name: str, description: str, filename: str,

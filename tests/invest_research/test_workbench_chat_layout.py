@@ -76,7 +76,11 @@ def test_composer_keeps_multi_agent_and_task_actions():
     assert "可同时 @多个 Agent" in html
     assert 'id="composer-as-task"' in html
     assert 'id="attachment-input"' in html
-    assert 'id="attachment-file-button"' in html
+    # One attach control, not two. The "media" and "file" buttons opened the
+    # same picker, so the second only made the composer look busier.
+    assert 'id="attachment-file-button"' not in html
+    assert html.count('type="file"') == html.count('id="attachment-input"') + \
+        html.count('name="avatar"')
     assert ".composer" in shell
     assert "position:absolute" in shell
 

@@ -1251,14 +1251,37 @@ function renderFileBoard(){
     const source=FILE_SOURCE_LABELS[file.source]||file.source;
     const glyph=String(file.media_type||'').startsWith('image/')?'image':'file';
     const channel=state.channels.find(item=>item.channel_id===file.channel_id);
-    return `<div class="file-row" role="button" tabindex="0" data-file-id="${esc(file.file_id)}"><span class="file-name" title="${esc(file.summary||file.filename)}">${icon(glyph,'file-glyph')} ${esc(file.filename)}</span><span class="file-channel">${esc(channel?.name||file.channel_id)}</span><span><em class="file-source file-source-${esc(file.source)}">${esc(source)}</em></span><span>${esc(owner)}</span><span>${esc(formatBytes(file.size_bytes))}</span><span>${esc(new Date(file.created_at).toLocaleString())}</span><span><a class="file-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">${icon('download')} 下载</a></span></div>`;
+    return `<div class="file-row" role="button" tabindex="0" data-file-id="${esc(file.file_id)}"><span class="file-name" title="${esc(file.summary||file.filename)}">${icon(glyph,'file-glyph')} ${esc(file.filename)}</span><span class="file-channel">${esc(channel?.name||file.channel_id)}</span><span><em class="file-source file-source-${esc(file.source)}">${esc(source)}</em></span><span>${esc(owner)}</span><span>${esc(formatBytes(file.size_bytes))}</span><span>${esc(new Date(file.created_at).toLocaleString())}</span><span class="file-actions"><a class="file-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">${icon('download')} 下载</a><button type="button" class="file-delete" data-delete-file="${esc(file.file_id)}" title="删除">${icon('trash')}</button></span></div>`;
   }).join('')}</div>`;
   bindToolbar();
   board.querySelectorAll('[data-file-id]').forEach(row=>{
     const open=()=>showFile(row.dataset.fileId);
-    row.addEventListener('click',event=>{ if(!event.target.closest('.file-download')) open(); });
+    row.addEventListener('click',event=>{ if(!event.target.closest('.file-actions')) open(); });
     row.addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' '){ event.preventDefault(); open(); } });
   });
+  board.querySelectorAll('[data-delete-file]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    deleteFile(button.dataset.deleteFile);
+  }));
+}
+
+async function deleteFile(fileId){
+  const file=state.channelFiles.find(item=>item.file_id===fileId) ||
+    state.files.find(item=>item.file_id===fileId);
+  const name=file?.filename || fileId;
+  // A file an Agent produced is part of the record of a run, so say which kind
+  // is being removed rather than asking one generic question.
+  const produced=file && file.source!=='upload';
+  if(!window.confirm(produced
+    ? `确定删除「${name}」吗？这是 Agent 产出的文件，删除后无法恢复。`
+    : `确定删除「${name}」吗？此操作无法恢复。`)) return;
+  const response=await fetch(`/api/files/${encodeURIComponent(fileId)}`,{method:'DELETE'});
+  const result=await response.json().catch(()=>({}));
+  if(!response.ok){ toast(result.error || '删除文件失败'); return; }
+  await loadWorkspace(false);
+  await loadMessages();
+  renderFileBoard();
+  toast('文件已删除');
 }
 
 // Attachments upload before the message is sent, so the message body and its
@@ -1563,7 +1586,6 @@ function showUtilityDrawer(kind){
 function setupChatChrome(){
   $('close-context')?.addEventListener('click',closeContextDrawer);
   $('drawer-scrim')?.addEventListener('click',closeContextDrawer);
-  $('attachment-file-button')?.addEventListener('click',()=>$('attachment-input')?.click());
   $('channel-members')?.addEventListener('click',showMembersDrawer);
   $('channel-settings')?.addEventListener('click',showChannelSettingsDrawer);
   $('channel-search')?.addEventListener('click',()=>{
@@ -1895,7 +1917,11 @@ renderMessages = function(){
   renderMessagesBeforeAttachments();
   document.querySelectorAll('.message').forEach(article=>{
     const message=state.messages.find(item=>item.message_id===article.dataset.message);
-    const attachments=message?.metadata?.attachments || [];
+    // A message keeps its own copy of what was attached. Anything the channel
+    // no longer holds was deleted, and rendering it would offer a download
+    // that 404s.
+    const present=new Set(state.channelFiles.map(item=>item.file_id));
+    const attachments=(message?.metadata?.attachments || []).filter(item=>present.has(item.file_id));
     if(!attachments.length) return;
     const strip=document.createElement('div');
     strip.className='message-attachments';

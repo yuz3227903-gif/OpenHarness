@@ -123,11 +123,16 @@ class GroupDiscussion:
         complete: Callable[..., ChatTurn],
         publish: Callable[[str, str, dict[str, Any]], None] | None = None,
         rounds: int = DEFAULT_ROUNDS,
+        render_attachments: Callable[[list[dict[str, Any]]], str] | None = None,
     ) -> None:
         self._store = store
         self._pool = pool
         self._complete = complete
         self._publish = publish or (lambda channel_id, event_type, payload: None)
+        # Attaching a document only means something if the Agent sees inside it,
+        # so the transcript carries the text rather than the filename. Where the
+        # bytes live is the server's business, hence the injected renderer.
+        self._render_attachments = render_attachments or (lambda _attachments: "")
         self._rounds = max(1, rounds)
         self._lock = threading.Lock()
         self._live = 0
@@ -150,7 +155,13 @@ class GroupDiscussion:
             else:
                 who = author
             body = _excerpt(str(message.get("body") or ""))
-            if body:
+            attachments = (message.get("metadata") or {}).get("attachments") or []
+            documents = self._render_attachments(attachments) if attachments else ""
+            if body and documents:
+                lines.append(f"{who}：{body}\n{documents}")
+            elif documents:
+                lines.append(f"{who}（发来文件）：\n{documents}")
+            elif body:
                 lines.append(f"{who}：{body}")
         return lines
 
@@ -190,7 +201,10 @@ class GroupDiscussion:
         ask = (
             f"{addressed_by} 点名要你回应。" if addressed_by else "请就这个话题发表你的看法。"
         )
-        user = f"讨论话题：{topic}\n\n频道记录：\n{conversation}\n\n{ask}"
+        # A message can be a document with no words. The topic is then the file
+        # itself, which is already in the transcript below.
+        headline = topic.strip() or "用户发来的文件（内容见下方记录）"
+        user = f"讨论话题：{headline}\n\n频道记录：\n{conversation}\n\n{ask}"
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": user},

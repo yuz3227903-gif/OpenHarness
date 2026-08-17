@@ -165,6 +165,137 @@ class TestStartingADiscussion:
         ))
 
 
+class TestDeletingAFile:
+    def test_a_deleted_file_is_detached_from_its_message(self, store):
+        record = store.add_file(
+            channel_id="research-room", message_id=None,
+            owner_id="owner", owner_type="human", source="upload",
+            filename="memo.txt", stored_name="research-room/memo.txt",
+            media_type="text/plain", size_bytes=12,
+        )
+        # The message carries a copy of its attachments so the timeline can
+        # render without a second query; a stale copy would show a download
+        # that 404s.
+        message = store.add_message(
+            channel_id="research-room", author_id="owner", author_type="human",
+            message_kind="user_message", body="看这个",
+            metadata={"attachments": [
+                {"file_id": record["file_id"], "filename": "memo.txt"},
+                {"file_id": "F-OTHER", "filename": "keep.txt"},
+            ]},
+        )
+        store.add_file(
+            file_id=record["file_id"], channel_id="research-room",
+            message_id=message["message_id"], owner_id="owner", owner_type="human",
+            source="upload", filename="memo.txt", stored_name="research-room/memo.txt",
+            media_type="text/plain", size_bytes=12,
+        )
+
+        removed = store.delete_file(record["file_id"])
+        assert removed["filename"] == "memo.txt"
+        assert store.get_file(record["file_id"]) is None
+        refreshed = next(
+            item for item in store.list_messages("research-room")
+            if item["message_id"] == message["message_id"]
+        )
+        # Only the deleted one goes; the other attachment stays put.
+        assert [item["file_id"] for item in refreshed["metadata"]["attachments"]] == ["F-OTHER"]
+
+    def test_deleting_an_unknown_file_is_not_an_error(self, store):
+        assert store.delete_file("F-NOPE") is None
+
+    def test_attaching_an_uploaded_file_records_which_message_it_belongs_to(self, store):
+        """The file is uploaded before the message exists, so the link arrives late."""
+
+        uploaded = store.add_file(
+            channel_id="research-room", message_id=None, owner_id="owner",
+            owner_type="human", source="upload", filename="memo.txt",
+            stored_name="research-room/memo.txt", media_type="text/plain", size_bytes=12,
+        )
+        message = store.add_message(
+            channel_id="research-room", author_id="owner", author_type="human",
+            message_kind="user_message", body="看这个",
+        )
+        store.add_file(
+            file_id=uploaded["file_id"], channel_id="research-room",
+            message_id=message["message_id"], owner_id="owner", owner_type="human",
+            source="upload", filename="memo.txt", stored_name="research-room/memo.txt",
+            media_type="text/plain", size_bytes=12,
+        )
+        assert store.get_file(uploaded["file_id"])["message_id"] == message["message_id"]
+
+    def test_a_later_resync_does_not_clear_the_link(self, store):
+        message = store.add_message(
+            channel_id="research-room", author_id="owner", author_type="human",
+            message_kind="user_message", body="看这个",
+        )
+        record = store.add_file(
+            channel_id="research-room", message_id=message["message_id"], owner_id="owner",
+            owner_type="human", source="upload", filename="memo.txt",
+            stored_name="research-room/memo.txt", media_type="text/plain", size_bytes=12,
+        )
+        store.add_file(
+            file_id=record["file_id"], channel_id="research-room", owner_id="owner",
+            owner_type="human", source="upload", filename="memo.txt",
+            stored_name="research-room/memo.txt", media_type="text/plain", size_bytes=30,
+        )
+        assert store.get_file(record["file_id"])["message_id"] == message["message_id"]
+
+    def test_a_file_detaches_even_without_a_recorded_link(self, store):
+        """Rows written before the link existed must still clean up."""
+
+        record = store.add_file(
+            channel_id="research-room", message_id=None, owner_id="owner",
+            owner_type="human", source="upload", filename="memo.txt",
+            stored_name="research-room/memo.txt", media_type="text/plain", size_bytes=12,
+        )
+        message = store.add_message(
+            channel_id="research-room", author_id="owner", author_type="human",
+            message_kind="user_message", body="看这个",
+            metadata={"attachments": [{"file_id": record["file_id"], "filename": "memo.txt"}]},
+        )
+        store.delete_file(record["file_id"])
+        refreshed = next(
+            item for item in store.list_messages("research-room")
+            if item["message_id"] == message["message_id"]
+        )
+        assert refreshed["metadata"]["attachments"] == []
+
+    def test_a_file_with_no_message_can_still_be_deleted(self, store):
+        record = store.add_file(
+            channel_id="research-room", message_id=None, owner_id="system",
+            owner_type="system", source="agent_report", filename="report.md",
+            stored_name="research-room/report.md", media_type="text/markdown",
+            size_bytes=40,
+        )
+        assert store.delete_file(record["file_id"]) is not None
+        assert store.get_file(record["file_id"]) is None
+
+
+class TestDirectMessagesCarryAttachments:
+    def test_an_attachment_is_recorded_on_the_direct_message(self, store, monkeypatch):
+        """Uploading in a DM used to leave the file orphaned in the channel."""
+
+        monkeypatch.setattr(server, "STORE", store)
+        store.ensure_direct_channel("risk", "Risk")
+        uploaded = store.add_file(
+            channel_id="dm-risk", message_id=None, owner_id="owner", owner_type="human",
+            source="upload", filename="纪要.txt", stored_name="dm-risk/纪要.txt",
+            media_type="text/plain", size_bytes=20,
+        )
+        resolved = server._channel_attachments("dm-risk", [uploaded["file_id"]])
+        assert [item["filename"] for item in resolved] == ["纪要.txt"]
+
+    def test_a_file_from_another_channel_is_not_accepted(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        elsewhere = store.add_file(
+            channel_id="research-room", message_id=None, owner_id="owner",
+            owner_type="human", source="upload", filename="别的.txt",
+            stored_name="research-room/别的.txt", media_type="text/plain", size_bytes=10,
+        )
+        assert server._channel_attachments("dm-risk", [elsewhere["file_id"]]) == []
+
+
 class TestDirectMessagesStayASeparateSession:
     def test_a_direct_reply_reads_only_its_own_channel(self, store, monkeypatch):
         seen = []
