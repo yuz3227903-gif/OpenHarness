@@ -112,7 +112,10 @@ class TestRunningADiscussion:
             channel_id="research-room", topic="话题", topic_message_id="MSG-1",
             participants=[agent("risk", "顾谨")],
         )
-        posted = [m for m in store.list_messages("research-room") if m["author_id"] == "risk"]
+        posted = [
+            m for m in store.list_messages("research-room")
+            if m["author_id"] == "risk" and not (m["metadata"] or {}).get("conclusion")
+        ]
         assert len(posted) == 1
         assert posted[0]["author_type"] == "agent"
         assert posted[0]["metadata"]["discussion"] is True
@@ -155,7 +158,9 @@ class TestRunningADiscussion:
             channel_id="research-room", topic="话题", topic_message_id="MSG-1",
             participants=[agent("a"), agent("b"), agent("c")],
         )
-        assert sorted(seen) == ["key-a", "key-b", "key-c"]
+        # The three speaking at once each held a different key. The closing
+        # conclusion runs afterwards and reuses one of them.
+        assert sorted(seen[:3]) == ["key-a", "key-b", "key-c"]
 
     def test_a_fourth_agent_waits_for_a_key(self, store, pool):
         """Three keys is the cap, whoever else is in the room."""
@@ -283,7 +288,120 @@ class TestHandoffs:
             participants=[agent("risk")],
         )
         assert outcome.handoffs == []
-        assert store.list_tasks("research-room") == []
+        # The only task from this discussion is what it delivered, not a
+        # handoff to somebody who was never in the room.
+        assert [
+            task for task in store.list_tasks("research-room")
+            if not (task["metadata"] or {}).get("discussion_conclusion")
+        ] == []
+
+
+class TestTheBoardStaysReadable:
+    """A discussion should show work moving, not bury it."""
+
+    def test_only_the_first_agent_named_in_a_reply_gets_a_task(self, store, pool):
+        discussion = GroupDiscussion(
+            store=store, pool=pool,
+            complete=scripted(["@risk 你先看，@fundamental 也留意一下", "好", "好"]),
+            rounds=1,
+        )
+        outcome = discussion.run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("planner"), agent("risk"), agent("fundamental")],
+        )
+        # risk is the one being asked; fundamental was addressed in passing.
+        assert [item["to_agent"] for item in outcome.handoffs] == ["risk"]
+
+    def test_everyone_named_still_gets_a_turn(self, store, pool):
+        recorder = []
+        discussion = GroupDiscussion(
+            store=store, pool=ArkKeyPool(["only"]),
+            complete=scripted(["@risk 你先看，@fundamental 也留意一下", "好", "好"],
+                              recorder=recorder),
+            rounds=3,
+        )
+        discussion.run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("planner"), agent("risk"), agent("fundamental")],
+        )
+        # Not creating a task for the second name does not silence that Agent.
+        assert sum("点名要你回应" in item["user"] for item in recorder) >= 1
+
+    def test_a_discussion_cannot_raise_an_unbounded_number_of_tasks(self, store, pool):
+        discussion = GroupDiscussion(
+            store=store, pool=pool,
+            complete=scripted(["@b 看看"] * 12), rounds=3,
+        )
+        outcome = discussion.run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent(name) for name in ("a", "b", "c", "d")],
+        )
+        assert len(outcome.handoffs) <= 4
+
+
+class TestTheDiscussionDelivers:
+    def test_it_ends_with_a_conclusion_message(self, store, pool):
+        discussion = GroupDiscussion(
+            store=store, pool=pool,
+            complete=scripted(["观点一", "观点二", "结论：可以买\n分歧：无\n待办：核对口径"]),
+            rounds=1,
+        )
+        outcome = discussion.run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("planner"), agent("report_writer")],
+        )
+        assert outcome.conclusion is not None
+        bodies = [m["body"] for m in store.list_messages("research-room")]
+        assert any("结论：" in body for body in bodies)
+
+    def test_the_conclusion_is_recorded_as_delivered_work(self, store, pool):
+        discussion = GroupDiscussion(
+            store=store, pool=pool, complete=scripted(["观点", "结论"]), rounds=1,
+        )
+        outcome = discussion.run(
+            channel_id="research-room", topic="要不要加仓", topic_message_id="MSG-1",
+            participants=[agent("planner")],
+        )
+        task = store.get_task(outcome.conclusion["task_id"])
+        assert task["status"] == "completed"
+        assert "讨论结论" in task["title"]
+
+    def test_the_report_writer_writes_it_when_present(self, store, pool):
+        discussion = GroupDiscussion(
+            store=store, pool=pool, complete=scripted(["a", "b", "c"]), rounds=1,
+        )
+        outcome = discussion.run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("planner"), agent("report_writer")],
+        )
+        assert outcome.conclusion["agent_id"] == "report_writer"
+
+    def test_a_discussion_nobody_spoke_in_delivers_nothing(self, store, pool):
+        def broken(**_kwargs):
+            raise ChatModelError("boom", kind="rate_limit")
+
+        outcome = GroupDiscussion(store=store, pool=pool, complete=broken, rounds=1).run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("planner")],
+        )
+        # Concluding an empty discussion would be inventing one.
+        assert outcome.conclusion is None
+
+    def test_a_failed_conclusion_does_not_fail_the_discussion(self, store, pool):
+        calls = {"n": 0}
+
+        def flaky(**kwargs):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise ChatModelError("模型超时", kind="timeout")
+            return ChatTurn(text="观点", model="m")
+
+        outcome = GroupDiscussion(store=store, pool=pool, complete=flaky, rounds=1).run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("planner")],
+        )
+        assert outcome.conclusion is None
+        assert len(outcome.replies) == 1
 
 
 class TestFailuresAreVisible:

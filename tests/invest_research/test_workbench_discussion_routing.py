@@ -18,6 +18,18 @@ from openharness.invest_research.collaboration_store import CollaborationStore  
 from openharness.invest_research.workbench_chat_model import ChatTurn  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_discussion_left_running(monkeypatch):
+    """One test's discussion must not make the next one look busy.
+
+    The running-discussion registry is module state, and a channel that is
+    already talking refuses a second topic — which is right in production and
+    is cross-test contamination here.
+    """
+
+    monkeypatch.setattr(server, "DISCUSSION_THREADS", {})
+
+
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     store = CollaborationStore(tmp_path)
@@ -54,9 +66,24 @@ class TestWhoIsInTheRoom:
         chosen = {item["agent_id"] for item in server._discussion_participants(channel["channel_id"])}
         assert chosen == {"risk", "fundamental"}
 
-    def test_a_channel_without_members_uses_the_whole_roster(self, store):
+    def test_a_channel_without_members_gets_a_small_default_room(self, store):
         chosen = server._discussion_participants("research-room")
-        assert len(chosen) == len(store.list_agents())
+        # The whole roster talking at once is a roll call, not a discussion:
+        # everybody states a position and nobody answers anybody.
+        assert len(chosen) <= server.MAX_DISCUSSION_PARTICIPANTS
+        assert {item["agent_id"] for item in chosen} <= set(server.DEFAULT_DISCUSSION_ROOM)
+
+    def test_the_default_room_has_someone_to_disagree(self, store):
+        chosen = {item["agent_id"] for item in server._discussion_participants("research-room")}
+        assert "risk" in chosen and "planner" in chosen
+
+    def test_an_explicit_member_list_is_respected_exactly(self, store):
+        channel = store.create_channel(
+            name="两人组", topic="t", description="", member_ids=["risk", "report_writer"],
+        )
+        chosen = {item["agent_id"] for item in
+                  server._discussion_participants(channel["channel_id"])}
+        assert chosen == {"risk", "report_writer"}
 
     def test_a_removed_agent_is_not_in_the_room(self, store):
         store.set_builtin_agent_removed("risk", True)

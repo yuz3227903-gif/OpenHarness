@@ -334,6 +334,14 @@ DISCUSSION_LOCK = threading.Lock()
 #: nothing. An explicit per-Agent model always wins over this.
 DEFAULT_CHAT_MODEL = "deepseek-v4-flash"
 
+#: The most Agents one discussion runs with. Beyond this a topic reads as a
+#: roll call: everybody states a position, nobody answers anybody.
+MAX_DISCUSSION_PARTICIPANTS = 4
+#: Who talks when a channel has no members of its own. A planner to frame it,
+#: two analysts to disagree, and the risk seat to push back — enough for a real
+#: exchange, small enough to follow.
+DEFAULT_DISCUSSION_ROOM = ("planner", "fundamental", "industry_competition", "risk")
+
 
 #: The validated pool, keyed by the raw configuration it was built from, so a
 #: key added to the environment is picked up without a restart but the check
@@ -448,9 +456,16 @@ def _discussion_participants(channel_id: str) -> list[dict[str, Any]]:
     )
     member_ids = [str(value) for value in (channel or {}).get("member_ids") or []]
     chosen = [agents[value] for value in member_ids if value in agents]
+    if not chosen:
+        # Nobody was named for this channel, so pick a small default room. The
+        # whole roster talking at once is a roll call, not a discussion, and it
+        # buries the conversation the demo is meant to show. A channel with
+        # explicit members always gets exactly those members.
+        chosen = [agents[value] for value in DEFAULT_DISCUSSION_ROOM if value in agents]
+        chosen = chosen or list(agents.values())[:MAX_DISCUSSION_PARTICIPANTS]
     return [
         _agent_with_skills(_with_chat_model(item))
-        for item in (chosen or list(agents.values()))
+        for item in chosen[:MAX_DISCUSSION_PARTICIPANTS]
     ]
 
 

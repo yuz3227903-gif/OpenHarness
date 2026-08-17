@@ -42,6 +42,11 @@ log = logging.getLogger(__name__)
 #: How many waves one topic runs for. Three is enough for a position, a
 #: response and a resolution; beyond that a discussion repeats itself.
 DEFAULT_ROUNDS = 3
+#: How many task rows one discussion may raise. Every @ used to become a task,
+#: and seven Agents naming two colleagues each buried the board in nineteen
+#: rows for one topic. The point is to see work move through its states and end
+#: in something delivered, which a handful of tasks shows and a flood hides.
+MAX_HANDOFFS = 4
 #: How much of the channel an Agent reads before speaking.
 TRANSCRIPT_LIMIT = 24
 #: Longest a single reply may be, in characters, before it is trimmed for the
@@ -90,6 +95,8 @@ class DiscussionOutcome:
     handoffs: list[dict[str, Any]] = field(default_factory=list)
     #: Handoffs the discussion ended before anyone answered.
     unanswered: list[str] = field(default_factory=list)
+    #: What the discussion delivered, once it had something to conclude.
+    conclusion: dict[str, Any] | None = None
     max_concurrent: int = 0
 
 
@@ -356,18 +363,24 @@ class GroupDiscussion:
                 self._close_handoffs(
                     raised_earlier.pop(result["agent_id"], []), reply=result["message"],
                 )
-                for target in result.get("mentions") or []:
-                    if target == result["agent_id"] or target not in speakers:
-                        continue
-                    handoff = self._record_handoff(
-                        channel_id=channel_id,
-                        from_agent=result["agent_id"],
-                        to_agent=target,
-                        message=result["message"],
-                        speakers=speakers,
-                    )
-                    outcome.handoffs.append(handoff)
-                    open_handoffs.setdefault(target, []).append(handoff["task_id"])
+                named = [
+                    target for target in (result.get("mentions") or [])
+                    if target != result["agent_id"] and target in speakers
+                ]
+                for position, target in enumerate(named):
+                    # Only the first Agent named in a reply gets a task row: it
+                    # is the one being asked. The rest are addressed in passing,
+                    # and they still get their turn to answer.
+                    if position == 0 and len(outcome.handoffs) < MAX_HANDOFFS:
+                        handoff = self._record_handoff(
+                            channel_id=channel_id,
+                            from_agent=result["agent_id"],
+                            to_agent=target,
+                            message=result["message"],
+                            speakers=speakers,
+                        )
+                        outcome.handoffs.append(handoff)
+                        open_handoffs.setdefault(target, []).append(handoff["task_id"])
                     if all(target != pending for pending, _ in next_up):
                         next_up.append((target, result["agent_id"]))
             # Requests from earlier waves that still went unanswered stay open.
@@ -383,8 +396,74 @@ class GroupDiscussion:
         for task_ids in open_handoffs.values():
             outcome.unanswered.extend(task_ids)
             self._expire_handoffs(task_ids)
+        if outcome.replies:
+            outcome.conclusion = self._deliver_conclusion(
+                channel_id=channel_id, topic=topic,
+                topic_message_id=topic_message_id, speakers=speakers,
+            )
         outcome.max_concurrent = self._peak
         return outcome
+
+    # ------------------------------------------------------------- delivery
+
+    def _deliver_conclusion(
+        self, *, channel_id: str, topic: str, topic_message_id: str,
+        speakers: dict[str, Speaker],
+    ) -> dict[str, Any] | None:
+        """Close the discussion with something delivered.
+
+        A discussion that just stops leaves the reader to work out what was
+        decided. One Agent writes the conclusion — the report writer if the room
+        has one, since that is its job — and it is recorded as a completed task
+        so the board shows work arriving somewhere rather than only being
+        handed around.
+        """
+
+        author = speakers.get("report_writer") or next(iter(speakers.values()))
+        transcript = self._transcript(channel_id, speakers)
+        messages = [
+            {"role": "system", "content": "\n".join([
+                f"你是 {author.name}，负责把刚才这场多 Agent 讨论收口。",
+                "写一段结论，必须包含三部分，每部分一行，不要写别的：",
+                "结论：一句话回答这个话题",
+                "分歧：还没谈拢的点，没有就写「无」",
+                "待办：接下来该做什么，一到两条",
+                "只依据讨论里说过的内容，不要引入新数据。控制在 150 字以内。",
+            ])},
+            {"role": "user", "content":
+                f"讨论话题：{topic}\n\n讨论记录：\n" + "\n".join(transcript)},
+        ]
+        try:
+            with self._pool.lease() as lease:
+                turn = self._complete(
+                    messages=messages, model=lease.model or author.model,
+                    api_key=lease.key, key_label=lease.label,
+                    **({"base_url": lease.base_url} if lease.base_url else {}),
+                )
+        except Exception as exc:  # noqa: BLE001 - no conclusion is not a crash
+            log.warning("discussion conclusion failed: %s", exc)
+            return None
+
+        message = self._store.add_message(
+            channel_id=channel_id, author_id=author.agent_id, author_type="agent",
+            message_kind="discussion_conclusion", body=turn.text,
+            metadata={
+                "discussion": True, "conclusion": True,
+                "topic_message_id": topic_message_id,
+                "model": turn.model, "ark_key": turn.key_label,
+            },
+        )
+        self._publish(channel_id, "message_created", {"message": message})
+        task = self._store.create_task(
+            channel_id=channel_id, created_by=author.agent_id,
+            assignee_id=author.agent_id, title=f"讨论结论：{_excerpt(topic, 60)}",
+            status="completed",
+            metadata={"discussion_conclusion": True,
+                      "root_message_id": message["message_id"]},
+        )
+        self._publish(channel_id, "task_created", {"task": task})
+        return {"task_id": task["task_id"], "message_id": message["message_id"],
+                "agent_id": author.agent_id}
 
     def _close_handoffs(self, task_ids: list[str], *, reply: dict[str, Any]) -> None:
         """The named Agent answered, so its handoff task is done."""
