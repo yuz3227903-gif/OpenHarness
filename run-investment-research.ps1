@@ -29,6 +29,7 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = $utf8NoBom
 $projectRoot = Split-Path -Parent $PSCommandPath
 $secretPath = Join-Path $projectRoot ".openharness\secrets\tavily-key.dpapi"
+$arkSecretPath = Join-Path $projectRoot ".openharness\secrets\ark-key.dpapi"
 $openHarnessLauncher = Join-Path $projectRoot "run-openh.ps1"
 $pythonExecutable = Join-Path $projectRoot ".venv\Scripts\python.exe"
 
@@ -36,8 +37,12 @@ $needsTavily = $PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $Workbench -or
 if ($AgentSmoke -and $AgentSmoke -notin @("reviewer_arbiter", "report_writer")) {
     $needsTavily = $true
 }
+$needsArk = $PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $Workbench -or $AgentSmoke -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke -or $CrewAIFullChainValidation -or $ReportWriterSmoke -or $ReportSectionsSmoke -or $ReviewerAuditSmoke
 if ($needsTavily -and -not (Test-Path -LiteralPath $secretPath)) {
     throw "Tavily is not configured. Run .\setup-tavily-key.ps1 first."
+}
+if ($needsArk -and -not (Test-Path -LiteralPath $arkSecretPath)) {
+    throw "Volcengine Ark is not configured. Run .\setup-ark-key.ps1 first."
 }
 
 if ($PlannerSmoke -or $PlannerWeb -or $ResearchWeb -or $Workbench -or $AgentSmoke -or $ValidateAllAgents -or $FullChainValidation -or $CrewAIFlowSmoke -or $CrewAIFullChainValidation -or $ReportWriterSmoke -or $ReportSectionsSmoke -or $ReviewerAuditSmoke) {
@@ -52,6 +57,9 @@ elseif (-not (Test-Path -LiteralPath $openHarnessLauncher)) {
 $encryptedKey = $null
 $secureKey = $null
 $keyPointer = [IntPtr]::Zero
+$encryptedArkKey = $null
+$secureArkKey = $null
+$arkKeyPointer = [IntPtr]::Zero
 if ($needsTavily) {
     $encryptedKey = [System.IO.File]::ReadAllText($secretPath).Trim()
     if (-not $encryptedKey) {
@@ -60,7 +68,17 @@ if ($needsTavily) {
     $secureKey = ConvertTo-SecureString -String $encryptedKey
     $keyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
 }
+if ($needsArk) {
+    $encryptedArkKey = [System.IO.File]::ReadAllText($arkSecretPath).Trim()
+    if (-not $encryptedArkKey) {
+        throw "The encrypted Ark credential is empty. Run setup again."
+    }
+    $secureArkKey = ConvertTo-SecureString -String $encryptedArkKey
+    $arkKeyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureArkKey)
+}
 $previousTavilyKey = [Environment]::GetEnvironmentVariable("TAVILY_API_KEY", "Process")
+$previousArkKey = [Environment]::GetEnvironmentVariable("ARK_API_KEY", "Process")
+$previousOpenAiKey = [Environment]::GetEnvironmentVariable("OPENAI_API_KEY", "Process")
 $previousOpenHarnessDataDir = [Environment]::GetEnvironmentVariable("OPENHARNESS_DATA_DIR", "Process")
 $exitCode = 0
 
@@ -79,6 +97,14 @@ try {
         $plainTextKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPointer)
         [Environment]::SetEnvironmentVariable("TAVILY_API_KEY", $plainTextKey, "Process")
         $plainTextKey = $null
+    }
+    if ($needsArk) {
+        $plainTextArkKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($arkKeyPointer)
+        # ARK_API_KEY is the project-specific variable. OPENAI_API_KEY is set
+        # only for this child process because Ark exposes an OpenAI-compatible API.
+        [Environment]::SetEnvironmentVariable("ARK_API_KEY", $plainTextArkKey, "Process")
+        [Environment]::SetEnvironmentVariable("OPENAI_API_KEY", $plainTextArkKey, "Process")
+        $plainTextArkKey = $null
     }
 
     if ($Workbench) {
@@ -269,6 +295,8 @@ finally {
         $previousTavilyKey,
         "Process"
     )
+    [Environment]::SetEnvironmentVariable("ARK_API_KEY", $previousArkKey, "Process")
+    [Environment]::SetEnvironmentVariable("OPENAI_API_KEY", $previousOpenAiKey, "Process")
     [Environment]::SetEnvironmentVariable(
         "OPENHARNESS_DATA_DIR",
         $previousOpenHarnessDataDir,
@@ -277,10 +305,14 @@ finally {
     if ($keyPointer -ne [IntPtr]::Zero) {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyPointer)
     }
+    if ($arkKeyPointer -ne [IntPtr]::Zero) {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($arkKeyPointer)
+    }
     if ($null -ne $secureKey) {
         $secureKey.Dispose()
     }
     $encryptedKey = $null
+    $encryptedArkKey = $null
     Pop-Location
 }
 

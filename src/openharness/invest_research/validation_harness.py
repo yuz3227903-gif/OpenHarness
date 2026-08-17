@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -776,10 +777,25 @@ class ValidationHarness:
         observed = {trace.tool_name for trace in result.tool_calls}
         forbidden = observed - set(AGENT_REGISTRY[result.agent_id].allowed_tools)
         output_status = (result.structured_output or {}).get("status")
+        # DeepSeek historically returned token accounting on every response,
+        # but Ark Plan may omit it.  A real model call is still evidenced by
+        # the runtime model plus a generated model_call_id, so do not mark an
+        # otherwise successful Ark execution as failed merely for that.
+        from openharness.invest_research.workbench_models import model_ids
+
+        ark_active = bool(os.environ.get("ARK_API_KEY", "").strip())
+        expected_model = (
+            result.model in model_ids()
+            if ark_active
+            else result.model == "deepseek-v4-flash"
+        )
         pass_checks = {
             "execution_succeeded": result.status == "succeeded",
-            "model_is_deepseek_v4_flash": result.model == "deepseek-v4-flash",
-            "usage_present": result.usage.total_tokens > 0,
+            "model_is_expected_provider": expected_model,
+            "model_call_recorded": bool(result.model and result.model_call_id),
+            "usage_reported_or_unavailable": (
+                result.usage.total_tokens > 0 or ark_active
+            ),
             "schema_valid": result.structured_output is not None,
             "required_tools_called": expected_tools.issubset(observed),
             "no_forbidden_tools": not forbidden,

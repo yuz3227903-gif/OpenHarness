@@ -1,0 +1,244 @@
+/* Search workspace — measured against the signed-in Raft desktop UI.
+   Compact rhythm: 64px rail, 40px icon targets, 62px search row,
+   58px filter row, 2px borders and a 2px hard shadow. */
+.app-shell.search-mode {
+  --search-brand: #c8102e;
+  --search-brand-dark: #76091f;
+  --search-brand-soft: #fde8ed;
+  --search-brand-rail: #f6c5cf;
+  --search-border: #111;
+  --search-muted-border: #9d9d9d;
+  --search-hard-shadow: 2px 2px 0 #111;
+  --rail-w: 64px;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) !important;
+  width: 100vw;
+  min-width: 0;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #fff;
+  overflow: hidden;
+}
+.app-shell.search-mode .sidebar,
+.app-shell.search-mode .context-pane,
+.app-shell.search-mode .channel-head,
+.app-shell.search-mode .run-banner,
+.app-shell.search-mode .pane-tabs,
+.app-shell.search-mode .composer,
+.app-shell.search-mode .rail-toggle { display: none !important; }
+.app-shell.search-mode .main-pane { min-width: 0; height: 100vh; background: #fff; overflow: hidden; }
+
+/* Raft-style compact navigation rail, recoloured to the product red family. */
+.app-shell.search-mode .rail {
+  width: 64px;
+  height: 100vh;
+  padding: 10px 11px;
+  gap: 6px;
+  border: 0;
+  border-right: 2px solid var(--search-border);
+  border-radius: 0;
+  background: var(--search-brand-rail);
+  color: #111;
+  overflow: hidden;
+}
+.app-shell.search-mode .brand-mark,
+.app-shell.search-mode .rail .rail-btn {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+}
+.app-shell.search-mode .brand-mark {
+  display: grid;
+  place-items: center;
+  margin-bottom: 8px;
+  border: 2px solid #111;
+  background: var(--search-brand-dark);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  box-shadow: var(--search-hard-shadow);
+}
+.app-shell.search-mode .rail .rail-btn {
+  display: grid;
+  place-items: center;
+  border: 2px solid transparent;
+  background: transparent;
+  color: #271016;
+  box-shadow: none;
+}
+.app-shell.search-mode .rail .rail-btn:hover { border-color: rgba(17,17,17,.35); background: rgba(255,255,255,.48); color: #111; }
+.app-shell.search-mode .rail .rail-btn.active { border-color: var(--search-border); background: #fff; color: var(--search-brand); box-shadow: var(--search-hard-shadow); }
+.app-shell.search-mode .rail .rail-btn .icon { width: 20px; height: 20px; margin: 0; stroke-width: 2; }
+.app-shell.search-mode .rail-label { display: none !important; }
+.app-shell.search-mode .rail-spacer { min-height: 8px; }
+
+.search-board[hidden] { display: none !important; }
+.app-shell.search-mode .search-board {
+  display: grid;
+  grid-template-rows: 62px 58px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  height: 100vh;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* Search row */
+.search-topbar {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  border-bottom: 2px solid var(--search-border);
+  background: #fff;
+}
+.search-icon-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  padding: 0;
+  border: 2px solid var(--search-border);
+  border-radius: 0;
+  background: var(--search-brand-soft);
+  color: #111;
+  box-shadow: var(--search-hard-shadow);
+}
+.search-icon-button .icon { width: 20px; height: 20px; stroke-width: 2; }
+.search-input-component {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  height: 40px;
+  margin: 0 18px 0 4px;
+  border: 2px solid var(--search-border);
+  background: #fff;
+  box-shadow: var(--search-hard-shadow);
+  overflow: hidden;
+}
+.search-input-component:focus-within { outline: 2px solid var(--search-brand); outline-offset: -4px; }
+.search-input-component input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #252525;
+  font: 500 14px/1.2 "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.search-input-component input::placeholder { color: #858585; opacity: 1; }
+.search-input-component input::-webkit-search-cancel-button { display: none; }
+.search-input-component kbd { padding: 2px 6px; border: 1px solid #c9c9c9; border-radius: 3px; background: #f7f7f7; color: #6a6a6a; font: 500 11px/1.2 inherit; }
+.search-escape { align-self: stretch; min-width: 46px; padding: 0 8px; border: 0; background: #fff; color: #666; font: 700 11px/1 inherit; }
+
+/* Filter row */
+.search-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 16px;
+  border-bottom: 2px solid var(--search-border);
+  background: #fff;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.search-filter-component,
+.search-clear-button {
+  flex: 0 0 auto;
+  height: 32px;
+  border: 2px solid var(--search-muted-border);
+  border-radius: 0;
+  background: #fff;
+  color: #3f3f3f;
+  font-size: 12px;
+  font-weight: 700;
+}
+.search-filter-component {
+  display: inline-grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 106px;
+  padding: 0 8px;
+}
+.search-filter-component:nth-child(2) { min-width: 94px; }
+.search-filter-component:nth-child(3) { min-width: 94px; }
+.search-filter-component:nth-child(4) { min-width: 118px; }
+.search-filter-component:nth-child(5) { min-width: 106px; }
+.search-filter-component .icon { width: 16px; height: 16px; stroke-width: 2; }
+.search-filter-component select { min-width: 0; height: 28px; padding: 0 18px 0 0; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.search-filter-component:hover,
+.search-filter-component:focus-within { border-color: var(--search-border); }
+.search-filter-component--active { border-color: var(--search-border); background: var(--search-brand-soft); color: var(--search-brand-dark); box-shadow: var(--search-hard-shadow); }
+.search-filter-component--muted:has(select:disabled) { border-color: #d2d2d2; color: #aaa; background: #fafafa; }
+.search-clear-button { min-width: 78px; padding: 0 10px; border-color: var(--search-border); cursor: pointer; }
+.search-clear-button:hover { background: var(--search-brand-soft); color: var(--search-brand-dark); }
+.search-clear-button[hidden] { display: none; }
+
+/* Results */
+.search-results-viewport { min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; background: #fff; scrollbar-color: #999 #fff; scrollbar-width: auto; }
+.search-results-viewport::-webkit-scrollbar { width: 14px; }
+.search-results-viewport::-webkit-scrollbar-track { background: #fff; border-left: 1px solid #ddd; }
+.search-results-viewport::-webkit-scrollbar-thumb { background: #999; border: 3px solid #fff; border-radius: 8px; }
+.app-shell.search-mode .search-results { width: 100%; min-height: 100%; padding: 22px 40px 36px; }
+.search-summary { display: flex; align-items: baseline; gap: 7px; margin: 0 0 22px; color: #666; font-size: 13px; font-weight: 600; }
+.search-summary b { color: #222; font-size: 14px; }
+.search-result-group { margin-bottom: 24px; }
+.search-result-group-title { margin: 0 0 12px; color: #6f6f6f; font-size: 12px; font-weight: 700; }
+.search-result-list { display: flex; flex-direction: column; gap: 8px; }
+.search-result-card { width: 100%; min-height: 86px; padding: 11px 13px; border: 2px solid #aaa; border-radius: 0; background: #fff; color: #222; cursor: pointer; transition: border-color .1s ease, background .1s ease; }
+.search-result-card:hover { border-color: #111; background: #fffafb; }
+.search-result-card:first-child { border-color: #111; box-shadow: var(--search-hard-shadow); }
+.search-result-card__header { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 5px; color: #777; font-size: 11px; }
+.search-result-card__channel { font-weight: 700; }
+.search-result-card__kind { display: inline-flex; align-items: center; gap: 4px; }
+.search-result-card__kind .icon { width: 14px; height: 14px; }
+.search-result-card__header strong { color: #111; font-size: 12px; }
+.search-result-card__header time { color: #999; }
+.search-result-card__content h3 { margin: 0 0 3px; font-size: 13px; line-height: 1.35; }
+.search-result-card__content p { display: -webkit-box; margin: 0; overflow: hidden; color: #444; font-size: 12px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.search-empty { display: grid; justify-items: center; align-content: center; min-height: calc(100vh - 120px); padding: 32px; color: #666; text-align: center; }
+.search-empty .icon,
+.search-empty-icon { width: 34px; height: 34px; margin-bottom: 14px; color: #111; stroke-width: 1.8; }
+.search-empty h2 { margin: 0 0 7px; color: #333; font-size: 15px; }
+.search-empty p { margin: 0; color: #777; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .app-shell.search-mode { --rail-w: 56px; }
+  .app-shell.search-mode .rail { width: 56px; padding: 8px; }
+  .app-shell.search-mode .brand-mark,
+  .app-shell.search-mode .rail .rail-btn { width: 38px; height: 38px; min-height: 38px; flex-basis: 38px; }
+  .search-topbar { grid-template-columns: 54px minmax(0,1fr); }
+  .search-input-component { margin-right: 10px; }
+  .search-filterbar { padding: 0 10px; }
+  .app-shell.search-mode .search-results { padding: 20px 18px 30px; }
+}
+@media (max-width: 560px) {
+  .app-shell.search-mode { --rail-w: 50px; }
+  .app-shell.search-mode .rail { width: 50px; padding: 7px 6px; gap: 5px; }
+  .app-shell.search-mode .brand-mark,
+  .app-shell.search-mode .rail .rail-btn { width: 36px; height: 36px; min-height: 36px; flex-basis: 36px; }
+  .app-shell.search-mode .search-board { grid-template-rows: 58px 54px minmax(0,1fr); }
+  .search-topbar { grid-template-columns: 48px minmax(0,1fr); }
+  .search-icon-button { width: 36px; height: 36px; }
+  .search-input-component { height: 36px; margin-left: 2px; margin-right: 8px; }
+  .search-input-component input { height: 32px; padding-left: 9px; font-size: 13px; }
+  .search-input-component kbd { display: none; }
+  .search-escape { min-width: 38px; font-size: 10px; }
+  .search-filterbar { gap: 6px; padding: 0 8px; }
+  .search-filter-component,.search-clear-button { height: 30px; }
+  .app-shell.search-mode .search-results { padding: 16px 10px 24px; }
+  .search-result-card { min-height: 80px; padding: 9px 10px; }
+}

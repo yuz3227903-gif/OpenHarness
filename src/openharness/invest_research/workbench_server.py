@@ -66,6 +66,7 @@ MAX_SKILL_BYTES = 5 * 1024 * 1024
 # A Skill plugin is text or a packaged folder; refuse anything executable.
 SKILL_SUFFIXES = {".md", ".markdown", ".json", ".yaml", ".yml", ".txt", ".zip"}
 FLOW_IDLE_TIMEOUT_SECONDS = 360
+RUN_HEARTBEAT_SECONDS = 8
 STORE = CollaborationStore(PROJECT_ROOT)
 EVIDENCE_STORE = EvidenceStore.for_project(PROJECT_ROOT)
 RUN_LOCK = threading.Lock()
@@ -76,6 +77,7 @@ DIRECT_TASK_LOCK = threading.RLock()
 # order, so a second request waits for the first to finish.
 AGENT_QUEUES: dict[str, queue.Queue[dict[str, Any]]] = {}
 AGENT_WORKERS: dict[str, threading.Thread] = {}
+TASK_CANCELLATIONS: set[str] = set()
 # How many times work may be handed on Agent to Agent before the chain stops.
 # Without a ceiling two Agents could @ each other indefinitely.
 MAX_AGENT_HANDOFF_DEPTH = 2
@@ -92,6 +94,11 @@ RUN_STATE: dict[str, Any] = {
     "summary": None,
     "error": None,
     "last_progress": None,
+    "current_phase": None,
+    "current_agent": None,
+    "last_event_at": None,
+    "worker_alive": False,
+    "cancel_requested": False,
     "paused": False,
     "pause_requested": False,
     "flow_orphaned": False,
@@ -112,6 +119,130 @@ MENTION_ALIASES = {
 def _resolve_agent_model(agent_id: str) -> str:
     agent = STORE.get_agent(agent_id)
     return str((agent or {}).get("model") or DEFAULT_MODEL)
+
+
+def _now_utc() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _is_task_cancelling(task_id: str) -> bool:
+    with DIRECT_TASK_LOCK:
+        return task_id in TASK_CANCELLATIONS
+
+
+def _request_task_cancellation(task_id: str) -> None:
+    with DIRECT_TASK_LOCK:
+        TASK_CANCELLATIONS.add(task_id)
+
+
+def _clear_task_cancellation(task_id: str) -> None:
+    with DIRECT_TASK_LOCK:
+        TASK_CANCELLATIONS.discard(task_id)
+
+
+def _looks_like_research_request(text: str) -> bool:
+    """Keep greetings inexpensive; only research instructions enter a job queue."""
+
+    return bool(re.search(
+        r"研究|调研|分析|查(?:询|找|一下)?|对比|竞品|财报|经营|行业|风险|催化|报告|数据",
+        text,
+    ))
+
+
+def _direct_reply_text(agent: dict[str, Any], text: str) -> str:
+    """Return an immediate, role-aware acknowledgement for direct messages.
+
+    A visible acknowledgement is intentionally independent from a model call:
+    provider latency or a malformed model response must never make a person
+    think an Agent ignored them.  Research requests can still continue into a
+    queued, auditable Agent task afterwards.
+    """
+
+    agent_id = str(agent.get("agent_id") or "")
+    name = str(agent.get("name") or agent_id)
+    role = str(agent.get("role") or agent.get("profile") or "Agent")
+    if agent_id == "planner":
+        return (
+            "已收到。我的职责是确认研究范围、拆解任务并协调各角色。"
+            "如需启动完整上市公司研究，请在项目频道发送“@Planner 请研究公司名”；"
+            "我会先回复参数检查结果，再派发并行任务。"
+        )
+    if _looks_like_research_request(text):
+        return (
+            f"已收到研究请求。作为{role}，我会先检查本私信是否已有授权的项目参数和资料。"
+            "如无可用上下文，我会明确说明缺少的公司、时间范围或证据，而不会擅自读取其他频道。"
+        )
+    return f"已收到你的消息。作为{role}，我会在职责范围内协助；需要研究任务时请说明目标和期望交付。"
+
+
+def _post_direct_acknowledgement(
+    *, channel_id: str, agent: dict[str, Any], root_message_id: str, text: str,
+) -> dict[str, Any]:
+    # Acknowledgements deliberately live in the channel timeline rather than
+    # only in a hidden thread.  Otherwise a user who has just sent a DM sees
+    # no visible Agent response and reasonably assumes the request was lost.
+    reply = STORE.add_message(
+        channel_id=channel_id,
+        thread_id=None,
+        author_id=str(agent["agent_id"]),
+        author_type="agent",
+        message_kind="agent_message",
+        body=_direct_reply_text(agent, text),
+        metadata={
+            "direct_message": True,
+            "immediate_acknowledgement": True,
+            "reply_to_message_id": root_message_id,
+        },
+    )
+    STORE.add_event(
+        channel_id=channel_id,
+        event_type="agent_accepted",
+        payload={"message": reply, "agent_id": agent["agent_id"]},
+    )
+    return reply
+
+
+def _delete_task_after_cancellation(task_id: str, *, reason: str = "已取消") -> dict[str, Any] | None:
+    task = STORE.delete_task(task_id)
+    _clear_task_cancellation(task_id)
+    if task is None:
+        return None
+    channel_id = str(task.get("channel_id") or "")
+    if channel_id:
+        message = STORE.add_message(
+            channel_id=channel_id,
+            author_id="system",
+            author_type="system",
+            message_kind="task_update",
+            body=f"任务 {task_id} 已删除（{reason}）。已生成的消息、文件和证据会继续保留。",
+            metadata={"task_id": task_id, "deleted": True},
+        )
+        STORE.add_event(
+            channel_id=channel_id,
+            event_type="task_deleted",
+            payload={"task_id": task_id, "message": message},
+        )
+    return task
+
+
+def _remove_custom_agent_uploads(agent: dict[str, Any], direct_channel_id: str) -> None:
+    """Remove only files owned by a deleted custom Agent.
+
+    All paths are reconstructed from server-side IDs and checked against their
+    designated roots; a browser-provided field is never used as a path.
+    """
+
+    avatar_path = str(agent.get("avatar_path") or "")
+    if avatar_path.startswith("uploads/avatars/"):
+        candidate = (PROJECT_ROOT / ".openharness" / "data" / avatar_path).resolve()
+        if candidate.parent == AVATAR_ROOT.resolve() and candidate.is_file():
+            candidate.unlink(missing_ok=True)
+    skill_dir = (SKILL_ROOT / _safe_filename(str(agent.get("agent_id") or ""))).resolve()
+    if SKILL_ROOT.resolve() in skill_dir.parents and skill_dir.is_dir():
+        shutil.rmtree(skill_dir, ignore_errors=True)
+    direct_uploads = (FILE_ROOT / _safe_filename(direct_channel_id)).resolve()
+    if FILE_ROOT.resolve() in direct_uploads.parents and direct_uploads.is_dir():
+        shutil.rmtree(direct_uploads, ignore_errors=True)
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -323,11 +454,13 @@ def _search_workspace(
         return member_labels.get(member_id, member_id)
 
     def hit(kind: str, *, title: str, body: str, owner: str, created_at: str,
-            channel: str, ref: dict[str, Any], score: int) -> dict[str, Any]:
+            channel: str, channel_kind: str | None = None,
+            ref: dict[str, Any], score: int) -> dict[str, Any]:
         return {
             "kind": kind, "title": title, "body": body[:280], "owner": owner,
             "owner_name": display(owner), "created_at": created_at,
             "channel_id": channel, "channel_name": channel_names.get(channel, channel),
+            "channel_kind": channel_kind,
             "ref": ref, "score": score,
         }
 
@@ -350,6 +483,7 @@ def _search_workspace(
                     "message", title=kind_title(message), body=str(message.get("body") or ""),
                     owner=str(message.get("author_id") or ""),
                     created_at=str(message.get("created_at") or ""), channel=cid,
+                    channel_kind=str(channel.get("kind") or ""),
                     ref={"message_id": message["message_id"],
                          "thread_id": message.get("thread_id")},
                     score=3 if message.get("thread_id") is None else 2,
@@ -370,6 +504,7 @@ def _search_workspace(
                     ),
                     owner=str(task.get("assignee_id") or ""),
                     created_at=str(task.get("updated_at") or ""), channel=cid,
+                    channel_kind=str(channel.get("kind") or ""),
                     ref={"task_id": task["task_id"], "status": task.get("status")}, score=3,
                 ))
         if scope in ("all", "file"):
@@ -385,6 +520,7 @@ def _search_workspace(
                     body=str(record.get("summary") or ""),
                     owner=str(record.get("owner_id") or ""),
                     created_at=str(record.get("created_at") or ""), channel=cid,
+                    channel_kind=str(channel.get("kind") or ""),
                     ref={"file_id": record["file_id"], "source": record.get("source")}, score=2,
                 ))
 
@@ -409,7 +545,7 @@ def _search_workspace(
             results.append(hit(
                 "channel", title=str(channel.get("name") or ""),
                 body=str(channel.get("topic") or ""), owner="", created_at="",
-                channel=channel["channel_id"],
+                channel=channel["channel_id"], channel_kind=str(channel.get("kind") or ""),
                 ref={"channel_id": channel["channel_id"], "kind": channel.get("kind")}, score=1,
             ))
 
@@ -430,7 +566,7 @@ def _search_workspace(
         ] + [{"id": "owner", "name": "你"}],
         "channels": [
             {"id": item["channel_id"], "name": item["name"], "kind": item.get("kind")}
-            for item in channels
+            for item in channels if item.get("kind") != "direct"
         ],
     }
 
@@ -807,6 +943,56 @@ def _snapshot() -> dict[str, Any]:
     }
 
 
+def _empty_channel_snapshot() -> dict[str, Any]:
+    """Return a neutral run state for a channel with no research run."""
+
+    return {
+        "running": False,
+        "run_id": None,
+        "task_id": None,
+        "company": None,
+        "as_of_date": None,
+        "started_at": None,
+        "finished_at": None,
+        "summary": None,
+        "error": None,
+        "last_progress": None,
+        "current_phase": None,
+        "current_agent": None,
+        "last_event_at": None,
+        "worker_alive": False,
+        "cancel_requested": False,
+        "paused": False,
+        "pause_requested": False,
+        "flow_orphaned": False,
+        "report_available": False,
+        "report_path": None,
+        "report_bytes": 0,
+    }
+
+
+def _snapshot_for_channel(channel_id: str) -> dict[str, Any]:
+    """Expose a snapshot only when it belongs to the requested channel.
+
+    The compatibility report is global on disk, but its task and artefacts are
+    not global in the workbench.  This boundary prevents new channels and DMs
+    from inheriting an earlier research run's report banner.
+    """
+
+    snapshot = _snapshot()
+    task_id = str(snapshot.get("task_id") or "")
+    if task_id:
+        task = STORE.get_task(task_id)
+        if task and str(task.get("channel_id") or "") == channel_id:
+            return snapshot
+
+    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+    run_id = str(snapshot.get("run_id") or summary.get("run_id") or "")
+    if run_id and any(str(task.get("run_id") or "") == run_id for task in STORE.list_tasks(channel_id)):
+        return snapshot
+    return _empty_channel_snapshot()
+
+
 def _workspace_agents(channel_id: str) -> list[dict[str, Any]]:
     """Project the latest real task state onto the Agent roster for the UI."""
 
@@ -880,9 +1066,12 @@ def _direct_task_heartbeat(
 ) -> None:
     """Publish honest liveness signals while one model/tool call is in flight."""
 
+    last_visible_update = 0
     while not stop_event.wait(5.0):
+        if _is_task_cancelling(task_id):
+            return
         elapsed = int(max(0, time.monotonic() - started_at))
-        last_activity = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        last_activity = _now_utc()
         metadata = {
             "direct_agent_task": True,
             "phase": "agent_execution",
@@ -907,6 +1096,23 @@ def _direct_task_heartbeat(
                 "last_activity_at": last_activity,
             },
         )
+        # The SSE event drives the live UI; an occasional visible update also
+        # makes progress understandable after a browser refresh.
+        if elapsed - last_visible_update >= 15:
+            last_visible_update = elapsed
+            message = STORE.add_message(
+                channel_id=channel_id,
+                author_id=agent_id,
+                author_type="agent",
+                message_kind="progress_update",
+                body=f"仍在处理这项任务，已持续 {elapsed} 秒；当前正在整理可交付结果。",
+                metadata={"task_id": task_id, "run_id": run_id, "heartbeat": True},
+            )
+            STORE.add_event(
+                channel_id=channel_id,
+                event_type="run_heartbeat",
+                payload={"message": message, "task_id": task_id, "agent_id": agent_id},
+            )
 
 
 def _progress_event(channel_id: str, progress: dict[str, Any]) -> None:
@@ -935,6 +1141,8 @@ def _progress_event(channel_id: str, progress: dict[str, Any]) -> None:
 def _wait_if_paused() -> None:
     """Cooperatively pause the flow at the next Agent/stage boundary."""
     with RUN_STATE_LOCK:
+        if RUN_STATE.get("cancel_requested"):
+            raise RuntimeError("研究运行已取消")
         requested = bool(RUN_STATE.get("pause_requested"))
         if requested:
             RUN_STATE["paused"] = True
@@ -1063,7 +1271,7 @@ def _replay_flow_events(
         }
         message = STORE.add_message(
             channel_id=channel_id,
-            thread_id=root_message_id,
+            thread_id=None,
             author_id=actor_id if actor_id in AGENT_IDS else "system",
             author_type="agent" if actor_id in AGENT_IDS else "system",
             message_kind=message_kind, body=body, mentions=targets,
@@ -1150,7 +1358,7 @@ def _dispatch_agent_handoffs(
     if handoff_depth >= MAX_AGENT_HANDOFF_DEPTH:
         blocked = STORE.add_message(
             channel_id=channel_id,
-            thread_id=root_message.get("thread_id") or root_message["message_id"],
+            thread_id=None,
             author_id="system", author_type="system", message_kind="task_update",
             body=(
                 f"{from_agent_id} 想继续转派给 {'、'.join(targets)}，但本次交接已达上限"
@@ -1177,7 +1385,7 @@ def _dispatch_agent_handoffs(
         return
     dispatched = STORE.add_message(
         channel_id=channel_id,
-        thread_id=root_message.get("thread_id") or root_message["message_id"],
+        thread_id=None,
         author_id=from_agent_id, author_type="agent", message_kind="task_dispatch",
         body=" ".join(f"@{item}" for item in targets) + " 已按上面的结论为你们创建任务。",
         mentions=targets,
@@ -1208,6 +1416,9 @@ def _run_direct_agent_task(
 
     run_id: str | None = None
     try:
+        if _is_task_cancelling(task_id) or STORE.get_task(task_id) is None:
+            _delete_task_after_cancellation(task_id, reason="在队列中取消")
+            return
         from openharness.invest_research.orchestration.research_flow import (
             build_agent_delivery_message,
         )
@@ -1244,7 +1455,7 @@ def _run_direct_agent_task(
         )
         accepted = STORE.add_message(
             channel_id=channel_id,
-            thread_id=root_message_id,
+            thread_id=None,
             author_id=agent_id,
             author_type="agent",
             message_kind="agent_message",
@@ -1297,6 +1508,9 @@ def _run_direct_agent_task(
                 model_override=selected_model,
             )
         )
+        if _is_task_cancelling(task_id):
+            _delete_task_after_cancellation(task_id, reason="已在当前模型调用结束后取消")
+            return
         projection = {
             "execution_status": result.status,
             "output_status": (result.structured_output or {}).get("status"),
@@ -1350,7 +1564,7 @@ def _run_direct_agent_task(
             )
             delivered = STORE.add_message(
                 channel_id=channel_id,
-                thread_id=root_message_id,
+                thread_id=None,
                 author_id=agent_id,
                 author_type="agent",
                 message_kind="artifact_delivery",
@@ -1396,7 +1610,7 @@ def _run_direct_agent_task(
             )
             failed = STORE.add_message(
                 channel_id=channel_id,
-                thread_id=root_message_id,
+                thread_id=None,
                 author_id=agent_id,
                 author_type="agent",
                 message_kind="task_update",
@@ -1415,6 +1629,9 @@ def _run_direct_agent_task(
                 payload={"message": failed, "task_id": task_id, "agent_id": agent_id},
             )
     except DirectAgentTaskError as exc:
+        if _is_task_cancelling(task_id):
+            _delete_task_after_cancellation(task_id, reason="已取消")
+            return
         STORE.update_task(
             task_id,
             "blocked",
@@ -1430,7 +1647,7 @@ def _run_direct_agent_task(
         )
         blocked = STORE.add_message(
             channel_id=channel_id,
-            thread_id=root_message_id,
+            thread_id=None,
             author_id=agent_id,
             author_type="agent",
             message_kind="task_update",
@@ -1447,6 +1664,9 @@ def _run_direct_agent_task(
             payload={"message": blocked, "task_id": task_id, "agent_id": agent_id},
         )
     except Exception as exc:
+        if _is_task_cancelling(task_id):
+            _delete_task_after_cancellation(task_id, reason="已取消")
+            return
         error = f"{type(exc).__name__}: {exc}"
         STORE.update_task(
             task_id,
@@ -1463,7 +1683,7 @@ def _run_direct_agent_task(
         )
         failed = STORE.add_message(
             channel_id=channel_id,
-            thread_id=root_message_id,
+            thread_id=None,
             author_id=agent_id,
             author_type="agent",
             message_kind="task_update",
@@ -1502,7 +1722,9 @@ def _start_direct_agent_tasks(
     on. ``handoff_depth`` counts Agent-to-Agent hops so a chain terminates.
     """
 
-    summary = _snapshot().get("summary")
+    # Direct messages and newly created channels must never inherit another
+    # channel's completed research report or evidence context.
+    summary = _snapshot_for_channel(channel_id).get("summary")
     # DIRECT_AGENT_IDS is the static role list; an Agent removed from this
     # workspace must stop accepting work even though its role still exists.
     available = {item["agent_id"] for item in STORE.list_agents()}
@@ -1552,6 +1774,23 @@ def _start_direct_agent_tasks(
                 "queue_position": position, "created_by": created_by,
             },
         )
+        accepted = STORE.add_message(
+            channel_id=channel_id,
+            thread_id=None,
+            author_id=agent_id,
+            author_type="agent",
+            message_kind="agent_message",
+            body=(
+                f"已接收任务，正在准备{agent_id}的工作上下文"
+                + (f"（队列第 {position} 位）。" if position > 1 else "。")
+            ),
+            metadata={"task_id": task["task_id"], "queued": True, "queue_position": position},
+        )
+        STORE.add_event(
+            channel_id=channel_id,
+            event_type="agent_accepted",
+            payload={"message": accepted, "task_id": task["task_id"], "agent_id": agent_id},
+        )
         tasks.append(STORE.get_task(task["task_id"]) or task)
     return tasks
 
@@ -1580,7 +1819,11 @@ def _agent_worker(agent_id: str) -> None:
     while True:
         job = pending.get()
         try:
-            _run_direct_agent_task(**job)
+            task_id = str(job.get("task_id") or "")
+            if _is_task_cancelling(task_id) or STORE.get_task(task_id) is None:
+                _delete_task_after_cancellation(task_id, reason="在队列中取消")
+            else:
+                _run_direct_agent_task(**job)
         except Exception:
             # One bad job must not kill the worker, or the Agent's whole queue
             # would stall behind it.
@@ -1615,6 +1858,8 @@ def _run_background(
     root_message_id: str | None = None,
 ) -> None:
     run_id = None
+    started_tick = time.monotonic()
+    last_heartbeat = 0.0
     try:
         # Import only in the worker: the static page can start even if the
         # optional model/runtime dependencies are not importable yet.
@@ -1628,7 +1873,13 @@ def _run_background(
         )
 
         with RUN_STATE_LOCK:
-            RUN_STATE["started_at"] = RUN_STATE.get("started_at")
+            RUN_STATE.update({
+                "started_at": RUN_STATE.get("started_at"),
+                "worker_alive": True,
+                "current_phase": "preflight",
+                "current_agent": "planner",
+                "last_event_at": _now_utc(),
+            })
         validation = _validation_path("full-chain-progress.json")
         previous: tuple[Any, Any] | None = None
         last_activity = time.monotonic()
@@ -1639,13 +1890,35 @@ def _run_background(
             nonlocal last_activity
             last_activity = time.monotonic()
             event_run_id = str(flow_event.get("run_id") or "") or None
+            event_type = str(flow_event.get("event_type") or "flow_event")
+            actor = str(
+                flow_event.get("agent_id")
+                or flow_event.get("actor_id")
+                or flow_event.get("agent")
+                or ""
+            ).lower()
+            phase = "planner"
+            event_hint = f"{event_type} {flow_event.get('message') or ''} {actor}".lower()
+            if any(value in event_hint for value in ("fundamental", "industry", "market", "parallel")):
+                phase = "parallel_research"
+            elif "risk" in event_hint:
+                phase = "risk"
+            elif any(value in event_hint for value in ("review", "arbiter")):
+                phase = "review"
+            elif any(value in event_hint for value in ("report", "writer")):
+                phase = "report"
             with RUN_STATE_LOCK:
                 if event_run_id and not RUN_STATE.get("run_id"):
                     RUN_STATE["run_id"] = event_run_id
                 RUN_STATE["last_progress"] = [
-                    str(flow_event.get("event_type") or "flow_event"),
+                    event_type,
                     str(flow_event.get("message") or ""),
                 ]
+                RUN_STATE.update({
+                    "current_phase": phase,
+                    "current_agent": actor or RUN_STATE.get("current_agent") or "planner",
+                    "last_event_at": _now_utc(),
+                })
             _replay_flow_events(
                 channel_id,
                 event_run_id,
@@ -1672,6 +1945,33 @@ def _run_background(
         flow_thread.start()
         timed_out = False
         while flow_thread.is_alive():
+            now_tick = time.monotonic()
+            if now_tick - last_heartbeat >= RUN_HEARTBEAT_SECONDS:
+                with RUN_STATE_LOCK:
+                    phase = str(RUN_STATE.get("current_phase") or "preflight")
+                    agent_id = str(RUN_STATE.get("current_agent") or "planner")
+                    cancel_requested = bool(RUN_STATE.get("cancel_requested"))
+                    RUN_STATE["last_event_at"] = _now_utc()
+                duration = max(0, int(now_tick - started_tick))
+                note = (
+                    "已请求取消，正在等待当前模型调用安全返回；后续阶段不会继续启动。"
+                    if cancel_requested
+                    else f"研究仍在运行：当前阶段 {phase}，当前 Agent 为 {agent_id}，已持续 {duration} 秒。"
+                )
+                heartbeat = STORE.add_message(
+                    channel_id=channel_id,
+                    author_id="system",
+                    author_type="system",
+                    message_kind="progress_update",
+                    body=note,
+                    metadata={"task_id": task_id, "phase": phase, "agent_id": agent_id, "heartbeat": True},
+                )
+                STORE.add_event(
+                    channel_id=channel_id,
+                    event_type="run_heartbeat",
+                    payload={"message": heartbeat, "task_id": task_id, "phase": phase, "agent_id": agent_id},
+                )
+                last_heartbeat = now_tick
             progress = _read_json(validation)
             if progress:
                 current = (progress.get("stage"), progress.get("message"))
@@ -1707,6 +2007,9 @@ def _run_background(
                     "running": False,
                     "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "error": reason,
+                    "current_phase": "failed",
+                    "worker_alive": False,
+                    "cancel_requested": False,
                     "flow_orphaned": True,
                     "paused": False,
                     "pause_requested": False,
@@ -1714,6 +2017,19 @@ def _run_background(
             RUN_RESUME_EVENT.set()
             return
         flow_thread.join()
+        with RUN_STATE_LOCK:
+            cancelled = bool(RUN_STATE.get("cancel_requested"))
+        if cancelled:
+            _delete_task_after_cancellation(task_id, reason="完整研究已取消")
+            with RUN_STATE_LOCK:
+                RUN_STATE.update({
+                    "running": False,
+                    "finished_at": _now_utc(),
+                    "current_phase": "cancelled",
+                    "worker_alive": False,
+                    "cancel_requested": False,
+                })
+            return
         if "error" in result_box:
             raise result_box["error"]
         future = result_box.get("value")
@@ -1732,14 +2048,14 @@ def _run_background(
             )
             STORE.add_event(channel_id=channel_id, event_type="run_failed", payload={"message": message, "run_id": run_id, "summary": summary})
             with RUN_STATE_LOCK:
-                RUN_STATE.update({"running": False, "run_id": run_id, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"), "summary": summary, "error": str(reason)})
+                RUN_STATE.update({"running": False, "run_id": run_id, "finished_at": _now_utc(), "summary": summary, "error": str(reason), "current_phase": "failed", "worker_alive": False})
             return
         if isinstance(summary, dict):
             _replay_flow_events(channel_id, run_id, summary, root_message_id)
         STORE.update_task(task_id, "completed", run_id=run_id, metadata_json=json.dumps({"summary": summary}, ensure_ascii=False))
         message = STORE.add_message(
             channel_id=channel_id, author_id="report_writer", author_type="agent",
-            thread_id=root_message_id,
+            thread_id=None,
             message_kind="report_delivery",
             body=("ReportWriter 已完成正式报告交付。点击右侧报告按钮查看 Markdown。"
                   if report_generated else
@@ -1748,18 +2064,18 @@ def _run_background(
         )
         STORE.add_event(channel_id=channel_id, event_type="report_delivered", payload={"message": message, "run_id": run_id, "report_available": report_available, "fallback": not report_generated})
         with RUN_STATE_LOCK:
-            RUN_STATE.update({"running": False, "run_id": run_id, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"), "summary": summary, "error": None})
+            RUN_STATE.update({"running": False, "run_id": run_id, "finished_at": _now_utc(), "summary": summary, "error": None, "current_phase": "completed", "worker_alive": False, "cancel_requested": False})
     except Exception as exc:
         STORE.update_task(task_id, "failed", run_id=run_id, metadata_json=json.dumps({"error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
         message = STORE.add_message(
             channel_id=channel_id, author_id="system", author_type="system",
-            thread_id=root_message_id,
+            thread_id=None,
             message_kind="run_failed", body=f"研究运行失败：{type(exc).__name__}: {exc}",
             metadata={"run_id": run_id},
         )
         STORE.add_event(channel_id=channel_id, event_type="run_failed", payload={"message": message})
         with RUN_STATE_LOCK:
-            RUN_STATE.update({"running": False, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"), "error": f"{type(exc).__name__}: {exc}"})
+            RUN_STATE.update({"running": False, "finished_at": _now_utc(), "error": f"{type(exc).__name__}: {exc}", "current_phase": "failed", "worker_alive": False, "cancel_requested": False})
     finally:
         # Do not leave a paused worker blocked after the run finishes or fails.
         RUN_RESUME_EVENT.set()
@@ -1796,13 +2112,23 @@ def _start_research(
     task = STORE.create_task(channel_id=channel_id, created_by=created_by, assignee_id="planner", title=f"研究 {company}", status="running", metadata={"company": company, "as_of_date": as_of_text})
     STORE.update_task(task["task_id"], "running")
     STORE.add_event(channel_id=channel_id, event_type="run_started", payload={"task": task, "company": company, "as_of_date": as_of_text})
+    accepted = STORE.add_message(
+        channel_id=channel_id, author_id="planner", author_type="agent", thread_id=None,
+        message_kind="agent_message",
+        body="已接收研究请求，正在检查公司名称、基准日和公开资料范围（预检中）。",
+        metadata={"task_id": task["task_id"], "phase": "preflight"},
+    )
+    STORE.add_event(
+        channel_id=channel_id, event_type="agent_accepted",
+        payload={"message": accepted, "task_id": task["task_id"], "agent_id": "planner"},
+    )
     message = STORE.add_message(
         channel_id=channel_id, author_id="planner", author_type="agent", message_kind="task_dispatch",
         body=f"@Fundamental @IndustryCompetition @MarketCatalyst 已收到研究任务：{company}（基准日 {as_of_text}）。先规划范围，再启动并行研究。",
         mentions=["fundamental", "industry_competition", "market_catalyst"], metadata={"task_id": task["task_id"], "company": company},
     )
     with RUN_STATE_LOCK:
-        RUN_STATE.update({"running": True, "run_id": None, "task_id": task["task_id"], "company": company, "as_of_date": as_of_text, "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"), "finished_at": None, "summary": None, "error": None, "last_progress": None, "paused": False, "pause_requested": False, "flow_orphaned": False})
+        RUN_STATE.update({"running": True, "run_id": None, "task_id": task["task_id"], "company": company, "as_of_date": as_of_text, "started_at": _now_utc(), "finished_at": None, "summary": None, "error": None, "last_progress": None, "current_phase": "queued", "current_agent": "planner", "last_event_at": _now_utc(), "worker_alive": False, "cancel_requested": False, "paused": False, "pause_requested": False, "flow_orphaned": False})
     RUN_RESUME_EVENT.set()
     thread = threading.Thread(
         target=_run_background,
@@ -1816,7 +2142,24 @@ def _start_research(
         daemon=True,
         name="investment-research-workbench",
     )
-    thread.start()
+    try:
+        thread.start()
+    except Exception as exc:
+        reason = f"无法启动研究后台线程：{type(exc).__name__}: {exc}"
+        STORE.update_task(
+            task["task_id"], "failed",
+            metadata_json=json.dumps({"error": reason}, ensure_ascii=False),
+        )
+        failed = STORE.add_message(
+            channel_id=channel_id, author_id="system", author_type="system",
+            thread_id=None, message_kind="run_failed", body=reason,
+            metadata={"task_id": task["task_id"]},
+        )
+        STORE.add_event(channel_id=channel_id, event_type="run_failed", payload={"message": failed})
+        with RUN_STATE_LOCK:
+            RUN_STATE.update({"running": False, "current_phase": "failed", "worker_alive": False, "error": reason})
+        RUN_LOCK.release()
+        return HTTPStatus.INTERNAL_SERVER_ERROR, {"error": reason, "task": task, "message": message}
     return HTTPStatus.ACCEPTED, {"status": "started", "task": task, "message": message}
 
 
@@ -1833,11 +2176,40 @@ def _parse_mentions(body: str, provided: Any) -> list[str]:
 
 def _ensure_flow_events_projected(channel_id: str) -> dict[str, Any]:
     """Self-heal the UI if a worker finished before event projection was enabled."""
-    snapshot = _snapshot()
+    snapshot = _snapshot_for_channel(channel_id)
     summary = snapshot.get("summary")
     if isinstance(summary, dict) and summary.get("run_id") and summary.get("events"):
         _replay_flow_events(channel_id, str(summary["run_id"]), summary)
     return snapshot
+
+
+def _workspace_payload(channel_id: str) -> dict[str, Any]:
+    """Return explicit workspace-wide and current-channel data collections.
+
+    Global views can intentionally use ``tasks`` and ``files``.  The channel
+    tabs must only use the ``channel_*`` collections, which keeps new channels
+    and direct messages isolated from previous research runs.
+    """
+
+    snapshot = _ensure_flow_events_projected(channel_id)
+    if snapshot.get("run_id"):
+        _sync_agent_files(channel_id, str(snapshot["run_id"]))
+    return {
+        "workspace": {"workspace_id": "default", "name": "AI帮投研助手"},
+        "channels": STORE.list_channels(),
+        "agents": _workspace_agents(channel_id),
+        "tasks": STORE.list_tasks(),
+        "artifacts": STORE.list_artifacts(),
+        "files": STORE.list_files(),
+        "channel_tasks": STORE.list_tasks(channel_id),
+        "channel_artifacts": STORE.list_artifacts(channel_id),
+        "channel_files": STORE.list_files(channel_id),
+        "removed_agents": STORE.removed_builtin_agents(),
+        "bridge_port": LOCAL_BRIDGE_PORT,
+        "run": snapshot,
+        "event_seq": STORE.latest_event_seq(channel_id),
+        "model_settings": _model_settings_payload(),
+    }
 
 
 class WorkbenchHandler(BaseHTTPRequestHandler):
@@ -1872,12 +2244,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         if path == "/api/workspace":
             channel_id = query.get("channel_id", ["research-room"])[0]
-            # The files pane is workspace wide, so it asks for every channel's
-            # files and filters client-side.
-            files_scope = None if query.get("files", [""])[0] == "all" else channel_id
-            snapshot = _ensure_flow_events_projected("research-room")
-            _sync_agent_files(channel_id, snapshot.get("run_id") or RUN_STATE.get("run_id"))
-            self._send(200, {"workspace": {"workspace_id": "default", "name": "AI帮投研助手"}, "channels": STORE.list_channels(), "agents": _workspace_agents("research-room"), "tasks": STORE.list_tasks(), "artifacts": STORE.list_artifacts(), "files": STORE.list_files(files_scope), "removed_agents": STORE.removed_builtin_agents(), "bridge_port": LOCAL_BRIDGE_PORT, "run": snapshot, "event_seq": STORE.latest_event_seq("research-room"), "model_settings": _model_settings_payload()})
+            self._send(200, _workspace_payload(channel_id))
         elif path == "/api/channels":
             self._send(200, STORE.list_channels())
         elif path.startswith("/api/channels/") and path.endswith("/messages"):
@@ -1948,10 +2315,11 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         elif path == "/api/graph":
             self._send(200, _relationship_graph(query.get("channel_id", [""])[0]))
         elif path == "/api/files":
-            # No channel_id means every channel: the files pane is workspace
-            # wide and filters client-side.
             channel_id = query.get("channel_id", [""])[0]
-            _sync_agent_files(channel_id or "research-room", RUN_STATE.get("run_id"))
+            if channel_id:
+                snapshot = _ensure_flow_events_projected(channel_id)
+                if snapshot.get("run_id"):
+                    _sync_agent_files(channel_id, str(snapshot["run_id"]))
             self._send(200, STORE.list_files(channel_id or None))
         elif path.startswith("/api/files/") and path.endswith("/download"):
             self._serve_file(path.split("/")[3])
@@ -2183,10 +2551,35 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             STORE.add_event(
                 channel_id=channel_id, event_type="message_created", payload={"message": message}
             )
+            quick_reply = _post_direct_acknowledgement(
+                channel_id=channel_id,
+                root_message_id=message["message_id"],
+                agent=agent,
+                text=text,
+            )
+            if agent_id == "planner":
+                self._send(201, {
+                    "message": message, "channel": channel, "reply": quick_reply, "status": "agent_replied",
+                    "notice": "Planner 已回复。完整投研流程请在项目频道 @Planner 启动。",
+                })
+                return
+            if not _looks_like_research_request(text):
+                self._send(201, {
+                    "message": message, "channel": channel, "reply": quick_reply,
+                    "status": "agent_replied",
+                })
+                return
             if agent_id not in DIRECT_AGENT_IDS:
                 self._send(201, {
-                    "message": message, "channel": channel, "status": "recorded",
-                    "notice": f"{agent.get('name') or agent_id} 不接受单独任务；请在项目频道 @Planner 启动完整研究。",
+                    "message": message, "channel": channel, "reply": quick_reply, "status": "blocked",
+                    "notice": "该 Agent 已确认收到研究型请求；当前私信未附带项目研究材料，无法安全启动工具调研。请在项目频道发起，或先提供文件与研究范围。",
+                })
+                return
+            context = _snapshot_for_channel(channel_id).get("summary")
+            if not isinstance(context, dict):
+                self._send(201, {
+                    "message": message, "channel": channel, "reply": quick_reply, "status": "blocked",
+                    "notice": "已收到研究型请求，但当前私信没有可授权的项目上下文。请先在项目频道启动研究，或补充目标公司、时间范围和资料。",
                 })
                 return
             try:
@@ -2428,6 +2821,49 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         path = unquote(urlparse(self.path).path)
+        if path.startswith("/api/tasks/") and len(path.split("/")) == 4:
+            task_id = path.split("/")[3]
+            task = STORE.get_task(task_id)
+            if task is None:
+                self._send(404, {"error": "task not found"})
+                return
+            status = str(task.get("status") or "")
+            if status in {"queued", "running", "cancelling"}:
+                _request_task_cancellation(task_id)
+                metadata = {**(task.get("metadata") or {}), "cancel_requested": True}
+                STORE.update_task(
+                    task_id,
+                    "cancelling",
+                    metadata_json=json.dumps(metadata, ensure_ascii=False),
+                )
+                message = STORE.add_message(
+                    channel_id=str(task["channel_id"]),
+                    author_id="system",
+                    author_type="system",
+                    message_kind="task_update",
+                    body=f"任务 {task_id} 正在取消；当前调用结束后将从任务列表移除。",
+                    metadata={"task_id": task_id, "cancelling": True},
+                )
+                STORE.add_event(
+                    channel_id=str(task["channel_id"]),
+                    event_type="task_cancelling",
+                    payload={"task_id": task_id, "message": message},
+                )
+                with RUN_STATE_LOCK:
+                    if RUN_STATE.get("task_id") == task_id:
+                        RUN_STATE.update({"cancel_requested": True, "current_phase": "cancelling"})
+                if status == "queued":
+                    removed = _delete_task_after_cancellation(task_id, reason="队列任务已取消")
+                    self._send(200, {"deleted": True, "task_id": task_id, "task": removed})
+                else:
+                    self._send(HTTPStatus.ACCEPTED, {
+                        "deleted": False, "cancelling": True, "task_id": task_id,
+                        "notice": "任务正在安全取消，页面会在收到 task_deleted 事件后自动更新。",
+                    })
+                return
+            removed = _delete_task_after_cancellation(task_id, reason="已删除")
+            self._send(200, {"deleted": True, "task_id": task_id, "task": removed})
+            return
         if path.startswith("/api/channels/") and len(path.split("/")) == 4:
             channel_id = path.split("/")[3]
             channels = STORE.list_channels()
@@ -2472,19 +2908,56 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             if not agent:
                 self._send(404, {"error": "Agent not found"})
                 return
-            if any(
-                task.get("assignee_id") == agent_id and task.get("status") == "running"
-                for task in STORE.list_tasks()
-            ):
-                self._send(409, {"error": "该 Agent 还有正在执行的任务，无法删除。"})
-                return
-            if agent.get("type") == "custom":
-                STORE.delete_agent(agent_id)
-                self._send(200, {"deleted": True, "agent_id": agent_id, "restorable": False})
+            active_tasks = [
+                task for task in STORE.list_tasks()
+                if task.get("assignee_id") == agent_id
+                and task.get("status") in {"queued", "running", "cancelling"}
+            ]
+            for task in active_tasks:
+                _request_task_cancellation(str(task["task_id"]))
+                metadata = {**(task.get("metadata") or {}), "cancel_requested": True, "agent_deleted": True}
+                STORE.update_task(
+                    str(task["task_id"]), "cancelling",
+                    metadata_json=json.dumps(metadata, ensure_ascii=False),
+                )
+                STORE.add_event(
+                    channel_id=str(task["channel_id"]),
+                    event_type="task_cancelling",
+                    payload={"task_id": task["task_id"], "agent_id": agent_id, "reason": "agent_deleted"},
+                )
+            if agent.get("type") in {"custom", "local"}:
+                cleanup = STORE.delete_custom_agent_cascade(agent_id)
+                if cleanup is None:
+                    self._send(409, {"error": "custom Agent cleanup failed"})
+                    return
+                _remove_custom_agent_uploads(agent, str(cleanup["direct_channel_id"]))
+                for channel in STORE.list_channels():
+                    if channel.get("kind") == "direct":
+                        continue
+                    STORE.add_event(
+                        channel_id=str(channel["channel_id"]),
+                        event_type="agent_deleted",
+                        payload={"agent_id": agent_id, "restorable": False},
+                    )
+                # Direct-channel tasks are gone from the store. Shared-channel
+                # tasks will be observed by their worker and cancelled safely.
+                self._send(200, {
+                    "deleted": True, "agent_id": agent_id, "restorable": False,
+                    "cleanup": cleanup["removed"],
+                    "cancelled_task_ids": [task["task_id"] for task in active_tasks],
+                })
                 return
             # A built-in Agent belongs to the plugin. Removing it from the
             # workspace is reversible; deleting its definition is not ours to do.
             STORE.set_builtin_agent_removed(agent_id, True)
+            for channel in STORE.list_channels():
+                if channel.get("kind") == "direct":
+                    continue
+                STORE.add_event(
+                    channel_id=str(channel["channel_id"]),
+                    event_type="agent_deleted",
+                    payload={"agent_id": agent_id, "restorable": True},
+                )
             self._send(200, {
                 "deleted": True, "agent_id": agent_id, "restorable": True,
                 "notice": f"{agent.get('name') or agent_id} 已移出工作区，可随时恢复。",

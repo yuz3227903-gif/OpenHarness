@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -14,7 +15,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from openharness.api.client import SupportsStreamingMessages
-from openharness.config.settings import PermissionSettings, Settings, load_settings
+from openharness.config.settings import PermissionSettings, ProviderProfile, Settings, load_settings
 from openharness.engine.query_engine import QueryEngine
 from openharness.engine.stream_events import (
     AssistantTurnComplete,
@@ -209,6 +210,7 @@ class InvestmentResearchRuntimeAdapter:
         del runtime_context
         entry = get_agent_entry(agent_id)
         settings = self._settings_loader().materialize_active_profile()
+        runtime_settings, runtime_model = self._resolve_runtime_settings(settings, None)
         registry = self.build_restricted_tool_registry(agent_id)
         actual_tools = [tool.name for tool in registry.list_tools()]
         missing_tools = [name for name in entry.allowed_tools if name not in actual_tools]
@@ -219,8 +221,8 @@ class InvestmentResearchRuntimeAdapter:
         return RuntimePreflight(
             agent_id=entry.agent_id,
             runtime_agent_name=entry.runtime_agent_name,
-            model=settings.model,
-            provider=settings.provider or settings.api_format,
+            model=runtime_model,
+            provider=runtime_settings.provider or runtime_settings.api_format,
             allowed_tools=actual_tools,
             missing_tools=missing_tools,
             tavily_configured=tavily_configured,
@@ -333,8 +335,12 @@ class InvestmentResearchRuntimeAdapter:
                     + ", ".join(invalid_approved),
                 )
 
+        base_settings = self._settings_loader().materialize_active_profile()
+        settings, effective_model = self._resolve_runtime_settings(
+            base_settings,
+            request.model_override,
+        )
         preflight = self.preflight(entry.agent_id)
-        effective_model = request.model_override or preflight.model
         if not preflight.ready_for_real_run:
             missing = list(preflight.missing_tools)
             if "tavily_search" in entry.allowed_tools and not preflight.tavily_configured:
@@ -369,7 +375,6 @@ class InvestmentResearchRuntimeAdapter:
             )
         )
 
-        settings = self._settings_loader().materialize_active_profile()
         registry = self.build_restricted_tool_registry(entry.agent_id)
         permission_settings = PermissionSettings(
             allowed_tools=list(entry.allowed_tools),
@@ -811,6 +816,52 @@ class InvestmentResearchRuntimeAdapter:
         from openharness.ui.runtime import _resolve_api_client_from_settings
 
         return _resolve_api_client_from_settings(settings)
+
+    @staticmethod
+    def _resolve_runtime_settings(
+        settings: Settings,
+        model_override: str | None,
+    ) -> tuple[Settings, str]:
+        """Select Ark for investment research when its local credential exists.
+
+        The workbench exposes Ark Plan models, while legacy OpenHarness profile
+        settings may still point at DeepSeek.  Build a process-local compatible
+        profile here so a selected Ark model never gets sent to the DeepSeek
+        endpoint.  No profile or credential is written to user settings.
+        """
+
+        from openharness.invest_research.workbench_models import (
+            ARK_PLAN_BASE_URL,
+            DEFAULT_MODEL,
+            model_ids,
+        )
+
+        requested_model = (model_override or "").strip()
+        ark_configured = bool(os.environ.get("ARK_API_KEY", "").strip())
+        use_ark = ark_configured and (not requested_model or requested_model in model_ids())
+        if not use_ark:
+            return settings, requested_model or settings.model
+
+        model = requested_model or DEFAULT_MODEL
+        profiles = dict(settings.profiles)
+        profiles["investment-research-ark"] = ProviderProfile(
+            label="Volcengine Ark (Investment Research)",
+            provider="volcengine",
+            api_format="openai",
+            auth_source="openai_api_key",
+            default_model=model,
+            last_model=model,
+            base_url=ARK_PLAN_BASE_URL,
+        )
+        return (
+            settings.model_copy(
+                update={
+                    "active_profile": "investment-research-ark",
+                    "profiles": profiles,
+                }
+            ).materialize_active_profile(),
+            model,
+        )
 
 
 class PlannerRuntimeAdapter(InvestmentResearchRuntimeAdapter):

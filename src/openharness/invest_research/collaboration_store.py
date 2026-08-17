@@ -528,6 +528,46 @@ class CollaborationStore:
             )
         return bool(cursor.rowcount)
 
+    def delete_custom_agent_cascade(self, agent_id: str) -> dict[str, Any] | None:
+        """Remove a user-created Agent and its private workspace footprint.
+
+        Shared-channel history intentionally stays in place: it is part of the
+        project's audit trail.  The Agent's one-to-one channel, queued work,
+        local-session metadata and uploaded Skill records are private to that
+        Agent and can safely be removed together.
+        """
+
+        agent = self.get_agent(agent_id)
+        if agent is None or agent.get("type") not in {"custom", "local"}:
+            return None
+        direct_channel_id = f"dm-{agent_id}"
+        skills = self.list_agent_skills(agent_id)
+        removed: dict[str, int] = {}
+        with self._lock, self._connect() as connection:
+            for table in (
+                "workbench_messages", "workbench_tasks", "workbench_events",
+                "workbench_artifacts", "workbench_files", "workbench_channel_members",
+            ):
+                cursor = connection.execute(
+                    f"DELETE FROM {table} WHERE channel_id=?", (direct_channel_id,)
+                )
+                removed[table] = cursor.rowcount
+            cursor = connection.execute(
+                "DELETE FROM workbench_channels WHERE channel_id=?", (direct_channel_id,)
+            )
+            removed["workbench_channels"] = cursor.rowcount
+            for table in ("workbench_agent_skills", "workbench_local_sessions", "workbench_channel_members"):
+                cursor = connection.execute(f"DELETE FROM {table} WHERE agent_id=?", (agent_id,))
+                removed[table] = removed.get(table, 0) + cursor.rowcount
+            cursor = connection.execute("DELETE FROM workbench_agents WHERE agent_id=?", (agent_id,))
+            removed["workbench_agents"] = cursor.rowcount
+        return {
+            "agent": agent,
+            "direct_channel_id": direct_channel_id,
+            "skills": skills,
+            "removed": removed,
+        }
+
     def create_channel(
         self, *, name: str, topic: str, description: str, member_ids: list[str],
         workspace_id: str = "default",
@@ -739,6 +779,16 @@ class CollaborationStore:
             item["metadata"] = json.loads(item.pop("metadata_json"))
             result.append(item)
         return result
+
+    def delete_task(self, task_id: str) -> dict[str, Any] | None:
+        """Remove one task record without deleting its messages or artefacts."""
+
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        with self._lock, self._connect() as connection:
+            connection.execute("DELETE FROM workbench_tasks WHERE task_id=?", (task_id,))
+        return task
 
     def upsert_artifact(self, *, artifact_id: str, channel_id: str, agent_id: str,
                         title: str, summary: str, artifact_type: str = "research",

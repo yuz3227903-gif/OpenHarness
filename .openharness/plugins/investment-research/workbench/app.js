@@ -1,4 +1,14 @@
-const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, activePane: 'chat', pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, railExpanded: false, bridgePort: 18789, agentFilter: 'all', paneMode: 'inline' };
+const SIDEBAR_PREFS_KEY = 'investment-research.sidebar-prefs.v1';
+function readSidebarPrefs(){
+  try{
+    const raw=JSON.parse(localStorage.getItem(SIDEBAR_PREFS_KEY) || '{}');
+    return {pinned:Array.isArray(raw.pinned)?raw.pinned.filter(Boolean):[],favorites:Array.isArray(raw.favorites)?raw.favorites.filter(Boolean):[]};
+  }catch(_error){ return {pinned:[],favorites:[]}; }
+}
+function saveSidebarPrefs(){
+  try{ localStorage.setItem(SIDEBAR_PREFS_KEY, JSON.stringify(state.sidebarPrefs)); }catch(_error){ /* storage may be disabled */ }
+}
+const state = { channelId: 'research-room', channels: [], messages: [], agents: [], tasks: [], artifacts: [], files: [], channelTasks: [], channelArtifacts: [], channelFiles: [], run: {}, modelSettings: {default_model:'ark-code-latest',models:[]}, eventSeq: 0, selectedThreadMessageId: null, workspaceView: 'channel', channelTab: 'chat', drawerMode: null, pendingAttachments: [], graph: null, taskFilters: {creator:'', assignee:'', channel:'', view:'board'}, collapsed: {}, fileChannel: '', graphChannel: '', graphSelection: null, removedAgents: [], skills: {}, threads: {}, openComment: null, bridgePort: 18789, agentFilter: 'all', channelMuted: false, sidebarPrefs: readSidebarPrefs() };
 const $ = (id) => document.getElementById(id);
 const agentColors = { planner:'#C8102E', fundamental:'#A60D28', industry_competition:'#8C3156', market_catalyst:'#C88A18', risk:'#8B2940', reviewer_arbiter:'#6F1630', report_writer:'#B12A46' };
 const labels = { planner:'林序', fundamental:'陈实', industry_competition:'周衡', market_catalyst:'沈策', risk:'顾谨', reviewer_arbiter:'韩证', report_writer:'程章', system:'工作台', owner:'你' };
@@ -15,6 +25,23 @@ const CAPABILITY_LABELS = {
 function esc(value){ return String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 // Reference one symbol from the inline Lucide sprite in index.html.
 function icon(name, extraClass=''){ return `<svg class="icon ${extraClass}" aria-hidden="true"><use href="#i-${name}"/></svg>`; }
+function openContextDrawer(title='上下文'){
+  const pane=document.querySelector('.context-pane');
+  const scrim=$('drawer-scrim');
+  const heading=$('context-title');
+  if(heading) heading.innerHTML=`${icon('user')} ${esc(title)}`;
+  state.drawerMode=title;
+  if(pane){ pane.classList.add('is-open'); pane.setAttribute('aria-hidden','false'); }
+  if(scrim) scrim.hidden=false;
+}
+function closeContextDrawer(){
+  const pane=document.querySelector('.context-pane');
+  const scrim=$('drawer-scrim');
+  if(pane){ pane.classList.remove('is-open'); pane.setAttribute('aria-hidden','true'); }
+  if(scrim) scrim.hidden=true;
+  state.selectedThreadMessageId=null;
+  state.drawerMode=null;
+}
 function initials(id){ return (labels[id] || id || '?').slice(0,2); }
 // The research subject belongs to the open channel, not to a fixed default.
 function currentCompany(){
@@ -65,7 +92,10 @@ function renderMessages(){
       : '';
     return `<article class="message" data-message="${esc(m.message_id)}"><div class="message-avatar" style="background:${agentColors[m.author_id] || '#6e7b76'}">${esc(initials(m.author_id))}</div><div class="message-main"><div class="message-top"><strong>${esc(name)}</strong><time>${new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><div class="message-body">${body}</div><div class="message-meta"><button class="comment-toggle ${open?'active':''}" data-comment-toggle="${esc(m.message_id)}">${summary}</button></div>${replies.length||open?`<div class="comment-thread">${repliesHtml}${composer}</div>`:''}</div></article>`;
   }).join('');
-  list.querySelectorAll('[data-comment-toggle]').forEach(el=>el.addEventListener('click',()=>toggleComments(el.dataset.commentToggle)));
+  // Raft opens message discussions in the right-hand thread drawer. Keeping
+  // the main timeline fixed prevents a long reply chain from shifting every
+  // later message and keeps the user's reading position stable.
+  list.querySelectorAll('[data-comment-toggle]').forEach(el=>el.addEventListener('click',()=>showMessage(el.dataset.commentToggle)));
   list.querySelectorAll('[data-comment-form]').forEach(form=>form.addEventListener('submit',event=>{
     event.preventDefault();
     submitComment(form.dataset.commentForm, form.querySelector('textarea'));
@@ -113,8 +143,9 @@ async function submitComment(messageId, textarea){
     : '评论已发送'));
 }
 function renderRun(){ const r=state.run || {}; const banner=$('run-banner'); if(r.error){ banner.className='run-banner failed'; $('run-label').textContent='本次运行失败，但记录已保留'; $('run-meta').textContent=r.error; } else if(r.running){ banner.className='run-banner running'; $('run-label').textContent='研究流程运行中'; $('run-meta').textContent=`${r.company || ''} · ${r.as_of_date || ''}`; } else if(r.report_available){ const fallback=Boolean(r.summary && r.summary.fallback_used); banner.className='run-banner'; $('run-label').textContent=fallback?'降级报告已交付':'报告已交付'; $('run-meta').textContent=`Run ${r.run_id || ''}`; } else { banner.className='run-banner'; $('run-label').textContent='等待研究任务'; $('run-meta').textContent='演示数据 / 本地真实运行入口'; } }
-function renderContext(){ const r=state.run||{}; const current=state.tasks.find(t=>t.status==='running') || state.tasks[0]; $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div>${current?`<h3>最近任务</h3><div class="kv"><span>任务</span><strong>${esc(current.title)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(current.assignee_id)}</strong></div>`:''}<h3>两种协作方式</h3><p><strong>@Planner</strong> 会启动七个 Agent 的完整研究闭环；<strong>@Fundamental 等其他 Agent</strong> 会复用频道最近一次 Run 的参数卡和证据，单独执行补充任务。一次 @多个 Agent 时会并行派发。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`; const btn=$('context-report'); if(btn) btn.addEventListener('click',openReport); }
+function renderContext(){ const r=state.run||{}; const current=state.channelTasks.find(t=>t.status==='running') || state.channelTasks[0]; $('context-content').innerHTML=`<div class="context-card"><h2>当前研究运行</h2><p class="muted">${r.running?'正在执行真实 CrewAI/OpenHarness 流程':'@Planner 可启动完整研究；@其他 Agent 可直接派发补充任务'}</p><div class="kv"><span>公司</span><strong>${esc(r.company || currentCompany() || '未指定')}</strong></div><div class="kv"><span>基准日</span><strong>${esc(r.as_of_date || '默认今天')}</strong></div><div class="kv"><span>状态</span><strong>${r.running?'运行中':r.report_available?'已交付':'等待中'}</strong></div>${current?`<h3>最近任务</h3><div class="kv"><span>任务</span><strong>${esc(current.title)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(current.assignee_id)}</strong></div>`:'<p class="muted">当前频道尚未创建任务。</p>'}<h3>两种协作方式</h3><p><strong>@Planner</strong> 会启动七个 Agent 的完整研究闭环；<strong>@Fundamental 等其他 Agent</strong> 会复用频道最近一次 Run 的参数卡和证据，单独执行补充任务。一次 @多个 Agent 时会并行派发。</p>${r.report_available?'<button class="primary" id="context-report">打开 Markdown 报告</button>':''}</div>`; const btn=$('context-report'); if(btn) btn.addEventListener('click',openReport); }
 function showAgent(id){
+  openContextDrawer('Agent 资料');
   const a=state.agents.find(x=>x.agent_id===id)||{};
   const isCustom=a.type==='custom';
   const model=a.model||state.modelSettings.default_model;
@@ -140,7 +171,7 @@ function showAgent(id){
     : `<div class="context-actions"><button id="save-agent-model" class="primary" type="button">保存模型</button>${isCustom?'<button id="edit-agent" class="secondary" type="button">编辑资料</button>':''}</div>`;
   const skillCard=isLocal
     ? ''
-    : `<div class="context-card"><div class="skill-head"><h2>Skill 插件</h2><label class="attach-btn" title="上传 Skill 插件">${icon('upload')} 上传<input id="skill-input" type="file" accept=".md,.markdown,.json,.yaml,.yml,.txt,.zip" hidden></label></div><p class="muted">上传 SKILL.md 或打包的插件；启用后随该 Agent 的角色提示词一起加载。</p><div id="skill-list" class="skill-list"><p class="muted">正在加载插件…</p></div></div>`;
+    : `<div class="context-card"><div class="skill-head"><h2>Skill 插件</h2></div><label class="skill-upload-control" title="上传 Skill 插件"><span class="skill-upload-icon">${icon('upload')}</span><span class="skill-upload-copy"><strong>上传 Skill</strong><small>支持 SKILL.md 或插件压缩包</small></span><input id="skill-input" type="file" accept=".md,.markdown,.json,.yaml,.yml,.txt,.zip" hidden></label><p class="muted">上传后会作为该 Agent 的工作方法加载；不会自动执行未审核的代码。</p><div id="skill-list" class="skill-list"><p class="muted">正在加载插件…</p></div></div>`;
   const promptCard=(!isLocal && isCustom)
     ? `<h3>系统提示词</h3><div class="agent-prompt">${esc(a.system_prompt||'')}</div>`
     : '';
@@ -233,9 +264,45 @@ async function saveAgentModel(agentId){
   await loadWorkspace(false); showAgent(agentId); toast(`已将 ${result.name || agentId} 切换为 ${model}`);
 }
 function showMessage(id){ const m=state.messages.find(x=>x.message_id===id); if(!m)return; $('context-content').innerHTML=`<div class="context-card"><h2>${esc(kindLabel(m.message_kind))}</h2><p>${esc(m.body)}</p><h3>消息信息</h3><div class="kv"><span>作者</span><strong>${esc(labels[m.author_id]||m.author_id)}</strong></div><div class="kv"><span>时间</span><strong>${esc(m.created_at)}</strong></div><div class="kv"><span>关联任务</span><strong>${esc(m.metadata?.task_id||'无')}</strong></div><p class="muted">详细线程能力会在下一阶段加入；当前先把主频道、任务状态和真实运行结果打通。</p></div>`; }
-async function loadWorkspace(show=true){ const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}&files=all`,{cache:'no-store'}); const data=await res.json(); state.channels=data.channels||[]; state.agents=data.agents||[]; state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[]; state.removedAgents=data.removed_agents||[]; if(data.bridge_port) state.bridgePort=data.bridge_port; state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings; state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0)); renderModelOptions(); renderChannels(); applyChannelHeader(); renderAgents(); renderRun(); renderTaskBoard(); renderFileBoard(); if(state.activePane==='graph') loadGraph(); if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); } if(show) $('connection-state').textContent='已连接'; }
+async function loadWorkspace(show=true){
+  const res=await fetch(`/api/workspace?channel_id=${encodeURIComponent(state.channelId)}`,{cache:'no-store'});
+  const data=await res.json();
+  state.channels=data.channels||[]; state.agents=data.agents||[];
+  state.tasks=data.tasks||[]; state.artifacts=data.artifacts||[]; state.files=data.files||[];
+  state.channelTasks=data.channel_tasks||[];
+  state.channelArtifacts=data.channel_artifacts||[];
+  state.channelFiles=data.channel_files||[];
+  state.removedAgents=data.removed_agents||[];
+  if(data.bridge_port) state.bridgePort=data.bridge_port;
+  state.run=data.run||{}; state.modelSettings=data.model_settings||state.modelSettings;
+  state.eventSeq=Math.max(state.eventSeq,Number(data.event_seq||0));
+  renderModelOptions(); renderChannels(); applyChannelHeader(); renderAgents(); renderRun();
+  renderTaskBoard(); renderFileBoard(); renderActivityBoard(); renderMembersBoard();
+  if(state.workspaceView==='graph') loadGraph();
+  if(state.selectedThreadMessageId){ refreshSelectedThread(false); }else{ renderContext(); }
+  if(show) $('connection-state').textContent='已连接';
+}
+function currentDirectAgentId(){
+  const channel=state.channels.find(item=>item.channel_id===state.channelId);
+  if(channel?.kind!=='direct') return '';
+  return String(channel.channel_id || '').replace(/^dm-/, '');
+}
 async function loadMessages(){ const res=await fetch(`/api/channels/${state.channelId}/messages`); state.messages=await res.json(); renderMessages(); }
-async function openReport(){ const res=await fetch(`/api/research/report?run_id=${encodeURIComponent(state.run.run_id||'')}`); if(!res.ok){toast('当前还没有报告');return;} const text=await res.text(); const win=window.open(); win.document.write(`<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;padding:28px">${esc(text)}</pre>`); win.document.close(); }
+async function openReport(){
+  const runId=state.run.run_id||'';
+  openContextDrawer('研究报告');
+  $('context-content').innerHTML='<div class="empty-context"><h2>正在打开报告…</h2><p>报告保留在当前工作台内，不会被浏览器拦截。</p></div>';
+  try{
+    const res=await fetch(`/api/research/report?run_id=${encodeURIComponent(runId)}`,{cache:'no-store'});
+    if(!res.ok) throw new Error('当前还没有报告');
+    const text=await res.text();
+    $('context-content').innerHTML=`<div class="context-card report-context-card"><div class="thread-title"><div><span class="eyebrow">Markdown</span><h2>${esc(state.run.company||currentCompany()||'研究报告')}</h2></div><button id="report-back" class="secondary">返回概览</button></div><pre class="report-preview">${esc(text)}</pre><div class="context-actions"><a class="primary drawer-download" href="/api/research/report?run_id=${encodeURIComponent(runId)}" download="${esc((state.run.company||'研究')+'报告.md')}">${icon('download')} 下载 Markdown</a></div></div>`;
+    $('report-back')?.addEventListener('click',()=>{ openContextDrawer('上下文'); renderContext(); });
+  }catch(error){
+    $('context-content').innerHTML=`<div class="empty-context"><h2>报告暂时不可用</h2><p>${esc(error.message||'请稍后刷新重试')}</p><button id="report-back" class="secondary">返回概览</button></div>`;
+    $('report-back')?.addEventListener('click',()=>{ openContextDrawer('上下文'); renderContext(); });
+  }
+}
 function setupComposer(){
   const input=$('message-input'), menu=$('mention-menu');
   const choices=state.agents;
@@ -266,9 +333,18 @@ function setupComposer(){
       await sendToLocalAgent(localAgent, body);
       return;
     }
-    // The研究标的 comes from the open channel's topic, not a hard-coded name.
+    // Direct messages must enter the Agent-message endpoint.  Sending them to
+    // the generic channel endpoint only persisted the user's words and never
+    // gave the target Agent an opportunity to reply.
+    const directAgentId=currentDirectAgentId();
     const company=currentCompany();
-    const res=await fetch(`/api/channels/${state.channelId}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,company,as_of_date:new Date().toISOString().slice(0,10),attachment_ids:attachmentIds})});
+    const endpoint=directAgentId
+      ? `/api/agents/${encodeURIComponent(directAgentId)}/messages`
+      : `/api/channels/${encodeURIComponent(state.channelId)}/messages`;
+    const payload=directAgentId
+      ? {body, attachment_ids:attachmentIds}
+      : {body, company, as_of_date:new Date().toISOString().slice(0,10), attachment_ids:attachmentIds};
+    const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const data=await res.json();
     if(!res.ok){toast(data.error||'发送失败');return;}
     input.value='';
@@ -281,6 +357,8 @@ function setupComposer(){
       toast('已创建完整研究任务，页面会实时显示进度');
     }else if(data.status==='agents_started'){
       toast(`已向 ${data.agent_ids.length} 个 Agent 并行派发直接任务`);
+    }else if(directAgentId){
+      toast(data.notice || 'Agent 已收到私信');
     }else{
       toast('消息已发送到频道');
     }
@@ -293,8 +371,18 @@ document.addEventListener('DOMContentLoaded',async()=>{ await loadWorkspace(); a
   // rather than assumed — but only once the roster is known.
   if(typeof startLocalStatusPolling==='function') startLocalStatusPolling(); });
 
-function showTask(taskId){ const task=state.tasks.find(item=>item.task_id===taskId); if(!task)return; $('context-content').innerHTML=`<div class="context-card"><h2>任务详情</h2><p>${esc(task.title)}</p><div class="kv"><span>任务 ID</span><strong>${esc(task.task_id)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[task.assignee_id]||task.assignee_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(task.status)}</strong></div><div class="kv"><span>运行 ID</span><strong>${esc(task.run_id||'等待运行')}</strong></div><h3>任务说明</h3><p>这是由频道消息触发的研究任务。任务状态来自本地 SQLite 协作记录，不是静态图片。</p></div>`; }
-function showArtifact(artifactId){ const artifact=state.artifacts.find(item=>item.artifact_id===artifactId); if(!artifact)return; $('context-content').innerHTML=`<div class="context-card"><h2>交付成果</h2><p>${esc(artifact.title)}</p><div class="kv"><span>成果 ID</span><strong>${esc(artifact.artifact_id)}</strong></div><div class="kv"><span>提交 Agent</span><strong>${esc(labels[artifact.agent_id]||artifact.agent_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(artifact.status)}</strong></div><h3>成果摘要</h3><p>${esc(artifact.summary)}</p><h3>关联编号</h3><div>${(artifact.refs||[]).map(item=>`<span class="tool-tag">${esc(item)}</span>`).join('')||'<span class="muted">暂未记录</span>'}</div></div>`; }
+function showTask(taskId){ const source=state.workspaceView==='channel'?state.channelTasks:state.tasks; const task=source.find(item=>item.task_id===taskId); if(!task){ toast('该任务不属于当前频道'); return; } openContextDrawer('任务详情'); $('context-content').innerHTML=`<div class="context-card"><h2>任务详情</h2><p>${esc(task.title)}</p><div class="kv"><span>任务 ID</span><strong>${esc(task.task_id)}</strong></div><div class="kv"><span>负责人</span><strong>${esc(labels[task.assignee_id]||task.assignee_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(task.status)}</strong></div><div class="kv"><span>运行 ID</span><strong>${esc(task.run_id||'等待运行')}</strong></div><h3>任务说明</h3><p>这是由频道消息触发的研究任务。任务状态来自本地 SQLite 协作记录，不是静态图片。</p></div>`; }
+function showArtifact(artifactId){ const source=state.workspaceView==='channel'?state.channelArtifacts:state.artifacts; const artifact=source.find(item=>item.artifact_id===artifactId); if(!artifact){ toast('该交付物不属于当前频道'); return; } openContextDrawer('交付成果'); $('context-content').innerHTML=`<div class="context-card"><h2>交付成果</h2><p>${esc(artifact.title)}</p><div class="kv"><span>成果 ID</span><strong>${esc(artifact.artifact_id)}</strong></div><div class="kv"><span>提交 Agent</span><strong>${esc(labels[artifact.agent_id]||artifact.agent_id)}</strong></div><div class="kv"><span>状态</span><strong>${esc(artifact.status)}</strong></div><h3>成果摘要</h3><p>${esc(artifact.summary)}</p><h3>关联编号</h3><div>${(artifact.refs||[]).map(item=>`<span class="tool-tag">${esc(item)}</span>`).join('')||'<span class="muted">暂未记录</span>'}</div></div>`; }
+function showFile(fileId){
+  const sourceFiles=state.workspaceView==='channel'?state.channelFiles:state.files;
+  const file=sourceFiles.find(item=>item.file_id===fileId);
+  if(!file){ toast('该文件不属于当前频道'); return; }
+  const channel=state.channels.find(item=>item.channel_id===file.channel_id);
+  const source=FILE_SOURCE_LABELS[file.source]||file.source||'未知来源';
+  const owner=labels[file.owner_id]||file.owner_id||'未知';
+  openContextDrawer('文件详情');
+  $('context-content').innerHTML=`<div class="context-card"><h2>${esc(file.filename)}</h2><p>${esc(file.summary||'暂无文件说明')}</p><div class="kv"><span>文件 ID</span><strong>${esc(file.file_id)}</strong></div><div class="kv"><span>频道</span><strong>${esc(channel?.name||file.channel_id)}</strong></div><div class="kv"><span>来源</span><strong>${esc(source)}</strong></div><div class="kv"><span>创建者</span><strong>${esc(owner)}</strong></div><div class="kv"><span>大小</span><strong>${esc(formatBytes(file.size_bytes))}</strong></div><div class="kv"><span>生成时间</span><strong>${esc(new Date(file.created_at).toLocaleString())}</strong></div><div class="context-actions"><a class="primary drawer-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">${icon('download')} 下载文件</a></div></div>`;
+}
 // The timeline used to append a task card and an artifact card under every
 // message. Both are reachable from the task pane, so the chat stays clean.
 
@@ -327,7 +415,11 @@ function renderRun(){
     $('run-label').textContent='等待研究任务';
     $('run-meta').textContent='演示数据 / 本地真实运行入口';
   }
-  if(pause) pause.hidden=!r.running || paused;
+  if(pause){
+    pause.hidden=paused;
+    pause.disabled=!r.running;
+    pause.setAttribute('aria-disabled',String(!r.running));
+  }
   if(resume) resume.hidden=!r.running || !paused;
 }
 
@@ -535,13 +627,14 @@ async function refreshSelectedThread(showLoading=true){
       ? data.artifacts.map(item=>`<div class="thread-item"><strong>${esc(item.title)}</strong><span>${esc(labels[item.agent_id]||item.agent_id)} · ${esc(item.status)}</span><p>${esc(item.summary || '暂无摘要')}</p></div>`).join('')
       : '<p class="muted">尚未产生交付物；后续回复会显示在这里。</p>';
     $('context-content').innerHTML=`<div class="thread-card"><div class="thread-title"><div><span class="eyebrow">线程交接</span><h2>${esc(kindLabel(data.root.message_kind))}</h2></div><button id="thread-back" class="secondary">返回概览</button></div><section><h3>原始请求</h3>${threadMessageHtml(data.root,data.root.message_id)}</section><section><h3>协作回复（${(data.replies||[]).length}）</h3>${(data.replies||[]).map(item=>threadMessageHtml(item,data.root.message_id)).join('')||'<p class="muted">暂时没有回复。Agent 接收、进度、交付和失败说明都会追加到此处。</p>'}</section><section><h3>关联任务</h3>${taskHtml}</section><section><h3>交付物</h3>${artifactHtml}</section><section><h3>证据编号</h3><div class="thread-refs">${refs.map(ref=>`<span class="tool-tag">${esc(ref)}</span>`).join('')||'<span class="muted">暂无新增 S/F/L/Risk 编号</span>'}</div></section><section class="thread-composer-section"><h3>继续协作</h3><form id="thread-composer" class="thread-composer"><textarea id="thread-input" rows="3" placeholder="例如：@Fundamental 请补充最近一年收入变化的原因"></textarea><div class="thread-agent-quick">${state.agents.filter(agent=>agent.agent_id!=='planner').map(agent=>`<button type="button" data-thread-mention="${esc(agent.agent_id)}">@${esc(agent.agent_id)}</button>`).join('')}</div><div class="thread-composer-footer"><span>线程内 @多个 Agent 会创建独立任务并行执行。</span><button type="submit" class="send">${icon('send')} 发送并派单</button></div></form></section></div>`;
-    $('thread-back')?.addEventListener('click',()=>{ state.selectedThreadMessageId=null; renderContext(); });
+    $('thread-back')?.addEventListener('click',()=>{ state.selectedThreadMessageId=null; openContextDrawer('上下文'); renderContext(); });
     setupThreadComposer(data.root.message_id);
   }catch(_error){
     $('context-content').innerHTML='<div class="empty-context"><h2>线程暂时不可用</h2><p>请刷新页面后重试。研究运行不会因此中断。</p></div>';
   }
 }
 showMessage = function(id){
+  openContextDrawer('线程');
   state.selectedThreadMessageId=id;
   refreshSelectedThread(true);
 };
@@ -579,93 +672,82 @@ function setupThreadComposer(rootMessageId){
   });
 }
 
-// The centre column can change in two different ways, and they are not the
-// same gesture:
-//
-//   inline — the tabs above the timeline swap what the open channel shows.
-//            You are still inside that channel, so its header, its tabs, the
-//            sidebar and the context pane all stay exactly where they were.
-//   full   — the left rail switches the whole workspace to another view.
-//            That one takes over the page.
-//
-// Only the chat pane owns the composer, so switching to a board never leaves a
-// send box pointing at a view that cannot receive a message.
-function setPane(pane, mode='full'){
-  // Chat is the channel itself, so the rail's 聊天 button lands back inside it
-  // rather than opening a second, chrome-less copy.
-  state.paneMode=(mode==='inline' || pane==='chat') ? 'inline' : 'full';
-  state.activePane=pane;
-  const inline=state.paneMode==='inline';
-  document.querySelectorAll('.pane-tab').forEach(tab=>tab.classList.toggle('active',inline && tab.dataset.pane===pane));
-  // While a tab drives the column the rail still points at 聊天 — that is where
-  // the user is. Highlighting 任务 there would claim a jump that did not happen.
-  const railPane=inline ? 'chat' : pane;
-  document.querySelectorAll('.rail-btn').forEach(button=>button.classList.toggle('active',button.dataset.pane===railPane));
-  document.querySelectorAll('.pane-view').forEach(view=>{ view.hidden=view.dataset.paneView!==pane; });
+// A workspace view is controlled only by the left rail. Channel tabs are a
+// separate state and never change the active rail button. This removes the old
+// inline/full route split that made different pages render different shells.
+const GLOBAL_VIEWS=new Set(['search','activity','tasks','members','graph']);
+function activeContentPane(){ return state.workspaceView==='channel' ? state.channelTab : state.workspaceView; }
+function applyViewState({focus=true}={}){
+  const shell=document.querySelector('.app-shell');
+  const channelOpen=state.workspaceView==='channel';
+  const pane=activeContentPane();
+  if(shell){
+    shell.dataset.workspaceView=state.workspaceView;
+    shell.dataset.channelTab=state.channelTab;
+    shell.classList.toggle('no-sidebar',!channelOpen);
+  }
+  const sidebar=$('sidebar');
+  if(sidebar) sidebar.hidden=!channelOpen;
+  document.querySelectorAll('.rail-btn[data-view]').forEach(button=>{
+    button.classList.toggle('active',button.dataset.view===state.workspaceView);
+    button.setAttribute('aria-pressed',String(button.dataset.view===state.workspaceView));
+  });
+  document.querySelectorAll('.pane-tab[data-channel-tab]').forEach(tab=>{
+    const active=channelOpen && tab.dataset.channelTab===state.channelTab;
+    tab.classList.toggle('active',active);
+    tab.setAttribute('aria-selected',String(active));
+  });
+  document.querySelectorAll('.workspace-pane').forEach(view=>{ view.hidden=view.dataset.workspacePane!==pane; });
+  const channelChrome=[document.querySelector('.channel-head'),$('run-banner'),$('pane-tabs')];
+  channelChrome.forEach(element=>{ if(element) element.hidden=!channelOpen; });
   const composer=$('composer');
-  if(composer) composer.hidden=pane!=='chat';
-  // The channel chrome only steps aside for a rail switch.
-  const chromeHidden=!inline;
-  const tabs=$('pane-tabs');
-  if(tabs) tabs.hidden=chromeHidden;
-  const head=document.querySelector('.channel-head');
-  const banner=$('run-banner');
-  if(head) head.hidden=chromeHidden;
-  if(banner) banner.hidden=chromeHidden;
+  if(composer) composer.hidden=!(channelOpen && state.channelTab==='chat');
+  if(!channelOpen) closeContextDrawer();
   renderSidebar();
   if(pane==='tasks') renderTaskBoard();
   if(pane==='files') renderFileBoard();
+  if(pane==='activity') renderActivityBoard();
+  if(pane==='members') renderMembersBoard();
   if(pane==='graph') loadGraph();
-  if(pane==='search'){ runSearch(); $('search-input')?.focus(); }
-}
-// The rail starts collapsed to icons. Expanding shows each label, which is
-// clearer for anyone who does not already know the glyphs. The choice is
-// remembered so it does not reset on every reload.
-const RAIL_KEY='workbench.railExpanded';
-function applyRail(){
-  const shell=document.querySelector('.app-shell');
-  const toggle=$('rail-toggle');
-  const expanded=state.railExpanded;
-  if(shell) shell.classList.toggle('rail-expanded',expanded);
-  if(toggle){
-    toggle.setAttribute('aria-expanded',String(expanded));
-    toggle.title=expanded?'收起菜单':'展开菜单';
-    const label=toggle.querySelector('.rail-label');
-    if(label) label.textContent='收起菜单';
+  if(pane==='search'){
+    runSearch();
+    if(focus) requestAnimationFrame(()=>$('search-input')?.focus());
   }
 }
-function setupRail(){
-  try{ state.railExpanded=localStorage.getItem(RAIL_KEY)==='1'; }
-  catch(_error){ state.railExpanded=false; }
-  applyRail();
-  $('rail-toggle')?.addEventListener('click',()=>{
-    state.railExpanded=!state.railExpanded;
-    try{ localStorage.setItem(RAIL_KEY, state.railExpanded?'1':'0'); }catch(_error){ /* private mode */ }
-    applyRail();
-    // The graph sizes its canvas from the container, so re-layout after the
-    // column width changes.
-    if(state.activePane==='graph') setTimeout(()=>renderGraphBoard(),160);
-  });
+function setWorkspaceView(view,options={}){
+  if(view==='chat') view='channel';
+  if(view!=='channel' && !GLOBAL_VIEWS.has(view)) return;
+  state.workspaceView=view;
+  const shell=document.querySelector('.app-shell');
+  if(shell) shell.dataset.lastNavigation=view;
+  applyViewState(options);
 }
-
-function setupPaneTabs(){
-  // A tab swaps the open channel's content in place; the rail switches the
-  // whole workspace. Same panes, deliberately different gestures.
-  document.querySelectorAll('.pane-tab').forEach(tab=>tab.addEventListener('click',()=>setPane(tab.dataset.pane,'inline')));
-  // The rail declares its target pane, so inserting a button never shifts the
-  // mapping the way an index-based lookup did.
-  document.querySelectorAll('.rail-btn').forEach(button=>button.addEventListener('click',()=>setPane(button.dataset.pane,'full')));
-  $('open-graph')?.addEventListener('click',()=>setPane('graph'));
-  $('search-close')?.addEventListener('click',()=>setPane('chat'));
+function setChannelTab(tab){
+  if(!['chat','tasks','files'].includes(tab)) return;
+  state.workspaceView='channel';
+  state.channelTab=tab;
+  const shell=document.querySelector('.app-shell');
+  if(shell) shell.dataset.lastNavigation=`channel:${tab}`;
+  applyViewState({focus:false});
+}
+function setupNavigation(){
+  document.querySelectorAll('.rail-btn[data-view]').forEach(button=>button.addEventListener('click',()=>setWorkspaceView(button.dataset.view)));
+  document.querySelectorAll('.pane-tab[data-channel-tab]').forEach(tab=>tab.addEventListener('click',event=>{
+    event.stopPropagation();
+    setChannelTab(tab.dataset.channelTab);
+  }));
+  $('global-search')?.addEventListener('click',()=>setWorkspaceView('search'));
+  $('open-graph')?.addEventListener('click',()=>setWorkspaceView('graph'));
+  $('search-close')?.addEventListener('click',()=>setWorkspaceView('channel',{focus:false}));
   document.addEventListener('keydown',event=>{
     if((event.ctrlKey || event.metaKey) && event.key.toLowerCase()==='k'){
       event.preventDefault();
-      setPane('search');
-    }else if(event.key==='Escape' && state.activePane==='search'){
-      setPane('chat');
+      setWorkspaceView('search');
+    }else if(event.key==='Escape' && state.workspaceView==='search'){
+      setWorkspaceView('channel',{focus:false});
     }
   });
-  setPane('chat');
+  applyViewState({focus:false});
 }
 
 // The board mirrors the four states an Agent task really moves through.  A
@@ -680,6 +762,9 @@ function taskColumnKey(status){
   const found=TASK_COLUMNS.find(column=>column.statuses.includes(String(status||'').toLowerCase()));
   return found ? found.key : 'queued';
 }
+function taskDeleteButton(task){
+  return `<button type="button" class="task-delete" data-delete-task="${esc(task.task_id)}" title="删除任务">${icon('trash')} 删除</button>`;
+}
 function taskCardHtml(task){
   const metadata=task.metadata||{};
   const assignee=labels[task.assignee_id]||task.assignee_id||'未指派';
@@ -692,33 +777,52 @@ function taskCardHtml(task){
   const handoff=metadata.handoff_depth
     ? `<small>由 ${esc(labels[task.created_by]||task.created_by)} 转派</small>`
     : '';
-  return `<article class="board-card" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><div class="board-card-id">${esc(task.task_id)}</div><strong>${esc(task.title)}</strong><div class="board-card-foot"><span class="board-assignee">${esc(assignee)}</span><span class="board-status">${esc(taskStatusText(task.status))}</span></div>${phase}${queued}${handoff}${elapsed}</article>`;
+  return `<article class="board-card" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><div class="board-card-head"><div class="board-card-id">${esc(task.task_id)}</div>${taskDeleteButton(task)}</div><strong>${esc(task.title)}</strong><div class="board-card-foot"><span class="board-assignee">${esc(assignee)}</span><span class="board-status">${esc(taskStatusText(task.status))}</span></div>${phase}${queued}${handoff}${elapsed}</article>`;
 }
 function memberOptions(selected, placeholder, ids){
   return `<option value="">${esc(placeholder)}</option>`+[...new Set(ids)].filter(Boolean).map(id=>`<option value="${esc(id)}" ${id===selected?'selected':''}>${esc(labels[id]||id)}</option>`).join('');
 }
+function channelOptions(selected, placeholder='全部频道'){
+  return `<option value="">${esc(placeholder)}</option>`+state.channels.map(channel=>{
+    const label=channel.kind==='direct' ? `与 ${channel.name} 的私信` : `#${channel.name}`;
+    return `<option value="${esc(channel.channel_id)}" ${channel.channel_id===selected?'selected':''}>${esc(label)}</option>`;
+  }).join('');
+}
+function currentChannel(){ return state.channels.find(item=>item.channel_id===state.channelId); }
+function currentChannelLabel(){
+  const channel=currentChannel();
+  if(!channel) return '当前频道';
+  return channel.kind==='direct' ? `与 ${channel.name} 的私信` : `#${channel.name}`;
+}
+function taskSource(){ return state.workspaceView==='channel' ? state.channelTasks : state.tasks; }
 function visibleTasks(){
   const {creator, assignee, channel}=state.taskFilters;
-  return state.tasks.filter(task=>
+  const source=taskSource();
+  return source.filter(task=>
     (!creator || task.created_by===creator) &&
     (!assignee || task.assignee_id===assignee) &&
-    (!channel || task.channel_id===channel));
+    (state.workspaceView==='channel' || !channel || task.channel_id===channel));
 }
 function taskListHtml(tasks){
   if(!tasks.length) return '<div class="board-empty board-empty-wide">没有符合条件的任务。</div>';
-  return `<div class="task-table"><div class="task-row task-head"><span>任务</span><span>负责人</span><span>创建者</span><span>频道</span><span>状态</span><span>更新时间</span></div>${tasks.map(task=>{
+  return `<div class="task-table"><div class="task-row task-head"><span>任务</span><span>负责人</span><span>创建者</span><span>频道</span><span>状态</span><span>更新时间</span><span>操作</span></div>${tasks.map(task=>{
     const channel=state.channels.find(item=>item.channel_id===task.channel_id);
-    return `<div class="task-row" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><span class="task-row-title"><b>${esc(task.title)}</b><small>${esc(task.task_id)}</small></span><span>${esc(labels[task.assignee_id]||task.assignee_id)}</span><span>${esc(labels[task.created_by]||task.created_by)}</span><span>${esc(channel?.name||task.channel_id)}</span><span><em class="task-status task-status-${esc(taskColumnKey(task.status))}">${esc(taskStatusText(task.status))}</em></span><span>${esc(new Date(task.updated_at).toLocaleString())}</span></div>`;
+    return `<div class="task-row" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><span class="task-row-title"><b>${esc(task.title)}</b><small>${esc(task.task_id)}</small></span><span>${esc(labels[task.assignee_id]||task.assignee_id)}</span><span>${esc(labels[task.created_by]||task.created_by)}</span><span>${esc(channel?.name||task.channel_id)}</span><span><em class="task-status task-status-${esc(taskColumnKey(task.status))}">${esc(taskStatusText(task.status))}</em></span><span>${esc(new Date(task.updated_at).toLocaleString())}</span><span>${taskDeleteButton(task)}</span></div>`;
   }).join('')}</div>`;
 }
 function renderTaskBoard(){
   const board=$('task-board');
   const counter=$('tab-task-count');
-  if(counter) counter.textContent=state.tasks.length;
+  const source=taskSource();
+  const inChannel=state.workspaceView==='channel';
+  if(counter) counter.textContent=state.channelTasks.length;
   if(!board) return;
   const tasks=visibleTasks();
   const {creator, assignee, channel, view}=state.taskFilters;
-  const toolbar=`<div class="task-toolbar"><span class="task-toolbar-title">${icon('tasks')} 任务 <b>${tasks.length}</b> / ${state.tasks.length}</span><label class="search-filter">${icon('hash')}<select id="task-filter-channel">${memberOptions(channel,'频道',state.channels.map(item=>item.channel_id))}</select></label><label class="search-filter">${icon('user')}<select id="task-filter-creator">${memberOptions(creator,'创建者',state.tasks.map(item=>item.created_by))}</select></label><label class="search-filter">${icon('users')}<select id="task-filter-assignee">${memberOptions(assignee,'负责人',state.tasks.map(item=>item.assignee_id))}</select></label><div class="task-view-toggle"><button type="button" data-task-view="board" class="${view==='board'?'active':''}">${icon('check-square')} 看板</button><button type="button" data-task-view="list" class="${view==='list'?'active':''}">${icon('tasks')} 列表</button></div></div>`;
+  const channelFilter=inChannel
+    ? `<span class="search-filter channel-scope">${icon('hash')} ${esc(currentChannelLabel())}</span>`
+    : `<label class="search-filter">${icon('hash')}<select id="task-filter-channel">${channelOptions(channel)}</select></label>`;
+  const toolbar=`<div class="task-toolbar"><span class="task-toolbar-title">${icon('tasks')} 任务 <b>${tasks.length}</b> / ${source.length}</span>${channelFilter}<label class="search-filter">${icon('user')}<select id="task-filter-creator">${memberOptions(creator,'全部创建者',source.map(item=>item.created_by))}</select></label><label class="search-filter">${icon('users')}<select id="task-filter-assignee">${memberOptions(assignee,'全部负责人',source.map(item=>item.assignee_id))}</select></label><div class="task-view-toggle"><button type="button" data-task-view="board" class="${view==='board'?'active':''}">${icon('check-square')} 看板</button><button type="button" data-task-view="list" class="${view==='list'?'active':''}">${icon('tasks')} 列表</button></div></div>`;
   const body=view==='list' ? taskListHtml(tasks) : `<div class="board-columns">${TASK_COLUMNS.map(column=>{
     const items=tasks.filter(task=>taskColumnKey(task.status)===column.key);
     const cards=items.map(taskCardHtml).join('') || `<div class="board-empty">没有${esc(column.label)}的任务。</div>`;
@@ -726,6 +830,10 @@ function renderTaskBoard(){
   }).join('')}</div>`;
   board.innerHTML=toolbar+body;
   board.querySelectorAll('[data-board-task]').forEach(card=>card.addEventListener('click',()=>showTask(card.dataset.boardTask)));
+  board.querySelectorAll('[data-delete-task]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    deleteTask(button.dataset.deleteTask);
+  }));
   board.querySelectorAll('[data-task-view]').forEach(button=>button.addEventListener('click',()=>{
     state.taskFilters={...state.taskFilters, view:button.dataset.taskView};
     renderTaskBoard();
@@ -734,9 +842,34 @@ function renderTaskBoard(){
     state.taskFilters={...state.taskFilters, [key]:event.target.value};
     renderTaskBoard();
   });
-  bind('task-filter-channel','channel');
+  if(!inChannel) bind('task-filter-channel','channel');
   bind('task-filter-creator','creator');
   bind('task-filter-assignee','assignee');
+}
+
+function renderActivityBoard(){
+  const board=$('activity-board');
+  if(!board) return;
+  const rows=[...state.tasks].sort((a,b)=>new Date(b.updated_at||0)-new Date(a.updated_at||0)).slice(0,30);
+  board.innerHTML=`<div class="view-header"><div><span class="eyebrow">工作区</span><h1>${icon('activity')} 动态</h1><p>任务派发、状态变化和交付记录集中显示在这里。</p></div><button class="toolbar-btn" type="button" data-refresh-activity>${icon('refresh')} 刷新</button></div><div class="activity-list">${rows.map(task=>`<article class="activity-row" data-board-task="${esc(task.task_id)}"><span class="activity-icon">${icon('check-square')}</span><div><strong>${esc(task.title)}</strong><p>${esc(labels[task.assignee_id]||task.assignee_id||'未指派')} · ${esc(taskStatusText(task.status))}</p></div><time>${esc(task.updated_at?new Date(task.updated_at).toLocaleString():'')}</time></article>`).join('')||'<div class="empty-state"><h2>暂无动态</h2><p>Agent 开始工作后，状态会显示在这里。</p></div>'}</div>`;
+  board.querySelectorAll('[data-board-task]').forEach(row=>row.addEventListener('click',()=>showTask(row.dataset.boardTask)));
+  board.querySelector('[data-refresh-activity]')?.addEventListener('click',async()=>{ await loadWorkspace(false); renderActivityBoard(); toast('动态已刷新'); });
+}
+function renderMembersBoard(){
+  const board=$('members-board');
+  if(!board) return;
+  const people=`<article class="member-card member-card-human"><div class="member-card-avatar">你</div><div><strong>你</strong><p>工作区所有者</p><span>人类成员</span></div><i class="status-dot"></i></article>`;
+  const agents=state.agents.map(agent=>{
+    const builtIn=agent.type!=='custom' && agent.type!=='local';
+    const actionLabel=builtIn?'移出工作区':'删除';
+    return `<article class="member-card" data-member-agent="${esc(agent.agent_id)}"><div class="member-card-avatar" style="background:${agentColors[agent.agent_id]||'#8B2940'}">${esc(initials(agent.agent_id))}</div><div class="member-card-copy"><strong>${esc(agent.name||labels[agent.agent_id]||agent.agent_id)}</strong><p>${esc(agent.role||roles[agent.agent_id]||'Agent')}</p><span>${esc(taskStatusText(agent.status||'online'))}</span></div><i class="status-dot"></i><div class="member-card-actions"><button type="button" class="secondary" data-member-dm="${esc(agent.agent_id)}">私信</button><button type="button" class="secondary" data-member-profile="${esc(agent.agent_id)}">资料</button><button type="button" class="secondary danger" data-member-delete="${esc(agent.agent_id)}">${actionLabel}</button></div></article>`;
+  }).join('');
+  board.innerHTML=`<div class="view-header"><div><span class="eyebrow">工作区</span><h1>${icon('users')} 成员</h1><p>1 位人类成员与 ${state.agents.length} 个 Agent。</p></div><button class="toolbar-btn" type="button" data-create-agent>${icon('plus')} 创建 Agent</button></div><section class="member-section"><h2>人类</h2><div class="member-grid">${people}</div></section><section class="member-section"><h2>Agent</h2><div class="member-grid">${agents||'<div class="empty-state"><p>暂无 Agent。</p></div>'}</div></section>`;
+  board.querySelectorAll('[data-member-agent]').forEach(card=>card.addEventListener('click',()=>showAgent(card.dataset.memberAgent)));
+  board.querySelectorAll('[data-member-dm]').forEach(button=>button.addEventListener('click',event=>{ event.stopPropagation(); startDirectMessage(button.dataset.memberDm); }));
+  board.querySelectorAll('[data-member-profile]').forEach(button=>button.addEventListener('click',event=>{ event.stopPropagation(); showAgent(button.dataset.memberProfile); }));
+  board.querySelectorAll('[data-member-delete]').forEach(button=>button.addEventListener('click',event=>{ event.stopPropagation(); deleteAgent(button.dataset.memberDelete); }));
+  board.querySelector('[data-create-agent]')?.addEventListener('click',()=>typeof openAgentKindDialog==='function'?openAgentKindDialog():openAgentDialog());
 }
 
 // Workspace search over every record the workbench owns. Filters mirror what a
@@ -760,22 +893,57 @@ function searchFilters(){
 function renderSearchOptions(data){
   const sender=$('search-sender'), channel=$('search-channel');
   if(sender && sender.options.length<=1){
-    sender.innerHTML='<option value="">发送者</option>'+(data.senders||[]).map(item=>`<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
+    sender.innerHTML='<option value="">全部发送者</option>'+(data.senders||[]).map(item=>`<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
   }
   if(channel && channel.options.length<=1){
-    channel.innerHTML='<option value="">频道</option>'+(data.channels||[]).map(item=>`<option value="${esc(item.id)}">${item.kind==='direct'?'@':'#'}${esc(item.name)}</option>`).join('');
+    const publicChannels=(data.channels||[]).filter(item=>item.kind!=='direct');
+    channel.innerHTML='<option value="">全部频道</option>'+publicChannels.map(item=>`<option value="${esc(item.id)}">#${esc(item.name)}</option>`).join('');
   }
+}
+function searchTimeLabel(value){
+  if(!value) return '';
+  const time=new Date(value);
+  if(Number.isNaN(time.getTime())) return '';
+  const seconds=Math.max(0,Math.floor((Date.now()-time.getTime())/1000));
+  if(seconds<60) return '刚刚';
+  if(seconds<3600) return `${Math.floor(seconds/60)} 分钟前`;
+  if(seconds<86400) return `${Math.floor(seconds/3600)} 小时前`;
+  if(seconds<86400*30) return `${Math.floor(seconds/86400)} 天前`;
+  return time.toLocaleDateString();
 }
 function searchResultHtml(item){
   const meta=SEARCH_KIND_META[item.kind] || {label:item.kind, glyph:'file'};
-  const when=item.created_at ? new Date(item.created_at).toLocaleString() : '';
-  const where=item.channel_name ? `#${esc(item.channel_name)}` : '工作区';
-  return `<article class="search-hit" data-hit-kind="${esc(item.kind)}" data-hit-ref="${esc(JSON.stringify(item.ref))}" data-hit-channel="${esc(item.channel_id)}"><span class="search-hit-kind">${icon(meta.glyph)} ${esc(meta.label)}</span><div class="search-hit-main"><strong>${esc(item.title)}</strong><p>${esc(item.body) || '<span class="muted">无正文</span>'}</p><div class="search-hit-meta"><span>${esc(item.owner_name || '—')}</span><span>${where}</span><span>${esc(when)}</span></div></div></article>`;
+  const when=searchTimeLabel(item.created_at);
+  const where=item.channel_name
+    ? (item.channel_kind==='direct' ? `与 ${esc(item.channel_name)} 的私信` : `#${esc(item.channel_name)}`)
+    : '工作区';
+  const owner=esc(item.owner_name || '—');
+  const body=esc(item.body) || '<span class="muted">无正文</span>';
+  return `<article class="search-hit search-result-card" data-hit-kind="${esc(item.kind)}" data-hit-ref="${esc(JSON.stringify(item.ref))}" data-hit-channel="${esc(item.channel_id)}"><header class="search-result-card__header"><span class="search-result-card__channel">${where}</span><span class="search-result-card__kind">${icon(meta.glyph)}<span>${esc(meta.label)}</span></span><strong>${owner}</strong>${when?`<time>${esc(when)}</time>`:''}</header><div class="search-result-card__content"><h3>${esc(item.title)}</h3><p>${body}</p></div></article>`;
 }
 async function runSearch(){
   const board=$('search-results');
   if(!board) return;
   const filters=searchFilters();
+  const hasFilters=Boolean(filters.q || filters.sender || filters.channel_id || filters.since!=='0' || filters.scope!=='all' || filters.sort!=='relevance');
+  const clearButton=$('search-clear');
+  const sortSelect=$('search-sort');
+  if(clearButton) clearButton.hidden=!hasFilters;
+  if(sortSelect) sortSelect.disabled=!filters.q;
+  document.querySelectorAll('.search-filter-component').forEach(label=>{
+    const select=label.querySelector('select');
+    if(!select) return;
+    const isActive=(select.id==='search-scope' && select.value!=='all') ||
+      (select.id==='search-sender' && Boolean(select.value)) ||
+      (select.id==='search-channel' && Boolean(select.value)) ||
+      (select.id==='search-since' && select.value!=='0') ||
+      (select.id==='search-sort' && select.value!=='relevance');
+    label.classList.toggle('search-filter-component--active',isActive);
+  });
+  if(!hasFilters){
+    board.innerHTML=`<div class="search-empty">${icon('search','search-empty-icon')}<h2>搜索所有内容</h2><p>搜索频道、私信、人类成员、Agent 和消息历史。</p></div>`;
+    return;
+  }
   try{
     const response=await fetch('/api/search?'+new URLSearchParams(filters),{cache:'no-store'});
     if(!response.ok) throw new Error('search failed');
@@ -785,8 +953,10 @@ async function runSearch(){
       board.innerHTML=`<div class="search-empty">${icon('search','search-empty-icon')}<h2>${filters.q?'没有匹配的内容':'搜索所有内容'}</h2><p>搜索频道、私信、成员、Agent、任务、文件和消息历史。</p></div>`;
       return;
     }
-    const counts=Object.entries(data.counts).map(([kind,count])=>`<span class="search-count">${esc((SEARCH_KIND_META[kind]||{}).label||kind)} <b>${count}</b></span>`).join('');
-    board.innerHTML=`<div class="search-summary">共 <b>${data.total}</b> 条结果${counts}</div>${data.results.map(searchResultHtml).join('')}`;
+    const kindOrder=['message','task','file','agent','channel'];
+    const groups=kindOrder.map(kind=>[kind,data.results.filter(item=>item.kind===kind)]).filter(([,items])=>items.length);
+    const groupHtml=groups.map(([kind,items])=>`<section class="search-result-group" data-result-group="${esc(kind)}"><h2 class="search-result-group-title">${esc((SEARCH_KIND_META[kind]||{}).label||kind)}</h2><div class="search-result-list">${items.map(searchResultHtml).join('')}</div></section>`).join('');
+    board.innerHTML=`<div class="search-summary result-summary"><span>共</span><b>${data.total}</b><span>条结果</span></div>${groupHtml}`;
     board.querySelectorAll('.search-hit').forEach(hit=>hit.addEventListener('click',()=>openSearchHit(hit)));
   }catch(_error){
     board.innerHTML='<div class="search-empty"><h2>搜索暂时不可用</h2><p>请刷新页面后重试。</p></div>';
@@ -797,7 +967,7 @@ async function openSearchHit(element){
   try{ ref=JSON.parse(element.dataset.hitRef || '{}'); }catch(_error){ ref={}; }
   const channelId=element.dataset.hitChannel;
   const kind=element.dataset.hitKind;
-  if(kind==='agent' && ref.agent_id){ setPane('chat'); showAgent(ref.agent_id); return; }
+  if(kind==='agent' && ref.agent_id){ setWorkspaceView('channel',{focus:false}); showAgent(ref.agent_id); return; }
   if(channelId && channelId!==state.channelId && kind!=='agent'){
     state.channelId=channelId;
     state.eventSeq=0;
@@ -805,10 +975,10 @@ async function openSearchHit(element){
     await Promise.all([loadMessages(),loadWorkspace(false)]);
     connectEvents();
   }
-  if(kind==='message' && ref.message_id){ setPane('chat'); showMessage(ref.thread_id || ref.message_id); }
-  else if(kind==='task' && ref.task_id){ setPane('tasks'); showTask(ref.task_id); }
-  else if(kind==='file'){ setPane('files'); }
-  else { setPane('chat'); }
+  if(kind==='message' && ref.message_id){ setChannelTab('chat'); showMessage(ref.thread_id || ref.message_id); }
+  else if(kind==='task' && ref.task_id){ setWorkspaceView('tasks',{focus:false}); showTask(ref.task_id); }
+  else if(kind==='file'){ setChannelTab('files'); }
+  else { setWorkspaceView('channel',{focus:false}); }
 }
 function setupSearch(){
   const inputs=['search-input','search-scope','search-sender','search-channel','search-since','search-sort'];
@@ -820,6 +990,15 @@ function setupSearch(){
       clearTimeout(searchDebounce);
       searchDebounce=setTimeout(runSearch, event==='input' ? 220 : 0);
     });
+  });
+  $('search-clear')?.addEventListener('click',()=>{
+    const defaults={
+      'search-input':'', 'search-scope':'all', 'search-sender':'',
+      'search-channel':'', 'search-since':'0', 'search-sort':'relevance',
+    };
+    Object.entries(defaults).forEach(([id,value])=>{ const input=$(id); if(input) input.value=value; });
+    runSearch();
+    $('search-input')?.focus();
   });
 }
 
@@ -1048,27 +1227,13 @@ function formatBytes(size){
 function renderFileBoard(){
   const board=$('file-board');
   const counter=$('tab-file-count');
-  if(counter) counter.textContent=state.files.length;
+  if(counter) counter.textContent=state.channelFiles.length;
   if(!board) return;
-  // The sidebar owns the channel filter; an empty selection means every channel.
-  const files=state.fileChannel
-    ? state.files.filter(file=>file.channel_id===state.fileChannel)
-    : state.files;
-  // The files pane owns its channel filter: it is a whole-window view with no
-  // sidebar to put one in.
-  const counts=new Map();
-  state.files.forEach(file=>counts.set(file.channel_id,(counts.get(file.channel_id)||0)+1));
-  const options=[{channel_id:'',name:'全部频道'},...state.channels].map(channel=>{
-    const count=channel.channel_id ? (counts.get(channel.channel_id)||0) : state.files.length;
-    const prefix=channel.channel_id ? (channel.kind==='direct'?'@':'#') : '';
-    return `<option value="${esc(channel.channel_id)}" ${channel.channel_id===state.fileChannel?'selected':''}>${prefix}${esc(channel.name)}（${count}）</option>`;
-  }).join('');
-  const heading=`<div class="task-toolbar"><span class="task-toolbar-title">${icon('paperclip')} 文件 <b>${files.length}</b> / ${state.files.length}</span><label class="search-filter">${icon('hash')}<select id="file-channel">${options}</select></label><button type="button" id="file-refresh" class="secondary">${icon('refresh')} 刷新</button></div>`;
+  // Files under a channel tab are always scoped to that channel.  The global
+  // search still has access to workspace files through its own endpoint.
+  const files=state.channelFiles;
+  const heading=`<div class="task-toolbar"><span class="task-toolbar-title">${icon('paperclip')} 文件 <b>${files.length}</b> / ${files.length}</span><span class="search-filter channel-scope">${icon('hash')} ${esc(currentChannelLabel())}（${files.length}）</span><button type="button" id="file-refresh" class="secondary">${icon('refresh')} 刷新</button></div>`;
   const bindToolbar=()=>{
-    $('file-channel')?.addEventListener('change',event=>{
-      state.fileChannel=event.target.value;
-      renderFileBoard();
-    });
     $('file-refresh')?.addEventListener('click',()=>loadWorkspace(false));
   };
   if(!files.length){
@@ -1081,9 +1246,14 @@ function renderFileBoard(){
     const source=FILE_SOURCE_LABELS[file.source]||file.source;
     const glyph=String(file.media_type||'').startsWith('image/')?'image':'file';
     const channel=state.channels.find(item=>item.channel_id===file.channel_id);
-    return `<div class="file-row"><span class="file-name" title="${esc(file.summary||file.filename)}">${icon(glyph,'file-glyph')} ${esc(file.filename)}</span><span class="file-channel">${esc(channel?.name||file.channel_id)}</span><span><em class="file-source file-source-${esc(file.source)}">${esc(source)}</em></span><span>${esc(owner)}</span><span>${esc(formatBytes(file.size_bytes))}</span><span>${esc(new Date(file.created_at).toLocaleString())}</span><span><a class="file-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">${icon('download')} 下载</a></span></div>`;
+    return `<div class="file-row" role="button" tabindex="0" data-file-id="${esc(file.file_id)}"><span class="file-name" title="${esc(file.summary||file.filename)}">${icon(glyph,'file-glyph')} ${esc(file.filename)}</span><span class="file-channel">${esc(channel?.name||file.channel_id)}</span><span><em class="file-source file-source-${esc(file.source)}">${esc(source)}</em></span><span>${esc(owner)}</span><span>${esc(formatBytes(file.size_bytes))}</span><span>${esc(new Date(file.created_at).toLocaleString())}</span><span><a class="file-download" href="/api/files/${encodeURIComponent(file.file_id)}/download">${icon('download')} 下载</a></span></div>`;
   }).join('')}</div>`;
   bindToolbar();
+  board.querySelectorAll('[data-file-id]').forEach(row=>{
+    const open=()=>showFile(row.dataset.fileId);
+    row.addEventListener('click',event=>{ if(!event.target.closest('.file-download')) open(); });
+    row.addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' '){ event.preventDefault(); open(); } });
+  });
 }
 
 // Attachments upload before the message is sent, so the message body and its
@@ -1133,17 +1303,8 @@ function setupAttachments(){
   });
 }
 
-// The sidebar belongs to the pane, not to the workspace: the chat pane needs
-// channels, the files pane needs a channel filter, the graph pane needs the
-// member roster, and the task and search panes are workspace-wide and take the
-// full width instead.
-// Only chat keeps the workspace sidebar. Files and the graph are whole-window
-// views: each drops the sidebar, the context pane and the channel chrome, and
-// carries its own channel filter in its toolbar.
-const SIDEBAR_BY_PANE={
-  chat:{title:'聊天', subtitle:'本地工作区', action:'新建私信'},
-};
-const FULL_BLEED_PANES=new Set(['graph','files']);
+// The channel workspace owns the only sidebar. Global rail views use the full
+// centre width, so every page shares one predictable shell.
 function sectionHtml(key, label, count, body, action=''){
   const collapsed=state.collapsed[key];
   return `<div class="sidebar-section" data-section="${esc(key)}"><div class="section-title"><button class="section-toggle" type="button" data-toggle-section="${esc(key)}">${icon('chevron',collapsed?'chevron-collapsed':'')} ${esc(label)}</button><span>${count!=null?`<b>${count}</b>`:''}${action}</span></div><div class="section-body" ${collapsed?'hidden':''}>${body}</div></div>`;
@@ -1153,33 +1314,45 @@ function sectionHtml(key, label, count, body, action=''){
 function rowActionsHtml(kind, id, {edit=true}={}){
   return `<span class="row-actions">${edit?`<button type="button" class="row-action" data-edit-${kind}="${esc(id)}" title="编辑">${icon('pencil')}</button>`:''}<button type="button" class="row-action row-danger" data-delete-${kind}="${esc(id)}" title="删除">${icon('trash')}</button></span>`;
 }
+function sidebarItemId(channelOrAgent){ return channelOrAgent.channel_id || `dm-${channelOrAgent.agent_id}`; }
+function sidebarPrefHas(kind,id){ return (state.sidebarPrefs[kind] || []).includes(id); }
+function sidebarPrefToggle(kind,id){
+  const values=new Set(state.sidebarPrefs[kind] || []);
+  if(values.has(id)) values.delete(id); else values.add(id);
+  state.sidebarPrefs={...state.sidebarPrefs,[kind]:[...values]};
+  saveSidebarPrefs();
+}
+function sidebarItemActions(itemId, {deleteKind='', deleteId=''}={}){
+  const favorite=sidebarPrefHas('favorites',itemId);
+  const pinned=sidebarPrefHas('pinned',itemId);
+  return `<span class="row-actions"><button type="button" class="row-action sidebar-pref-action ${favorite?'is-active':''}" data-toggle-favorite="${esc(itemId)}" title="${favorite?'取消收藏':'收藏'}">${icon('bookmark')}</button><button type="button" class="row-action sidebar-pref-action ${pinned?'is-active':''}" data-toggle-pin="${esc(itemId)}" title="${pinned?'取消置顶':'置顶'}">${icon('pin')}</button>${deleteKind?`<button type="button" class="row-action row-danger" data-delete-${deleteKind}="${esc(deleteId)}" title="删除">${icon('trash')}</button>`:''}</span>`;
+}
+function sidebarItemClass(itemId){ return `sidebar-item ${itemId===state.channelId?'active':''}`; }
 function channelButtonHtml(channel){
-  return `<div class="row-wrap ${channel.channel_id===state.channelId?'active':''}"><button class="channel" data-channel="${esc(channel.channel_id)}">${icon('hash','channel-icon')} ${esc(channel.name)}</button>${rowActionsHtml('channel',channel.channel_id)}</div>`;
+  const itemId=sidebarItemId(channel);
+  return `<div class="row-wrap ${sidebarItemClass(itemId)}" draggable="true" data-sidebar-item="${esc(itemId)}" data-item-type="channel" data-item-id="${esc(itemId)}"><button class="channel" data-channel="${esc(channel.channel_id)}">${icon('hash','channel-icon')} ${esc(channel.name)}</button>${sidebarItemActions(itemId,{deleteKind:'channel',deleteId:channel.channel_id})}</div>`;
+}
+function dmAvatarHtml(agent,agentId){
+  const avatar=agent?.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agentId));
+  return `<span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span>`;
 }
 function dmButtonHtml(channel){
   const agentId=channel.channel_id.replace(/^dm-/,'');
   const agent=state.agents.find(item=>item.agent_id===agentId);
-  const avatar=agent?.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agentId));
   const role=agent?.role || roles[agentId] || '';
-  // A direct channel is named after its Agent, so only deleting makes sense.
-  return `<div class="row-wrap ${channel.channel_id===state.channelId?'active':''}"><button class="channel dm-channel" data-channel="${esc(channel.channel_id)}"><span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span><b>${esc(channel.name)}</b>${role?`<em>${esc(role)}</em>`:''}</button>${rowActionsHtml('channel',channel.channel_id,{edit:false})}</div>`;
+  const itemId=sidebarItemId(channel);
+  return `<div class="row-wrap ${sidebarItemClass(itemId)}" draggable="true" data-sidebar-item="${esc(itemId)}" data-item-type="direct" data-item-id="${esc(itemId)}"><button type="button" class="dm-profile-target" data-profile-agent="${esc(agentId)}" title="查看 ${esc(channel.name)} 资料">${dmAvatarHtml(agent,agentId)}</button><button type="button" class="channel dm-channel" data-dm-agent="${esc(agentId)}" data-status="${esc(agent?.status || 'online')}" data-runtime="${esc(agent?.runtime || 'hosted')}" title="打开与 ${esc(channel.name)} 的私信"><span class="dm-copy"><b>${esc(channel.name)}</b>${role?`<em>${esc(role)}</em>`:''}</span><i class="status-dot"></i></button>${sidebarItemActions(itemId,{deleteKind:'channel',deleteId:channel.channel_id})}</div>`;
 }
-function agentRowHtml(agent){
+function agentRowHtml(agent){ return dmAgentRowHtml(agent); }
+function dmAgentRowHtml(agent){
   const status=agent.status || 'online';
   const detail=status==='running' && agent.task_phase ? agent.task_phase : taskStatusText(status);
   const name=agent.name || labels[agent.agent_id] || agent.agent_id;
   const role=agent.role || roles[agent.agent_id] || 'Agent';
-  const avatar=agent.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agent.agent_id));
-  // Every Agent can be removed. Only a custom one can have its profile edited;
-  // a built-in role's prompt and contract belong to the plugin, and a local
-  // one's belong to the CLI on the user's machine.
-  const actions=rowActionsHtml('agent',agent.agent_id,{edit:agent.type==='custom'});
+  const itemId=sidebarItemId(agent);
   const localBadge=agent.runtime==='local'
     ? `<span class="runtime-badge">${esc(agent.provider||'local')}</span>` : '';
-  // Name and role sit side by side on one line. A busy Agent shows its live
-  // status in the role's place instead, so the roster never hides real state
-  // to save a line — CSS picks one of the two from data-status.
-  return `<div class="row-wrap"><div class="agent-row" data-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" data-runtime="${esc(agent.runtime||'hosted')}" title="${esc(name)} · ${esc(role)}｜${esc(detail)}"><div class="agent-avatar" style="background:${agentColors[agent.agent_id] || '#58746a'}">${avatar}</div><div class="agent-copy"><strong>${esc(name)}</strong><span class="agent-role-label">${esc(role)}${localBadge}</span><small class="agent-status-label">${esc(detail)}${localBadge}</small></div><i class="status-dot"></i></div>${actions}</div>`;
+  return `<div class="row-wrap ${sidebarItemClass(itemId)}" draggable="true" data-sidebar-item="${esc(itemId)}" data-item-type="direct" data-item-id="${esc(itemId)}"><button type="button" class="dm-profile-target" data-profile-agent="${esc(agent.agent_id)}" title="查看 ${esc(name)} 资料">${dmAvatarHtml(agent,agent.agent_id)}</button><button type="button" class="channel dm-channel" data-dm-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" data-runtime="${esc(agent.runtime||'hosted')}" title="打开与 ${esc(name)} 的私信"><span class="dm-copy"><b>${esc(name)}</b><em>${esc(role)}${localBadge}</em><small>${esc(detail)}</small></span><i class="status-dot"></i></button>${sidebarItemActions(itemId)}</div>`;
 }
 // Hosted and local Agents share one roster — the filter narrows it rather than
 // splitting them into separate lists, so "how many Agents do I have" has one
@@ -1197,25 +1370,14 @@ function filterAgents(agents){
   return agents.filter(agent=>(agent.runtime||'hosted')===current);
 }
 function renderSidebar(){
-  const shell=document.querySelector('.app-shell');
   const sidebar=$('sidebar');
-  // An inline swap happens inside the open channel, so the surrounding columns
-  // belong to chat no matter which board the tabs are showing.
-  const pane=state.paneMode==='inline' ? 'chat' : state.activePane;
-  const config=SIDEBAR_BY_PANE[pane];
-  const fullBleed=FULL_BLEED_PANES.has(pane);
-  if(shell){
-    shell.classList.toggle('no-sidebar',!config);
-    shell.classList.toggle('full-bleed',fullBleed);
-  }
-  if(sidebar) sidebar.hidden=!config;
-  const context=document.querySelector('.context-pane');
-  if(context) context.hidden=fullBleed;
-  if(!config || !sidebar) return;
-  $('sidebar-title').textContent=config.title;
-  $('sidebar-subtitle').textContent=config.subtitle;
+  const channelOpen=state.workspaceView==='channel';
+  if(sidebar) sidebar.hidden=!channelOpen;
+  if(!channelOpen || !sidebar) return;
+  $('sidebar-title').textContent='聊天';
+  $('sidebar-subtitle').textContent='本地工作区';
   const action=$('sidebar-action');
-  if(action){ action.hidden=!config.action; action.title=config.action || ''; }
+  if(action){ action.hidden=false; action.title='新建私信'; }
 
   const projects=state.channels.filter(channel=>channel.kind!=='direct');
   const directs=state.channels.filter(channel=>channel.kind==='direct');
@@ -1225,21 +1387,42 @@ function renderSidebar(){
   // A removed built-in Agent stays listed so the removal is not a one-way door.
   const removed=state.removedAgents || [];
   const removedRows=removed.map(agent=>`<div class="row-wrap removed-row"><div class="agent-row"><div class="agent-avatar" style="background:#b9a7ad">${esc(initials(agent.agent_id))}</div><div class="agent-copy"><strong>${esc(agent.name||agent.agent_id)}</strong><span class="agent-role-label">${esc(agent.role||'Agent')}</span></div></div><span class="row-actions row-actions-static"><button type="button" class="row-action" data-restore-agent="${esc(agent.agent_id)}" title="恢复">${icon('refresh')}</button></span></div>`).join('');
+  const itemById=new Map([
+    ...projects.map(item=>[sidebarItemId(item),item]),
+    ...directs.map(item=>[sidebarItemId(item),item]),
+    ...state.agents.map(item=>[sidebarItemId(item),item]),
+  ]);
+  const validIds=new Set(itemById.keys());
+  const cleanPrefs={
+    pinned:(state.sidebarPrefs.pinned||[]).filter(id=>validIds.has(id)),
+    favorites:(state.sidebarPrefs.favorites||[]).filter(id=>validIds.has(id)),
+  };
+  if(JSON.stringify(cleanPrefs)!==JSON.stringify(state.sidebarPrefs)){
+    state.sidebarPrefs=cleanPrefs;
+    saveSidebarPrefs();
+  }
+  const pinnedIds=new Set(cleanPrefs.pinned);
+  const visibleProjects=projects.filter(item=>!pinnedIds.has(sidebarItemId(item)));
+  const visibleDirects=directs.filter(item=>!pinnedIds.has(sidebarItemId(item)));
+  const actualDirectIds=new Set(directs.map(channel=>channel.channel_id.replace(/^dm-/,'')));
+  const visibleAgents=state.agents.filter(agent=>
+    !actualDirectIds.has(agent.agent_id) && !pinnedIds.has(sidebarItemId(agent))
+  );
+  const directoryRows=visibleDirects.map(dmButtonHtml).join('')+
+    visibleAgents.map(agentRowHtml).join('');
+  const renderItem=id=>{
+    const item=itemById.get(id);
+    if(!item) return '';
+    return item.kind==='direct' ? dmButtonHtml(item) : item.channel_id ? channelButtonHtml(item) : dmAgentRowHtml(item);
+  };
+  const favoriteRows=cleanPrefs.favorites.map(renderItem).join('');
+  const pinnedRows=cleanPrefs.pinned.map(renderItem).join('');
+  const pinnedBody=`<div class="pinned-dropzone" data-pinned-drop><p class="sidebar-hint">${pinnedRows?'继续拖动频道或私信到这里置顶':'将频道或私信拖到这里置顶'}</p>${pinnedRows}</div>`;
   body.innerHTML=
-    sectionHtml('channels','频道',projects.length,projects.map(channelButtonHtml).join(''),plus('create-channel'))+
-    sectionHtml('dms','私信',directs.length,directs.map(dmButtonHtml).join('') || '<p class="sidebar-hint">还没有私信。点右上角 + 发起一条。</p>',plus('create-dm'))+
-    (()=>{
-      // While filtered, the count describes the list on screen — a "9" over one
-      // visible row reads as a rendering bug.
-      const visible=filterAgents(state.agents);
-      const count=visible.length===state.agents.length
-        ? state.agents.length : `${visible.length}/${state.agents.length}`;
-      return sectionHtml('agents','Agent',count,
-        agentFilterHtml(state.agents)+
-        (visible.map(agentRowHtml).join('') ||
-          '<p class="sidebar-hint">没有这一类的 Agent。</p>'),
-        plus('create-agent'));
-    })()+
+    sectionHtml('favorites','已收藏',cleanPrefs.favorites.length,favoriteRows || '<p class="sidebar-hint">收藏的频道和私信会显示在这里。</p>')+
+    sectionHtml('pinned','已置顶',cleanPrefs.pinned.length,pinnedBody)+
+    sectionHtml('channels','频道',visibleProjects.length,visibleProjects.map(channelButtonHtml).join('') || '<p class="sidebar-hint">没有未置顶的频道。</p>',plus('create-channel'))+
+    sectionHtml('dms','私信',visibleDirects.length+visibleAgents.length,directoryRows || '<p class="sidebar-hint">没有未置顶的私信。</p>',plus('create-dm'))+
     (removed.length ? sectionHtml('removedAgents','已移除',removed.length,removedRows) : '');
   bindSidebar();
 }
@@ -1252,6 +1435,47 @@ function bindSidebar(){
   document.querySelectorAll('[data-agent]').forEach(el=>el.addEventListener('click',()=>{
     if(el.dataset.agent!=='owner') showAgent(el.dataset.agent);
   }));
+  document.querySelectorAll('[data-profile-agent]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    showAgent(button.dataset.profileAgent);
+  }));
+  document.querySelectorAll('[data-dm-agent]').forEach(button=>button.addEventListener('click',async event=>{
+    event.stopPropagation();
+    await startDirectMessage(button.dataset.dmAgent);
+  }));
+  document.querySelectorAll('[data-toggle-favorite]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    sidebarPrefToggle('favorites',button.dataset.toggleFavorite);
+    renderSidebar();
+    toast(sidebarPrefHas('favorites',button.dataset.toggleFavorite)?'已加入收藏':'已取消收藏');
+  }));
+  document.querySelectorAll('[data-toggle-pin]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    sidebarPrefToggle('pinned',button.dataset.togglePin);
+    renderSidebar();
+    toast(sidebarPrefHas('pinned',button.dataset.togglePin)?'已置顶':'已取消置顶');
+  }));
+  document.querySelectorAll('[data-sidebar-item]').forEach(row=>{
+    row.addEventListener('dragstart',event=>{
+      event.dataTransfer?.setData('text/plain',row.dataset.itemId || '');
+      if(event.dataTransfer) event.dataTransfer.effectAllowed='move';
+      row.classList.add('is-dragging');
+    });
+    row.addEventListener('dragend',()=>row.classList.remove('is-dragging'));
+  });
+  document.querySelectorAll('[data-pinned-drop]').forEach(zone=>{
+    zone.addEventListener('dragover',event=>{ event.preventDefault(); zone.classList.add('is-drag-over'); });
+    zone.addEventListener('dragleave',()=>zone.classList.remove('is-drag-over'));
+    zone.addEventListener('drop',event=>{
+      event.preventDefault();
+      zone.classList.remove('is-drag-over');
+      const itemId=event.dataTransfer?.getData('text/plain');
+      if(!itemId) return;
+      if(!sidebarPrefHas('pinned',itemId)) sidebarPrefToggle('pinned',itemId);
+      renderSidebar();
+      toast('已置顶，可在“已置顶”中取消');
+    });
+  });
   document.querySelectorAll('[data-agent-filter]').forEach(button=>button.addEventListener('click',()=>{
     state.agentFilter=button.dataset.agentFilter;
     renderSidebar();
@@ -1269,7 +1493,7 @@ function bindSidebar(){
     else openAgentDialog();
   });
   $('create-dm')?.addEventListener('click',openDirectMessageDialog);
-  $('open-graph')?.addEventListener('click',()=>setPane('graph'));
+  $('open-graph')?.addEventListener('click',()=>setWorkspaceView('graph'));
   document.querySelectorAll('[data-edit-channel]').forEach(button=>button.addEventListener('click',event=>{
     event.stopPropagation();
     openChannelEditor(button.dataset.editChannel);
@@ -1293,6 +1517,71 @@ function bindSidebar(){
   bindChannelButtons();
 }
 
+function showSimpleOverlay(title,body){
+  openContextDrawer(title);
+  $('context-content').innerHTML=`<div class="context-card"><h2>${esc(title)}</h2><p>${esc(body)}</p></div>`;
+}
+function showMembersDrawer(){
+  openContextDrawer(`成员（${state.agents.length+1}）`);
+  const rows=state.agents.map(agent=>{
+    const status=agent.status||'online';
+    const avatar=agent.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agent.agent_id));
+    return `<button type="button" class="drawer-member" data-drawer-agent="${esc(agent.agent_id)}"><span class="drawer-member-avatar" style="background:${agentColors[agent.agent_id]||'#6e7b76'}">${avatar}</span><span><strong>${esc(agent.name||labels[agent.agent_id]||agent.agent_id)}</strong><small>${esc(taskStatusText(status))}</small></span><i class="status-dot"></i></button>`;
+  }).join('');
+  $('context-content').innerHTML=`<div class="member-group"><h3>Agent</h3>${rows}</div><div class="member-group"><h3>人类</h3><div class="drawer-member drawer-member-static"><span class="drawer-member-avatar owner">你</span><span><strong>你</strong><small>所有者</small></span><i class="status-dot"></i></div></div>`;
+  document.querySelectorAll('[data-drawer-agent]').forEach(button=>button.addEventListener('click',()=>showAgent(button.dataset.drawerAgent)));
+}
+function showChannelSettingsDrawer(){
+  const channel=state.channels.find(item=>item.channel_id===state.channelId)||{};
+  const name=channel.name||state.channelId;
+  openContextDrawer('频道设置');
+  $('context-content').innerHTML=`<div class="context-card channel-settings-card"><span class="eyebrow">频道</span><h2>设置</h2><p>#${esc(name)}</p><h3>频道信息</h3><p class="muted">在整个工作空间中显示的名称和描述。</p><label>名称<input value="${esc(name)}" disabled></label><label>描述<textarea rows="4" readonly>${esc(channel.description||channel.topic||'')}</textarea></label><h3>频道操作</h3><p class="muted">成员资格、可见性、归档和其他频道操作。</p><div class="context-actions"><button class="secondary" id="open-channel-editor">编辑频道</button><button class="secondary" id="hide-channel-action">隐藏 #${esc(name)}</button></div></div>`;
+  $('open-channel-editor')?.addEventListener('click',()=>{ closeContextDrawer(); openChannelEditor(state.channelId); });
+  $('hide-channel-action')?.addEventListener('click',()=>toast('本地版已保留隐藏频道入口'));
+}
+function drawerUtilityContent(kind){
+  if(kind==='notifications'){
+    const recent=state.messages.slice(-4).reverse();
+    return `<div class="context-card"><h2>通知中心</h2>${recent.length?recent.map(item=>`<button class="drawer-link" type="button" data-pop-message="${esc(item.message_id)}"><strong>${esc(labels[item.author_id]||item.author_id)}</strong><span>${esc(item.body).slice(0,72)}</span></button>`).join(''):'<div class="empty-state"><p>暂时没有新通知。</p></div>'}</div>`;
+  }
+  if(kind==='help') return '<div class="context-card"><h2>帮助</h2><button class="drawer-link" type="button" data-help="mentions"><strong>如何 @Agent 协作</strong><span>在频道中直接提及一个或多个 Agent。</span></button><button class="drawer-link" type="button" data-help="tasks"><strong>如何创建任务</strong><span>将消息转为任务，或在 Agent 消息下继续派发。</span></button><button class="drawer-link" type="button" data-help="reports"><strong>如何查看报告</strong><span>研究完成后打开 Markdown 报告。</span></button></div>';
+  return '<div class="context-card"><h2>设置</h2><button class="drawer-link" type="button" data-setting="workspace"><strong>工作空间设置</strong><span>名称、频道和默认行为。</span></button><button class="drawer-link" type="button" data-setting="models"><strong>模型与密钥</strong><span>密钥仅保存在本机后端。</span></button><button class="drawer-link" type="button" data-setting="appearance"><strong>外观</strong><span>当前使用统一浅红主题。</span></button></div>';
+}
+function showUtilityDrawer(kind){
+  const titles={notifications:'通知中心',help:'帮助',settings:'设置'};
+  openContextDrawer(titles[kind]||'上下文');
+  state.drawerMode=kind;
+  $('context-content').innerHTML=drawerUtilityContent(kind);
+  document.querySelectorAll('[data-pop-message]').forEach(item=>item.addEventListener('click',()=>{ setChannelTab('chat'); showMessage(item.dataset.popMessage); }));
+  document.querySelectorAll('[data-help]').forEach(item=>item.addEventListener('click',()=>showSimpleOverlay('帮助',item.dataset.help==='mentions'?'在频道输入 @Agent 名称即可派发任务；一次可 @多个 Agent。':item.dataset.help==='tasks'?'频道任务会显示在“任务”标签中，并保留负责人和状态。':'研究完成后可在“文件”或“查看报告”中打开 Markdown 报告。')));
+  document.querySelectorAll('[data-setting]').forEach(item=>item.addEventListener('click',()=>showSimpleOverlay('设置',item.dataset.setting==='models'?'模型和 API Key 只保存在本机后端，不在页面中显示明文。':'该设置入口暂未接入持久化配置。')));
+}
+function setupChatChrome(){
+  $('close-context')?.addEventListener('click',closeContextDrawer);
+  $('drawer-scrim')?.addEventListener('click',closeContextDrawer);
+  $('attachment-file-button')?.addEventListener('click',()=>$('attachment-input')?.click());
+  $('channel-members')?.addEventListener('click',showMembersDrawer);
+  $('channel-settings')?.addEventListener('click',showChannelSettingsDrawer);
+  $('channel-search')?.addEventListener('click',()=>{
+    setWorkspaceView('search');
+    requestAnimationFrame(()=>{
+      const channel=$('search-channel');
+      if(channel){ channel.value=state.channelId; channel.dispatchEvent(new Event('change')); }
+      $('search-input')?.focus();
+    });
+  });
+  $('channel-mute')?.addEventListener('click',()=>{
+    state.channelMuted=!state.channelMuted;
+    $('channel-muted-label').hidden=!state.channelMuted;
+    $('channel-mute').classList.toggle('is-active',state.channelMuted);
+    $('channel-mute').setAttribute('aria-pressed',String(state.channelMuted));
+    $('channel-mute').title=state.channelMuted?'为此频道取消静音活动':'为此频道静音活动';
+    toast(state.channelMuted?'频道已静音；直接提及仍会通知':'频道已取消静音');
+  });
+  document.querySelectorAll('[data-drawer]').forEach(button=>button.addEventListener('click',()=>showUtilityDrawer(button.dataset.drawer)));
+  document.addEventListener('keydown',event=>{ if(event.key==='Escape') closeContextDrawer(); });
+}
+
 async function deleteChannel(channelId){
   const channel=state.channels.find(item=>item.channel_id===channelId);
   const label=channel?.kind==='direct' ? `与 ${channel.name} 的私信` : `频道「${channel?.name||channelId}」`;
@@ -1314,19 +1603,59 @@ async function deleteChannel(channelId){
   toast('已删除');
 }
 
+async function deleteTask(taskId){
+  const task=[...state.tasks,...state.channelTasks].find(item=>item.task_id===taskId);
+  const title=task?.title || taskId;
+  if(!window.confirm(`确定删除任务「${title}」吗？\n已生成的消息、文件和研究证据会保留。`)) return;
+  let response;
+  let result={};
+  try{
+    response=await fetch(`/api/tasks/${encodeURIComponent(taskId)}`,{method:'DELETE'});
+    result=await response.json();
+  }catch(error){
+    toast('删除任务失败：无法连接本地服务');
+    return;
+  }
+  if(!response.ok){ toast(result.error || '删除任务失败'); return; }
+  await loadWorkspace(false);
+  await loadMessages();
+  renderTaskBoard();
+  if(result.cancelling){
+    toast(result.notice || '任务正在安全取消，结束后会自动移除');
+  }else{
+    toast('任务已删除');
+  }
+}
+
 async function deleteAgent(agentId){
   const agent=state.agents.find(item=>item.agent_id===agentId);
   const name=agent?.name || agentId;
   // Removing a built-in role also removes it from the seven-Agent research
   // flow, so say so rather than letting the run fail later.
-  const message=agent?.type==='custom'
+  const custom=agent?.type==='custom' || agent?.type==='local';
+  const message=custom
     ? `确定删除 Agent「${name}」吗？此操作无法恢复。`
     : `确定把内置 Agent「${name}」移出工作区吗？\n它将不再出现，也不能接收任务，完整研究流程会缺少这个角色。\n插件定义保留在本地，之后可以恢复。`;
   if(!window.confirm(message)) return;
   const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}`,{method:'DELETE'});
   const result=await response.json();
   if(!response.ok){ toast(result.error || '删除 Agent 失败'); return; }
+  const directChannelId=`dm-${agentId}`;
+  ['pinned','favorites'].forEach(key=>{
+    const values=Array.isArray(state.sidebarPrefs[key])?state.sidebarPrefs[key]:[];
+    state.sidebarPrefs[key]=values.filter(item=>item!==directChannelId && item!==agentId);
+  });
+  saveSidebarPrefs();
+  if(state.channelId===directChannelId){
+    const fallback=state.channels.find(item=>item.channel_id!==directChannelId && item.kind!=='direct');
+    state.channelId=fallback?.channel_id || 'research-room';
+    state.selectedThreadMessageId=null;
+    closeContextDrawer();
+  }
   await loadWorkspace(false);
+  await loadMessages();
+  applyChannelHeader();
+  connectEvents();
   toast(result.notice || `Agent「${name}」已删除`);
 }
 
@@ -1346,27 +1675,20 @@ function applyChannelHeader(){
   const channel=state.channels.find(item=>item.channel_id===state.channelId);
   const direct=channel?.kind==='direct';
   const name=channel?.name || state.channelId;
-  const eyebrow=document.querySelector('.channel-head .eyebrow');
   const heading=document.querySelector('.channel-head h1');
   const subtitle=document.querySelector('.channel-head p');
-  const hint=document.querySelector('.composer-hint');
-  if(eyebrow) eyebrow.textContent=direct?'私信':'投研协作频道';
-  if(heading) heading.textContent=`${direct?'@':'#'} ${name}`;
+  if(heading) heading.textContent=name;
   if(subtitle){
     subtitle.textContent=channel?.topic
       || channel?.description
       || (direct ? `只有你和 ${name} 的一对一对话` : '人类与多个 Agent 的研究交接、任务和交付');
   }
-  if(hint) hint.textContent=`发送消息给 ${direct?'@':'#'}${name}`;
   const input=$('message-input');
   if(input && direct) input.placeholder=`直接跟 ${name} 说…`;
-  else if(input) input.placeholder='输入消息，例如：@Fundamental 请补充最近一年经营变化';
-  // The tab row belongs to the channel view. A 1:1 conversation has no
-  // collaboration structure, so its graph tab goes; the rail keeps the
-  // workspace-wide graph reachable from anywhere.
-  const graphTab=document.querySelector('.pane-tab[data-pane="graph"]');
-  if(graphTab) graphTab.hidden=direct;
-  if(direct && state.activePane==='graph') setPane('chat');
+  else if(input) input.placeholder=`发送消息至 #${name}`;
+  const memberCount=$('member-count');
+  if(memberCount) memberCount.textContent=String((channel?.member_ids||[]).length || state.agents.length+1);
+  if(direct && state.workspaceView==='graph') setWorkspaceView('channel',{focus:false});
 }
 function bindChannelButtons(){
   const list=$('sidebar-body');
@@ -1376,6 +1698,8 @@ function bindChannelButtons(){
     state.channelId=button.dataset.channel;
     state.selectedThreadMessageId=null;
     state.eventSeq=0;
+    state.taskFilters={...state.taskFilters,creator:'',assignee:'',channel:''};
+    state.fileChannel='';
     applyChannelHeader();
     renderChannels();
     await loadMessages();
@@ -1481,17 +1805,18 @@ async function startDirectMessage(agentId){
   state.channelId=data.channel.channel_id;
   state.selectedThreadMessageId=null;
   state.eventSeq=0;
-  setPane('chat');
+  state.taskFilters={...state.taskFilters,creator:'',assignee:'',channel:''};
+  state.fileChannel='';
+  setWorkspaceView('channel',{focus:false});
   await Promise.all([loadWorkspace(false),loadMessages()]);
   connectEvents();
-  showAgent(agentId);
   toast(`已打开与 ${data.agent.name || agentId} 的私信`);
 }
 
 function setupCreationDialogs(){
   const agentDialog=$('agent-dialog'), channelDialog=$('channel-dialog'), dmDialog=$('dm-dialog');
   $('sidebar-action')?.addEventListener('click',()=>{
-    if(state.activePane==='chat') openDirectMessageDialog();
+    if(state.workspaceView==='channel') openDirectMessageDialog();
   });
   $('dm-form')?.addEventListener('submit',async event=>{
     event.preventDefault();
@@ -1540,7 +1865,12 @@ function setupCreationDialogs(){
     channelDialog.close();
     formElement.reset();
     editingChannelId=null;
-    if(!editing){ state.channelId=result.channel_id; state.eventSeq=0; }
+    if(!editing){
+      state.channelId=result.channel_id;
+      state.eventSeq=0;
+      state.taskFilters={...state.taskFilters,creator:'',assignee:'',channel:''};
+      state.fileChannel='';
+    }
     await loadWorkspace(false);
     await loadMessages();
     applyChannelHeader();
@@ -1552,7 +1882,7 @@ function setupCreationDialogs(){
 document.addEventListener('DOMContentLoaded',setupCreationDialogs);
 // Load the graph once at startup so its tab count is real before the pane is
 // ever opened, matching how the task and file counts behave.
-document.addEventListener('DOMContentLoaded',()=>{ setupRail(); setupPaneTabs(); setupAttachments(); setupSearch(); loadGraph(); });
+document.addEventListener('DOMContentLoaded',()=>{ setupNavigation(); setupAttachments(); setupSearch(); setupChatChrome(); loadGraph(); });
 
 // Attachments belong to the message they were sent with, so they render in the
 // timeline instead of only appearing in the files tab.

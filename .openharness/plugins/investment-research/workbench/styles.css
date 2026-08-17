@@ -469,6 +469,165 @@ button .icon,a .icon,label .icon,.section-title .icon{pointer-events:none}
 .avatar-replace:hover{background:#fde8ed;border-color:#C8102E}
 #agent-model-select{width:100%;border:1px solid var(--line);border-radius:7px;padding:8px 9px;font:inherit;background:#fff;color:var(--ink)}
 
+/* 2026-08 workspace visual system -------------------------------------------------
+   The workbench keeps the China-red brand but follows the reference workspace's
+   compact four-column rhythm: a strict icon rail, a dense directory, a flexible
+   work surface and a narrow inspection panel.  These rules intentionally live at
+   the end of the sheet so older feature styles remain functional without being
+   allowed to resize the application chrome. */
+:root{
+  --brand:#C8102E;
+  --brand-dark:#76091f;
+  --brand-deep:#580615;
+  --brand-soft:#fff0f3;
+  --brand-hover:#f9dde4;
+  --surface:#ffffff;
+  --surface-subtle:#fffafb;
+  --surface-sidebar:#fff6f8;
+  --ink:#21171a;
+  --muted:#746a6d;
+  --line:#eadde1;
+  --line-strong:#dcc7cd;
+  --shadow-sm:0 1px 2px rgba(64,14,28,.05);
+  --shadow-md:0 12px 32px rgba(74,10,29,.09);
+}
+body{background:var(--surface);font-size:14px;line-height:1.5;color:var(--ink)}
+button,textarea,input,select{font-family:inherit}
+button:focus-visible,textarea:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid rgba(200,16,46,.3);outline-offset:2px}
+
+/* Stable desktop frame. */
+.app-shell{--rail-w:68px;grid-template-columns:var(--rail-w) 286px minmax(620px,1fr) 364px;min-width:1180px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-sm)}
+.app-shell.no-sidebar{grid-template-columns:var(--rail-w) minmax(620px,1fr) 364px}
+.app-shell.full-bleed{grid-template-columns:var(--rail-w) minmax(0,1fr)}
+.app-shell.rail-expanded{--rail-w:178px}
+
+/* Navigation rail: all glyphs share the same box, baseline and stroke weight. */
+.rail{padding:12px 9px;gap:6px;background:var(--brand-dark);border-radius:11px 0 0 11px;align-items:stretch}
+.brand-mark{width:46px;height:46px;margin:0 auto 8px;border:1px solid rgba(255,255,255,.35);border-radius:10px;background:var(--brand);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);font-size:22px;line-height:1}
+.rail .rail-btn,.rail-toggle{position:relative;display:flex;align-items:center;justify-content:center;width:48px;min-height:44px;margin:0 auto;padding:0;border:1px solid transparent;border-radius:8px;color:#f0bac5;background:transparent;transition:background .14s ease,color .14s ease,border-color .14s ease}
+.rail .rail-btn:hover,.rail-toggle:hover{background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.08)}
+.rail .rail-btn.active{background:#fff;color:var(--brand);border-color:#fff;box-shadow:0 3px 10px rgba(41,0,11,.18)}
+.rail .rail-btn .icon,.rail .rail-toggle .icon{width:22px;height:22px;margin:0;stroke-width:1.85}
+.rail-toggle{margin-bottom:4px}
+.rail-expanded .rail .rail-btn,.rail-expanded .rail-toggle{width:100%;justify-content:flex-start;padding:0 12px;gap:11px}
+.rail-expanded .rail-label{font-size:13px;font-weight:650}
+.rail-expanded .brand-mark{margin-left:2px}
+
+/* Directory/sidebar. */
+.sidebar{padding:0 14px 18px;background:var(--surface-sidebar);border-right:1px solid var(--line);scrollbar-width:thin;scrollbar-color:#cf9da8 transparent}
+.workspace-head{position:sticky;top:0;z-index:2;min-height:86px;margin:0 -14px 12px;padding:20px 18px 14px;background:rgba(255,246,248,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(8px)}
+.workspace-head strong{font-size:19px;letter-spacing:-.02em}
+.workspace-head span{margin-top:2px;font-size:12px;color:var(--muted)}
+.workspace-head button,.section-title .section-add{width:30px;height:30px;border-radius:7px;color:var(--brand)}
+.workspace-head button:hover,.section-title .section-add:hover{background:var(--brand-hover)}
+.sidebar-section{margin-bottom:20px}
+.section-title{min-height:28px;margin:0 5px 6px;color:#6d6265;font-size:11px;letter-spacing:.075em}
+.section-title .section-toggle{font-size:11px;color:#6d6265}
+.section-title .section-toggle:hover{color:var(--brand)}
+.section-add .icon{width:15px;height:15px}
+.channel{min-height:38px;padding:8px 10px;border-radius:7px;font-size:13px}
+.channel .channel-icon{width:16px;height:16px}
+.channel.active,.row-wrap.active>.channel{background:var(--brand-hover);color:var(--brand);font-weight:700}
+.row-wrap{min-height:38px;border-radius:7px}
+.row-wrap:hover{background:#fbe8ed}
+.agent-row{min-height:42px;padding:6px 8px;gap:9px}
+.agent-avatar{width:30px;height:30px;border-radius:8px;font-size:11px}
+.agent-copy{display:block;line-height:1.35}
+.agent-copy strong{display:block;font-size:13px;max-width:100%}
+.agent-copy .agent-role-label,.agent-copy .agent-status-label{display:block;margin-top:2px;font-size:10.5px}
+.agent-row:not([data-status="online"]) .agent-copy .agent-status-label{display:block}
+.status-dot{width:8px;height:8px}
+.roster-filter{padding:2px 4px 8px}
+.filter-chip{padding:3px 9px;border-radius:6px;background:#fff}
+
+/* Channel header borrows the reference page's prominent, compact search bar. */
+.channel-head{display:grid;grid-template-columns:minmax(190px,.9fr) minmax(260px,1.25fr) auto;gap:22px;height:94px;padding:14px 24px;border-bottom:1px solid var(--line);background:#fff;align-items:center}
+.channel-identity{min-width:0}
+.eyebrow{font-size:10px;letter-spacing:.09em}
+.channel-head h1{overflow:hidden;margin:2px 0 0;font-size:22px;line-height:1.25;letter-spacing:-.025em;text-overflow:ellipsis;white-space:nowrap}
+.channel-head p{overflow:hidden;margin:2px 0 0;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.global-search{display:flex;align-items:center;gap:10px;width:100%;min-width:0;height:42px;padding:0 12px;border:1px solid var(--line-strong);border-radius:7px;background:var(--surface-subtle);color:var(--muted);cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.8)}
+.global-search:hover{border-color:#d8a9b4;background:#fff6f8;color:var(--ink)}
+.global-search .icon{width:18px;height:18px;color:var(--brand)}
+.global-search span{overflow:hidden;flex:1;text-align:left;text-overflow:ellipsis;white-space:nowrap}
+.global-search kbd{padding:3px 7px;border:1px solid var(--line);border-radius:4px;background:#fff;color:#8f8286;font:11px/1.2 "Segoe UI",sans-serif}
+.head-actions{flex-wrap:nowrap;gap:8px;justify-content:flex-end;font-size:11px;white-space:nowrap}
+.connection-indicator{display:inline-flex;align-items:center;gap:7px;max-width:122px;color:var(--muted)}
+.connection-indicator #connection-state{overflow:hidden;text-overflow:ellipsis}
+.head-actions button,.secondary{min-height:36px;padding:7px 10px;border-color:var(--line-strong);border-radius:7px;background:#fff}
+.head-actions button:hover,.secondary:hover{border-color:#d8a9b4;background:#fff6f8;color:var(--brand)}
+.head-actions .icon{width:15px;height:15px}
+.live-dot{width:8px;height:8px;flex:0 0 auto}
+
+/* Main work surface. */
+.run-banner{min-height:44px;margin:14px 24px 0;padding:10px 14px;border-radius:7px;box-shadow:none}
+.pane-tabs{min-height:52px;gap:2px;padding:10px 24px 0;background:#fff}
+.pane-tab{display:inline-flex;align-items:center;gap:7px;min-height:41px;padding:8px 15px;border-radius:7px 7px 0 0;font-size:13px}
+.pane-tab .icon{width:17px;height:17px}
+.pane-tab b{min-width:22px;padding:2px 6px;text-align:center}
+.pane-tab.active{box-shadow:0 -2px 0 var(--brand) inset}
+.message-list{padding:4px 24px 18px;scrollbar-width:thin;scrollbar-color:#c98c99 #fff8f9}
+.message{gap:12px;padding:15px 6px;border-bottom:1px solid #f2e8eb}
+.message:hover{background:#fffafb}
+.message-avatar{width:38px;height:38px;border-radius:9px;font-size:12px}
+.message-top{gap:8px;line-height:1.3}
+.message-top strong{font-size:14px}
+.message-body{margin-top:5px;font-size:13.5px;line-height:1.65}
+.message-meta{gap:6px;margin-top:7px}
+.comment-toggle{padding:4px 7px}
+.task-card,.artifact-card{padding:10px 12px;border-radius:7px;background:#fff9fa}
+
+/* Composer reads as one deliberate toolbar, not a large empty card. */
+.composer{margin:10px 24px 18px;border:1px solid var(--line-strong);border-radius:9px;box-shadow:0 6px 20px rgba(78,11,30,.06)}
+.composer:focus-within{border-color:#d79aa8;box-shadow:0 0 0 3px rgba(200,16,46,.07)}
+.composer-hint{padding:10px 13px 0;font-size:11px}
+.composer textarea{min-height:52px;padding:5px 13px 8px;font-size:13px;line-height:1.55}
+.composer-footer{min-height:47px;padding:7px 10px 9px 13px;border-top:1px solid #f3e7ea}
+.composer-tip{overflow:hidden;flex:1 1 auto;min-width:0;max-width:none;font-size:10.5px;text-overflow:ellipsis;white-space:nowrap}
+.composer-footer>div{display:flex;flex:0 0 auto;align-items:center;gap:7px;white-space:nowrap}
+.composer-footer button{margin-left:0}
+.attach-btn,.composer-footer .secondary,.composer-footer .send{min-height:34px;border-radius:7px}
+
+/* Context is a quiet inspector, visually subordinate to the conversation. */
+.context-pane{background:var(--surface-subtle);border-left:1px solid var(--line);scrollbar-width:thin;scrollbar-color:#cf9da8 transparent}
+.context-head{height:58px;padding:15px 18px;background:#fff;border-bottom:1px solid var(--line);font-size:14px}
+.context-head .icon{width:18px;height:18px;color:var(--brand)}
+.context-head button{width:30px;height:30px;border:1px solid transparent}
+.context-head button:hover{border-color:var(--line);background:#fff6f8}
+.context-content{padding:16px}
+.context-card{padding:16px;border-color:var(--line);border-radius:8px;box-shadow:none}
+.context-card h2{font-size:17px}
+.kv{padding:8px 0}
+.empty-context{padding:44px 12px}
+
+/* Full-page views use the same density as the reference search surface. */
+.search-board,.task-board,.file-board{padding:18px 24px 24px;background:#fff}
+.search-bar{height:48px;padding:0 14px;border-color:var(--line-strong);border-radius:7px;box-shadow:none}
+.search-filters{gap:7px;padding-bottom:4px}
+.search-filter{min-height:36px;border-radius:6px}
+.search-hit{padding:13px 14px;border-radius:7px;box-shadow:none}
+.board-column,.task-table,.file-table{border-radius:8px}
+
+@media(max-width:1500px){
+  .app-shell{--rail-w:64px;grid-template-columns:var(--rail-w) 250px minmax(560px,1fr) 320px}
+  .app-shell.no-sidebar{grid-template-columns:var(--rail-w) minmax(560px,1fr) 320px}
+  .app-shell.rail-expanded{--rail-w:170px}
+  .channel-head{grid-template-columns:minmax(180px,.8fr) minmax(220px,1fr) auto;gap:14px;padding-left:20px;padding-right:20px}
+  .global-search kbd{display:none}
+  .head-actions button span{display:none}
+  .run-banner,.pane-tabs{margin-left:0;margin-right:0}
+  .run-banner{margin-left:20px;margin-right:20px}
+  .message-list{padding-left:20px;padding-right:20px}
+  .composer{margin-left:20px;margin-right:20px}
+}
+@media(max-width:1240px){
+  .app-shell{grid-template-columns:60px 225px minmax(535px,1fr) 292px}
+  .app-shell.no-sidebar{grid-template-columns:60px minmax(535px,1fr) 292px}
+  .channel-head{grid-template-columns:minmax(170px,1fr) auto}
+  .global-search{display:none}
+  .connection-indicator{display:none}
+}
+
 
 
 /* Right side thread: compact enough to scan, detailed enough to audit a handoff. */
