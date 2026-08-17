@@ -20,6 +20,7 @@ the model posts why, and the discussion continues without it.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -87,6 +88,8 @@ class DiscussionOutcome:
     replies: list[dict[str, Any]] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
     handoffs: list[dict[str, Any]] = field(default_factory=list)
+    #: Handoffs the discussion ended before anyone answered.
+    unanswered: list[str] = field(default_factory=list)
     max_concurrent: int = 0
 
 
@@ -325,6 +328,10 @@ class GroupDiscussion:
         # named, so the discussion follows the conversation instead of a script.
         queue: list[tuple[str, str]] = [(agent_id, "") for agent_id in speakers]
         width = max(1, self._pool.size)
+        # Which Agent owes an answer to which handoff task. A task raised by an
+        # @ is closed when that Agent speaks; anything still open when the
+        # discussion ends is reported as unanswered rather than left queued.
+        open_handoffs: dict[str, list[str]] = {}
 
         for round_index in range(self._rounds):
             if not queue:
@@ -337,30 +344,71 @@ class GroupDiscussion:
                 topic_message_id=topic_message_id, transcript=transcript,
             )
             next_up: list[tuple[str, str]] = []
+            # Only a handoff raised *before* this wave can be answered by it.
+            # Everyone in a wave speaks at the same time, so a request made in
+            # this wave cannot already have been answered in it.
+            raised_earlier, open_handoffs = open_handoffs, {}
             for result in results:
                 if result.get("error"):
                     outcome.failures.append(result)
                     continue
                 outcome.replies.append(result)
+                self._close_handoffs(
+                    raised_earlier.pop(result["agent_id"], []), reply=result["message"],
+                )
                 for target in result.get("mentions") or []:
                     if target == result["agent_id"] or target not in speakers:
                         continue
-                    outcome.handoffs.append(
-                        self._record_handoff(
-                            channel_id=channel_id,
-                            from_agent=result["agent_id"],
-                            to_agent=target,
-                            message=result["message"],
-                            speakers=speakers,
-                        )
+                    handoff = self._record_handoff(
+                        channel_id=channel_id,
+                        from_agent=result["agent_id"],
+                        to_agent=target,
+                        message=result["message"],
+                        speakers=speakers,
                     )
+                    outcome.handoffs.append(handoff)
+                    open_handoffs.setdefault(target, []).append(handoff["task_id"])
                     if all(target != pending for pending, _ in next_up):
                         next_up.append((target, result["agent_id"]))
+            # Requests from earlier waves that still went unanswered stay open.
+            for agent_id, task_ids in raised_earlier.items():
+                open_handoffs.setdefault(agent_id, []).extend(task_ids)
             # A named Agent answers before anyone who has not spoken yet.
             queue = next_up + queue
 
+        # Whatever nobody got to before the rounds ran out is said so plainly.
+        # Leaving it queued was the bug: no worker picks these up, so the board
+        # filled with tasks that looked like they were about to run and never
+        # would.
+        for task_ids in open_handoffs.values():
+            outcome.unanswered.extend(task_ids)
+            self._expire_handoffs(task_ids)
         outcome.max_concurrent = self._peak
         return outcome
+
+    def _close_handoffs(self, task_ids: list[str], *, reply: dict[str, Any]) -> None:
+        """The named Agent answered, so its handoff task is done."""
+
+        for task_id in task_ids:
+            self._store.update_task(
+                task_id, "completed",
+                metadata_json=json.dumps({
+                    "discussion_handoff": True,
+                    "answered_in_discussion": True,
+                    "reply_message_id": reply.get("message_id"),
+                }, ensure_ascii=False),
+            )
+
+    def _expire_handoffs(self, task_ids: list[str]) -> None:
+        for task_id in task_ids:
+            self._store.update_task(
+                task_id, "blocked",
+                metadata_json=json.dumps({
+                    "discussion_handoff": True,
+                    "unanswered": True,
+                    "reason": "讨论轮次结束时还没轮到 TA 回应；可以在频道里再 @TA，或在那条消息下评论派任务。",
+                }, ensure_ascii=False),
+            )
 
     def _run_wave(
         self,

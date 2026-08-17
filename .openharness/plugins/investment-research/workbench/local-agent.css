@@ -2,6 +2,9 @@
    Separate file because this whole surface belongs to one feature — the rest
    of the workspace renders identically whether a local Agent exists or not. */
 
+/* A stopped task explains itself on the card. */
+.board-reason{display:block;margin-top:4px;padding:5px 7px;border-left:3px solid var(--warning);background:#FFFBF2;color:var(--warning);font-size:11px;line-height:1.5}
+
 /* ----------------------------------------------------------------- files */
 .file-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap}
 .file-delete{display:inline-grid;place-items:center;border:2px solid var(--divider);background:var(--surface);color:var(--muted);width:30px;height:28px;padding:0}

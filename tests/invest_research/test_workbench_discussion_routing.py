@@ -338,6 +338,57 @@ class TestANewChannelHasNoPhantomTask:
         assert store.get_task(adopted["task_id"]) is not None
 
 
+class TestNothingIsLeftQueuedAcrossARestart:
+    """The queues live in this process, so a queued task at startup is stranded."""
+
+    def test_a_stranded_handoff_is_blocked_with_a_reason(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        task = store.create_task(
+            channel_id="research-room", created_by="planner", assignee_id="risk",
+            title="点名复核", status="queued", metadata={"discussion_handoff": True},
+        )
+        settled = server.settle_stranded_tasks()
+        assert settled["unanswered"] == [task["task_id"]]
+        refreshed = store.get_task(task["task_id"])
+        assert refreshed["status"] == "blocked"
+        assert "再 @TA" in refreshed["metadata"]["reason"]
+
+    def test_any_other_queued_task_is_settled_too(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        task = store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="fundamental",
+            title="上次没跑完的任务", status="queued",
+        )
+        server.settle_stranded_tasks()
+        refreshed = store.get_task(task["task_id"])
+        assert refreshed["status"] == "blocked"
+        assert "执行进程已经不在" in refreshed["metadata"]["reason"]
+
+    def test_a_task_stuck_cancelling_is_removed(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        task = store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="risk",
+            title="取消到一半", status="cancelling",
+        )
+        settled = server.settle_stranded_tasks()
+        assert settled["cancelled"] == [task["task_id"]]
+        assert store.get_task(task["task_id"]) is None
+
+    def test_finished_work_is_left_alone(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        done = store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="risk",
+            title="已完成", status="completed",
+        )
+        running = store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="risk",
+            title="进行中", status="running",
+        )
+        server.settle_stranded_tasks()
+        assert store.get_task(done["task_id"])["status"] == "completed"
+        assert store.get_task(running["task_id"])["status"] == "running"
+
+
 class TestSkillsReachTheChatTurn:
     def test_installed_skills_are_attached_to_the_persona(self, store, monkeypatch, tmp_path):
         monkeypatch.setattr(server, "STORE", store)

@@ -3460,6 +3460,45 @@ def remove_placeholder_root_tasks() -> list[str]:
     return removed
 
 
+def settle_stranded_tasks() -> dict[str, list[str]]:
+    """Resolve tasks that nothing in this process will ever pick up.
+
+    A task runs from an in-memory per-Agent queue, and those queues are empty
+    when the server starts. So anything still marked ``queued`` at startup is
+    waiting for a worker that no longer exists, and anything left ``cancelling``
+    lost the worker that was going to finish cancelling it. Both read on the
+    board as "about to run"; neither ever will.
+
+    Saying so is the honest state. The user's question was exactly this: why is
+    it always 排队中.
+    """
+
+    settled: dict[str, list[str]] = {"unanswered": [], "cancelled": []}
+    for task in STORE.list_tasks():
+        status = str(task.get("status") or "")
+        metadata = task.get("metadata") or {}
+        task_id = str(task["task_id"])
+        if status == "queued":
+            # The queues live in this process and are empty at startup, so
+            # every task still marked queued is one nothing will pick up.
+            reason = (
+                "讨论已结束，这条点名没有被回应；可以在频道里再 @TA，或在那条消息下评论派任务。"
+                if metadata.get("discussion_handoff") else
+                "上一次工作台退出时它还在排队，执行进程已经不在了；重新 @TA 即可再派一次。"
+            )
+            STORE.update_task(
+                task_id, "blocked",
+                metadata_json=json.dumps(
+                    {**metadata, "unanswered": True, "reason": reason}, ensure_ascii=False,
+                ),
+            )
+            settled["unanswered"].append(task_id)
+        elif status == "cancelling":
+            _delete_task_after_cancellation(task_id, reason="工作台重启，取消已完成")
+            settled["cancelled"].append(task_id)
+    return settled
+
+
 def build_server(port: int = 8787) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(("127.0.0.1", port), WorkbenchHandler)
 
@@ -3480,6 +3519,13 @@ def main() -> int:
     if placeholders:
         print(
             f"已清理 {len(placeholders)} 条创建频道时留下的空任务（无人认领，永远排队中）。",
+            flush=True,
+        )
+    settled = settle_stranded_tasks()
+    if settled["unanswered"] or settled["cancelled"]:
+        print(
+            f"已结清 {len(settled['unanswered'])} 条无人回应的讨论点名、"
+            f"{len(settled['cancelled'])} 条取消中断的任务。",
             flush=True,
         )
     server = build_server(args.port)

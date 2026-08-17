@@ -220,6 +220,50 @@ class TestHandoffs:
         # request rather than restating its opening position.
         assert any("点名要你回应" in item["user"] for item in recorder)
 
+    def test_answering_a_handoff_closes_its_task(self, store, pool):
+        """Otherwise the board fills with tasks that never move."""
+
+        discussion = GroupDiscussion(
+            store=store, pool=pool, complete=scripted(["@risk 这条口径请你复核", "我复核过了"]),
+            rounds=2,
+        )
+        outcome = discussion.run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("fundamental"), agent("risk")],
+        )
+        task_id = outcome.handoffs[0]["task_id"]
+        task = store.get_task(task_id)
+        assert task["status"] == "completed"
+        assert task["metadata"]["answered_in_discussion"] is True
+        assert task["metadata"]["reply_message_id"]
+
+    def test_an_unanswered_handoff_says_so_instead_of_queueing_forever(self, store, pool):
+        # One round only: nobody gets a turn to answer. No worker picks these
+        # up, so leaving it queued would be a task that never runs.
+        discussion = GroupDiscussion(
+            store=store, pool=pool, complete=scripted(["@risk 请你复核"]), rounds=1,
+        )
+        outcome = discussion.run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("fundamental"), agent("risk")],
+        )
+        assert outcome.unanswered == [outcome.handoffs[0]["task_id"]]
+        task = store.get_task(outcome.handoffs[0]["task_id"])
+        assert task["status"] == "blocked"
+        assert "没轮到" in task["metadata"]["reason"] or "结束" in task["metadata"]["reason"]
+
+    def test_no_handoff_is_left_queued_after_a_discussion(self, store, pool):
+        discussion = GroupDiscussion(
+            store=store, pool=pool,
+            complete=scripted(["@risk 看一下", "@fundamental 你也看一下", "好"]), rounds=2,
+        )
+        discussion.run(
+            channel_id="research-room", topic="话题", topic_message_id="MSG-1",
+            participants=[agent("fundamental"), agent("risk")],
+        )
+        statuses = {task["status"] for task in store.list_tasks("research-room")}
+        assert "queued" not in statuses, statuses
+
     def test_mentioning_yourself_is_not_a_handoff(self, store, pool):
         discussion = GroupDiscussion(
             store=store, pool=pool, complete=scripted(["@risk 我自己来"]), rounds=1,

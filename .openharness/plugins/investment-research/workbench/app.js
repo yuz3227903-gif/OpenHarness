@@ -452,9 +452,12 @@ function renderRun(){
     $('run-label').textContent=fallback?'降级报告已交付':'报告已交付';
     $('run-meta').textContent=`Run ${r.run_id || ''}`;
   } else {
+    // This banner is only ever about the full seven-Agent research run. Saying
+    // "waiting for a research task" while a discussion is in full flow read as
+    // if the whole channel were idle, so it now names what it is waiting for.
     banner.className='run-banner';
-    $('run-label').textContent='等待研究任务';
-    $('run-meta').textContent='演示数据 / 本地真实运行入口';
+    $('run-label').textContent='未启动完整研究流程';
+    $('run-meta').textContent='在频道里 @Planner 可启动；日常讨论和直接任务不需要它';
   }
   if(pause){
     pause.hidden=paused;
@@ -818,7 +821,11 @@ function taskCardHtml(task){
   const handoff=metadata.handoff_depth
     ? `<small>由 ${esc(labels[task.created_by]||task.created_by)} 转派</small>`
     : '';
-  return `<article class="board-card" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><div class="board-card-head"><div class="board-card-id">${esc(task.task_id)}</div>${taskDeleteButton(task)}</div><strong>${esc(task.title)}</strong><div class="board-card-foot"><span class="board-assignee">${esc(assignee)}</span><span class="board-status">${esc(taskStatusText(task.status))}</span></div>${phase}${queued}${handoff}${elapsed}</article>`;
+  // A task that stopped for a reason says the reason on the card, so nobody
+  // has to guess why it is not moving.
+  const reason=metadata.reason ? `<small class="board-reason">${esc(metadata.reason)}</small>` : '';
+  const answered=metadata.answered_in_discussion ? '<small>已在讨论中回应</small>' : '';
+  return `<article class="board-card" data-board-task="${esc(task.task_id)}" data-status="${esc(task.status)}"><div class="board-card-head"><div class="board-card-id">${esc(task.task_id)}</div>${taskDeleteButton(task)}</div><strong>${esc(task.title)}</strong><div class="board-card-foot"><span class="board-assignee">${esc(assignee)}</span><span class="board-status">${esc(taskStatusText(task.status))}</span></div>${phase}${queued}${handoff}${answered}${reason}${elapsed}</article>`;
 }
 function memberOptions(selected, placeholder, ids){
   return `<option value="">${esc(placeholder)}</option>`+[...new Set(ids)].filter(Boolean).map(id=>`<option value="${esc(id)}" ${id===selected?'selected':''}>${esc(labels[id]||id)}</option>`).join('');
