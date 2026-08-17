@@ -317,11 +317,26 @@ class TestAgentHandoffTargets:
 
 
 class TestPerAgentQueue:
-    def test_one_agent_runs_its_jobs_one_at_a_time(self, monkeypatch):
+    def _queued_task(self, store, task_id, agent_id):
+        """A job the worker will actually run.
+
+        The worker skips a job whose task has since disappeared, so a queue test
+        has to put a real task behind each job — otherwise it measures the
+        cancellation path and reports it as ordering.
+        """
+
+        return store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id=agent_id,
+            title=f"排队测试 {task_id}", task_id=task_id,
+        )
+
+    def test_one_agent_runs_its_jobs_one_at_a_time(self, monkeypatch, tmp_path):
         overlap = []
         active = []
         lock = threading.Lock()
         done = threading.Event()
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
 
         def slow_task(**job):
             with lock:
@@ -338,6 +353,7 @@ class TestPerAgentQueue:
         monkeypatch.setitem(server.AGENT_WORKERS, "queue-test", None)
 
         for task_id in ("T1", "T2", "T3"):
+            self._queued_task(store, task_id, "queue-test")
             server._enqueue_agent_task(
                 agent_id="queue-test", job={"task_id": task_id, "agent_id": "queue-test"}
             )
@@ -347,8 +363,10 @@ class TestPerAgentQueue:
         server.AGENT_QUEUES["queue-test"].join()
         assert max(overlap) == 1, f"jobs overlapped: {overlap}"
 
-    def test_queue_position_counts_up_while_the_worker_is_busy(self, monkeypatch):
+    def test_queue_position_counts_up_while_the_worker_is_busy(self, monkeypatch, tmp_path):
         release = threading.Event()
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
 
         def blocking_task(**_job):
             release.wait(3)
@@ -357,6 +375,8 @@ class TestPerAgentQueue:
         monkeypatch.setitem(server.AGENT_QUEUES, "queue-pos", server.queue.Queue())
         monkeypatch.setitem(server.AGENT_WORKERS, "queue-pos", None)
 
+        for task_id in ("A", "B", "C"):
+            self._queued_task(store, task_id, "queue-pos")
         first = server._enqueue_agent_task(agent_id="queue-pos", job={"task_id": "A"})
         time.sleep(0.2)  # let the worker take the first job off the queue
         second = server._enqueue_agent_task(agent_id="queue-pos", job={"task_id": "B"})
@@ -367,6 +387,27 @@ class TestPerAgentQueue:
         assert first == 1
         # The worker already took A, so B is next in line and C waits behind it.
         assert (second, third) == (1, 2)
+
+    def test_a_job_whose_task_vanished_is_skipped_not_run(self, monkeypatch, tmp_path):
+        """Deleting a queued task must stop it, even once it is already queued.
+
+        The worker checks the store rather than trusting the job it dequeued,
+        so a task cancelled while waiting never reaches the model.
+        """
+
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        ran = []
+        monkeypatch.setattr(server, "_run_direct_agent_task", lambda **job: ran.append(job))
+        monkeypatch.setitem(server.AGENT_QUEUES, "queue-gone", server.queue.Queue())
+        monkeypatch.setitem(server.AGENT_WORKERS, "queue-gone", None)
+
+        # Never stored: from the worker's side this is a task that is no longer
+        # there, which is exactly what a cancellation leaves behind.
+        server._enqueue_agent_task(agent_id="queue-gone", job={"task_id": "GONE"})
+        server.AGENT_QUEUES["queue-gone"].join()
+
+        assert ran == []
 
 
 class TestDirectTaskCleanup:

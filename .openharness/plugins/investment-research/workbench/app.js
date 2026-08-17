@@ -859,12 +859,17 @@ function renderMembersBoard(){
   const board=$('members-board');
   if(!board) return;
   const people=`<article class="member-card member-card-human"><div class="member-card-avatar">你</div><div><strong>你</strong><p>工作区所有者</p><span>人类成员</span></div><i class="status-dot"></i></article>`;
-  const agents=state.agents.map(agent=>{
+  const visible=filterAgents(state.agents);
+  const agents=visible.map(agent=>{
     const builtIn=agent.type!=='custom' && agent.type!=='local';
     const actionLabel=builtIn?'移出工作区':'删除';
-    return `<article class="member-card" data-member-agent="${esc(agent.agent_id)}"><div class="member-card-avatar" style="background:${agentColors[agent.agent_id]||'#8B2940'}">${esc(initials(agent.agent_id))}</div><div class="member-card-copy"><strong>${esc(agent.name||labels[agent.agent_id]||agent.agent_id)}</strong><p>${esc(agent.role||roles[agent.agent_id]||'Agent')}</p><span>${esc(taskStatusText(agent.status||'online'))}</span></div><i class="status-dot"></i><div class="member-card-actions"><button type="button" class="secondary" data-member-dm="${esc(agent.agent_id)}">私信</button><button type="button" class="secondary" data-member-profile="${esc(agent.agent_id)}">资料</button><button type="button" class="secondary danger" data-member-delete="${esc(agent.agent_id)}">${actionLabel}</button></div></article>`;
+    return `<article class="member-card" data-member-agent="${esc(agent.agent_id)}"><div class="member-card-avatar" style="background:${agentColors[agent.agent_id]||'#8B2940'}">${esc(initials(agent.agent_id))}</div><div class="member-card-copy"><strong>${esc(agent.name||labels[agent.agent_id]||agent.agent_id)}</strong><p>${esc(agent.role||roles[agent.agent_id]||'Agent')}${agent.runtime==='local'?`<span class="runtime-badge">${esc(agent.provider||'local')}</span>`:''}</p><span>${esc(taskStatusText(agent.status||'online'))}</span></div><i class="status-dot"></i><div class="member-card-actions"><button type="button" class="secondary" data-member-dm="${esc(agent.agent_id)}">私信</button><button type="button" class="secondary" data-member-profile="${esc(agent.agent_id)}">资料</button><button type="button" class="secondary danger" data-member-delete="${esc(agent.agent_id)}">${actionLabel}</button></div></article>`;
   }).join('');
-  board.innerHTML=`<div class="view-header"><div><span class="eyebrow">工作区</span><h1>${icon('users')} 成员</h1><p>1 位人类成员与 ${state.agents.length} 个 Agent。</p></div><button class="toolbar-btn" type="button" data-create-agent>${icon('plus')} 创建 Agent</button></div><section class="member-section"><h2>人类</h2><div class="member-grid">${people}</div></section><section class="member-section"><h2>Agent</h2><div class="member-grid">${agents||'<div class="empty-state"><p>暂无 Agent。</p></div>'}</div></section>`;
+  board.innerHTML=`<div class="view-header"><div><span class="eyebrow">工作区</span><h1>${icon('users')} 成员</h1><p>1 位人类成员与 ${visible.length===state.agents.length?state.agents.length:`${visible.length}/${state.agents.length}`} 个 Agent。</p></div><button class="toolbar-btn" type="button" data-create-agent>${icon('plus')} 创建 Agent</button></div><section class="member-section"><h2>人类</h2><div class="member-grid">${people}</div></section><section class="member-section"><h2>Agent</h2>${agentFilterHtml(state.agents)}<div class="member-grid">${agents||'<div class="empty-state"><p>没有这一类的 Agent。</p></div>'}</div></section>`;
+  board.querySelectorAll('[data-agent-filter]').forEach(button=>button.addEventListener('click',()=>{
+    state.agentFilter=button.dataset.agentFilter;
+    renderMembersBoard();
+  }));
   board.querySelectorAll('[data-member-agent]').forEach(card=>card.addEventListener('click',()=>showAgent(card.dataset.memberAgent)));
   board.querySelectorAll('[data-member-dm]').forEach(button=>button.addEventListener('click',event=>{ event.stopPropagation(); startDirectMessage(button.dataset.memberDm); }));
   board.querySelectorAll('[data-member-profile]').forEach(button=>button.addEventListener('click',event=>{ event.stopPropagation(); showAgent(button.dataset.memberProfile); }));
@@ -1476,10 +1481,6 @@ function bindSidebar(){
       toast('已置顶，可在“已置顶”中取消');
     });
   });
-  document.querySelectorAll('[data-agent-filter]').forEach(button=>button.addEventListener('click',()=>{
-    state.agentFilter=button.dataset.agentFilter;
-    renderSidebar();
-  }));
   document.querySelectorAll('[data-file-channel]').forEach(button=>button.addEventListener('click',()=>{
     state.fileChannel=button.dataset.fileChannel;
     renderSidebar();

@@ -1,0 +1,84 @@
+/* Local Agents: connecting one, managing it, and talking to it.
+   Separate file because this whole surface belongs to one feature — the rest
+   of the workspace renders identically whether a local Agent exists or not. */
+
+/* ---------------------------------------------------------------- roster */
+.runtime-badge{display:inline-block;margin-left:6px;border:1px solid var(--divider);background:var(--surface-muted);color:var(--muted);padding:0 5px;font-size:10px;font-weight:700}
+.roster-filter{display:flex;flex-wrap:wrap;gap:6px;padding:0 22px 12px}
+.filter-chip{border:2px solid var(--divider);background:var(--surface);color:var(--muted);padding:4px 12px;font-size:12px}
+.filter-chip:hover{border-color:var(--border);box-shadow:2px 2px 0 var(--border)}
+.filter-chip.active{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:700}
+
+/* --------------------------------------------------- choosing a kind */
+.kind-choices{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:16px}
+.kind-card{display:grid;gap:6px;border:2px solid var(--divider);background:var(--surface);padding:16px;text-align:left}
+.kind-card:hover{border-color:var(--border);box-shadow:var(--hard-shadow)}
+.kind-card strong{font-size:15px}
+.kind-card p{margin:0;color:var(--muted);font-size:12px}
+.kind-card em{font-style:normal;color:var(--brand);font-size:11px;font-weight:700;letter-spacing:.05em}
+.kind-icon{display:grid;place-items:center;width:38px;height:38px;border:2px solid var(--border);font-size:19px}
+.kind-icon-hosted{background:var(--brand-soft);color:var(--brand)}
+.kind-icon-local{background:var(--surface-muted);color:var(--text)}
+
+/* ----------------------------------------------------- pairing dialog */
+.local-dialog{width:min(640px,94vw)}
+.local-steps{display:flex;gap:8px;margin:0;padding:12px 16px;list-style:none;border-bottom:2px solid var(--divider);color:var(--muted);font-size:12px;counter-reset:step}
+.local-steps li{counter-increment:step;padding:4px 10px;border:2px solid transparent}
+.local-steps li::before{content:counter(step) " · "}
+.local-steps li.active{border-color:var(--border);background:var(--brand-soft);color:var(--brand);font-weight:700}
+.local-step{display:grid;gap:12px;padding:16px}
+.bridge-status{border:2px solid var(--divider);padding:12px;font-size:13px}
+/* The tone says what to do next, so it is not decoration. */
+.bridge-status[data-tone="ok"]{border-color:var(--success);color:var(--success)}
+.bridge-status[data-tone="warn"]{border-color:var(--warning);color:var(--warning)}
+.bridge-status[data-tone="offline"],.bridge-status[data-tone="error"]{border-color:var(--danger);color:var(--danger)}
+.bridge-pair{display:grid;gap:8px}
+.pair-row{display:flex;gap:8px}
+.pair-row input{flex:0 0 auto;width:140px;border:2px solid var(--divider);padding:8px 10px;font:18px/1 Consolas,monospace;letter-spacing:.28em;text-align:center}
+.pair-error{margin:0;color:var(--danger);font-size:12px}
+.local-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+
+/* ------------------------------------------------------------ detection */
+.detect-list{display:grid;gap:8px}
+.detect-row{display:flex;align-items:center;gap:10px;border:2px solid var(--divider);padding:11px 13px}
+.detect-row.detect-off{color:var(--muted);background:var(--surface-muted)}
+.detect-copy{flex:1;min-width:0}
+.detect-copy strong{display:block;font-size:13px}
+.detect-copy small{color:var(--muted);font-size:11px}
+.detect-dot{width:9px;height:9px;flex:0 0 auto;border:1px solid var(--border);background:var(--muted)}
+.detect-available{background:var(--success)}
+.detect-not_installed{background:var(--divider)}
+.detect-error{background:var(--danger)}
+.detect-hint{color:var(--muted);font-size:11px}
+
+/* ------------------------------------------------------------ the chat */
+.local-stream{display:flex;flex-direction:column;gap:8px;padding:0 4px 12px}
+.local-turn{border-top:2px solid var(--divider);padding-top:12px;margin-top:4px}
+.local-user{font-size:14px;font-weight:700;margin-bottom:7px}
+.local-answer{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.6 var(--font-ui)}
+/* One component per event type, so the timeline reads the same whichever CLI
+   produced it. */
+.activity{display:flex;align-items:center;gap:7px;flex-wrap:wrap;border-left:3px solid var(--divider);padding:6px 10px;font-size:12px}
+.activity code{font:11px/1.5 Consolas,monospace;word-break:break-all}
+.activity small{color:var(--muted)}
+.activity-command{border-left-color:var(--brand);background:var(--brand-softer)}
+.activity-end{color:var(--muted)}
+.activity-tool,.activity-file{border-left-color:var(--brand);background:var(--brand-softer)}
+.activity-thinking{color:var(--muted);font-style:italic}
+.activity-status{border-left-color:var(--success);color:var(--success)}
+.activity-error{border-left-color:var(--danger);background:var(--brand-soft);color:var(--danger)}
+/* A file outside the workspace is the one case worth interrupting for. */
+.activity-outside{border:2px solid var(--warning);border-left-width:3px;background:#FFFBF2;color:var(--warning)}
+.outside-flag{background:var(--warning);color:#fff;padding:1px 6px;font-size:10px;font-weight:700}
+.activity-output{margin:0;border-left:3px solid var(--border);background:#1F1A1B;color:#EDE4E6;padding:9px 11px;font:11px/1.55 Consolas,monospace;white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto}
+
+/* ------------------------------------------------------------ approval */
+.approval{display:grid;gap:8px;border:2px solid var(--warning);background:#FFFBF2;padding:13px;box-shadow:var(--hard-shadow)}
+.approval strong{display:flex;align-items:center;gap:7px;font-size:14px;color:var(--warning)}
+.approval code{border:1px solid var(--divider);background:var(--surface);padding:7px 9px;font:12px/1.5 Consolas,monospace;word-break:break-all}
+.approval small{color:var(--muted);font-size:11px}
+.approval-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+
+@media(max-width:820px){
+  .kind-choices{grid-template-columns:1fr}
+}

@@ -24,13 +24,19 @@ def test_workbench_sse_uses_default_message_events_and_cursor_replay():
     assert "source.onmessage=handleEvent" in app
     assert "after=${state.eventSeq}" in app
     assert "data.event_seq" in app
-    assert 'STORE.latest_event_seq("research-room")' in server
+    # The cursor is per channel, not per hard-coded room — a snapshot of one
+    # channel must not hand the page another channel's sequence number.
+    assert "STORE.latest_event_seq(channel_id)" in server
     assert "liveEventSource" in app
     assert "scheduleRealtimeRefresh" in app
     assert "direct_agent_progress" in server
     assert "elapsed_seconds" in server
     assert "last_activity_at" in server
-    assert "agent-status-label" in app
+    # The roster shows an Agent's live state instead of hiding it to save a
+    # line: the row carries the status for CSS, and prints the detail next to
+    # the name.
+    assert 'data-status="${esc(status)}"' in app
+    assert "<small>${esc(detail)}</small>" in app
 
 
 def test_workbench_renders_structured_agent_handoff_details():
@@ -95,7 +101,10 @@ def test_workbench_routes_non_planner_mentions_to_direct_agent_tasks():
     assert "DIRECT_AGENT_IDS" in server
     assert "for agent_id in dict.fromkeys(agent_ids)" in server
     assert "root_message_id=message[\"message_id\"]" in server
-    assert "thread_id=root_message_id" in server
+    # The acknowledgement is posted into the channel timeline and anchored to
+    # the message it answers. It used to open a thread; threads were replaced by
+    # inline comments, so the anchor is metadata now rather than a thread id.
+    assert '"reply_to_message_id": root_message_id' in server
     assert "requested_thread_id or message[\"message_id\"]" in server
     assert "include_replies=False" in server
     assert "data.status==='agents_started'" in app
