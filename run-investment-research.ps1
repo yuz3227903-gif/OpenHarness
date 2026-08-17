@@ -30,6 +30,10 @@ $OutputEncoding = $utf8NoBom
 $projectRoot = Split-Path -Parent $PSCommandPath
 $secretPath = Join-Path $projectRoot ".openharness\secrets\tavily-key.dpapi"
 $arkSecretPath = Join-Path $projectRoot ".openharness\secrets\ark-key.dpapi"
+# Optional pool of Ark keys. A group discussion runs several Agents at once, and
+# concurrent calls on one account hit that account's limits, so each speaker
+# leases its own credential and the number of keys is the concurrency cap.
+$arkPoolSecretPath = Join-Path $projectRoot ".openharness\secrets\ark-keys.dpapi"
 $openHarnessLauncher = Join-Path $projectRoot "run-openh.ps1"
 $pythonExecutable = Join-Path $projectRoot ".venv\Scripts\python.exe"
 
@@ -78,6 +82,7 @@ if ($needsArk) {
 }
 $previousTavilyKey = [Environment]::GetEnvironmentVariable("TAVILY_API_KEY", "Process")
 $previousArkKey = [Environment]::GetEnvironmentVariable("ARK_API_KEY", "Process")
+$previousArkKeys = [Environment]::GetEnvironmentVariable("ARK_API_KEYS", "Process")
 $previousOpenAiKey = [Environment]::GetEnvironmentVariable("OPENAI_API_KEY", "Process")
 $previousOpenHarnessDataDir = [Environment]::GetEnvironmentVariable("OPENHARNESS_DATA_DIR", "Process")
 $exitCode = 0
@@ -105,6 +110,22 @@ try {
         [Environment]::SetEnvironmentVariable("ARK_API_KEY", $plainTextArkKey, "Process")
         [Environment]::SetEnvironmentVariable("OPENAI_API_KEY", $plainTextArkKey, "Process")
         $plainTextArkKey = $null
+    }
+    if ($needsArk -and (Test-Path -LiteralPath $arkPoolSecretPath)) {
+        $encryptedArkPool = [System.IO.File]::ReadAllText($arkPoolSecretPath).Trim()
+        if ($encryptedArkPool) {
+            $secureArkPool = ConvertTo-SecureString -String $encryptedArkPool
+            $arkPoolPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureArkPool)
+            try {
+                $plainTextArkPool = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($arkPoolPointer)
+                [Environment]::SetEnvironmentVariable("ARK_API_KEYS", $plainTextArkPool, "Process")
+                $plainTextArkPool = $null
+            }
+            finally {
+                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($arkPoolPointer)
+                $secureArkPool.Dispose()
+            }
+        }
     }
 
     if ($Workbench) {
@@ -296,6 +317,7 @@ finally {
         "Process"
     )
     [Environment]::SetEnvironmentVariable("ARK_API_KEY", $previousArkKey, "Process")
+    [Environment]::SetEnvironmentVariable("ARK_API_KEYS", $previousArkKeys, "Process")
     [Environment]::SetEnvironmentVariable("OPENAI_API_KEY", $previousOpenAiKey, "Process")
     [Environment]::SetEnvironmentVariable(
         "OPENHARNESS_DATA_DIR",

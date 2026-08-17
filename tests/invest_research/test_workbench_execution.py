@@ -503,6 +503,36 @@ class TestRemovingBuiltinAgents:
         # The edge that referenced it must survive.
         assert any(edge["target"] == "risk" for edge in graph["edges"])
 
+    def test_removing_an_agent_takes_its_direct_channel_with_it(self, monkeypatch, tmp_path):
+        """Otherwise the delete looks like it did nothing.
+
+        The roster drops the Agent, but its 1:1 conversation kept it listed
+        under 私信 — same name, same avatar, still there after you deleted it.
+        """
+
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        store.ensure_direct_channel("risk", "Risk")
+        assert any(item["channel_id"] == "dm-risk" for item in store.list_channels())
+
+        assert server._remove_builtin_agent("risk") is True
+
+        assert all(item["agent_id"] != "risk" for item in store.list_agents())
+        assert all(item["channel_id"] != "dm-risk" for item in store.list_channels())
+
+    def test_removing_an_agent_without_a_conversation_still_works(self, monkeypatch, tmp_path):
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        assert server._remove_builtin_agent("risk") is True
+        assert all(item["agent_id"] != "risk" for item in store.list_agents())
+
+    def test_an_unknown_agent_is_refused_before_any_channel_is_touched(self, monkeypatch, tmp_path):
+        store = CollaborationStore(tmp_path)
+        monkeypatch.setattr(server, "STORE", store)
+        before = [item["channel_id"] for item in store.list_channels()]
+        assert server._remove_builtin_agent("nope") is False
+        assert [item["channel_id"] for item in store.list_channels()] == before
+
     def test_a_removed_agent_keeps_its_model_override(self, tmp_path):
         store = CollaborationStore(tmp_path)
         store.update_agent_model("risk", "deepseek-v4-pro")

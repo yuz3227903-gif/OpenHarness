@@ -28,8 +28,15 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from uuid import uuid4
 
+from openharness.invest_research.ark_key_pool import ArkKeyPool, NoArkKeysConfigured
 from openharness.invest_research.collaboration_store import CollaborationStore
 from openharness.invest_research.evidence_store import EvidenceStore
+from openharness.invest_research.workbench_chat_model import ChatModelError
+from openharness.invest_research.workbench_chat_model import complete as chat_complete
+from openharness.invest_research.workbench_group_chat import (
+    DEFAULT_ROUNDS,
+    GroupDiscussion,
+)
 from openharness.invest_research.workbench_agent_tasks import (
     DIRECT_AGENT_IDS,
     DirectAgentTaskError,
@@ -159,7 +166,6 @@ def _direct_reply_text(agent: dict[str, Any], text: str) -> str:
     """
 
     agent_id = str(agent.get("agent_id") or "")
-    name = str(agent.get("name") or agent_id)
     role = str(agent.get("role") or agent.get("profile") or "Agent")
     if agent_id == "planner":
         return (
@@ -173,6 +179,52 @@ def _direct_reply_text(agent: dict[str, Any], text: str) -> str:
             "如无可用上下文，我会明确说明缺少的公司、时间范围或证据，而不会擅自读取其他频道。"
         )
     return f"已收到你的消息。作为{role}，我会在职责范围内协助；需要研究任务时请说明目标和期望交付。"
+
+
+def _start_direct_agent_reply(
+    *, channel_id: str, agent: dict[str, Any], root_message_id: str,
+) -> bool:
+    """Have one Agent answer a direct message for real.
+
+    A 1:1 conversation is a discussion with one participant, so it runs on the
+    same machinery — which is also what keeps the sessions apart: the transcript
+    comes from this direct channel and nowhere else.
+
+    Returns False when no credential is configured, so the caller can fall back
+    to the acknowledgement rather than leaving the user with silence.
+    """
+
+    try:
+        pool = _ark_key_pool()
+    except NoArkKeysConfigured:
+        return False
+
+    def run() -> None:
+        discussion = GroupDiscussion(
+            store=STORE, pool=pool, complete=chat_complete,
+            publish=_publish_discussion_event, rounds=1,
+        )
+        try:
+            discussion.run(
+                channel_id=channel_id,
+                topic=_latest_body(channel_id, root_message_id),
+                topic_message_id=root_message_id,
+                participants=[agent],
+            )
+        except Exception:  # noqa: BLE001 - a reply must not take the server down
+            log.exception("direct agent reply failed")
+
+    threading.Thread(
+        target=run, daemon=True, name=f"direct-reply-{agent.get('agent_id')}",
+    ).start()
+    return True
+
+
+def _latest_body(channel_id: str, message_id: str) -> str:
+    for item in STORE.list_messages(channel_id, limit=20):
+        if item["message_id"] == message_id:
+            return str(item.get("body") or "")
+    return ""
 
 
 def _post_direct_acknowledgement(
@@ -200,6 +252,162 @@ def _post_direct_acknowledgement(
         payload={"message": reply, "agent_id": agent["agent_id"]},
     )
     return reply
+
+
+# --------------------------------------------------------------- group chat
+#
+# A topic posted with no @ is something the room talks about, so several Agents
+# answer it at once. How many at once is decided by the Ark key pool: concurrent
+# calls on one account hit that account's limits, so each speaker holds its own
+# credential and the pool size is the cap.
+
+#: Discussions run off the request thread, one per channel. A second topic in a
+#: channel that is still talking is refused rather than queued behind it — the
+#: conversation would be answering a stale transcript by the time it ran.
+DISCUSSION_THREADS: dict[str, threading.Thread] = {}
+DISCUSSION_LOCK = threading.Lock()
+
+#: What an Agent talks with when nothing was chosen for it. The workspace
+#: default (``ark-code-latest``) is a reasoning model picked for research work:
+#: in a chat turn it spends the whole token budget thinking and answers with
+#: nothing. An explicit per-Agent model always wins over this.
+DEFAULT_CHAT_MODEL = "deepseek-v4-flash"
+
+
+#: The validated pool, keyed by the raw configuration it was built from, so a
+#: key added to the environment is picked up without a restart but the check
+#: does not repeat on every message.
+_ARK_POOL_CACHE: dict[str, ArkKeyPool] = {}
+
+
+def _ark_key_probe(key: str) -> bool:
+    """Does this key actually work? One cheap call answers it."""
+
+    try:
+        chat_complete(
+            messages=[{"role": "user", "content": "hi"}],
+            model=DEFAULT_CHAT_MODEL, api_key=key, max_tokens=16, timeout=20.0,
+        )
+    except ChatModelError as exc:
+        # Only a rejected credential disqualifies a key. A rate limit or an
+        # unreachable provider says nothing about whether the key is valid.
+        return exc.kind != "provider_auth"
+    return True
+
+
+def _ark_key_pool() -> ArkKeyPool:
+    """The keys that can actually speak, checked once per configuration."""
+
+    configured = os.environ.get("ARK_API_KEYS", "") or os.environ.get("ARK_API_KEY", "")
+    cached = _ARK_POOL_CACHE.get(configured)
+    if cached is not None:
+        return cached
+    pool = ArkKeyPool.from_environment()
+    usable, dropped = pool.keep_usable(_ark_key_probe)
+    if dropped:
+        log.warning(
+            "%d of %d Ark keys were rejected by the provider; %d can be used "
+            "(discussion concurrency is %d)",
+            len(dropped), pool.size, usable.size, usable.size,
+        )
+    _ARK_POOL_CACHE[configured] = usable
+    return usable
+
+
+def _discussion_participants(channel_id: str) -> list[dict[str, Any]]:
+    """Who is in the room.
+
+    A channel's members if it has any, otherwise every Agent in the workspace.
+    Removed Agents are excluded by the roster itself.
+    """
+
+    agents = {
+        str(item["agent_id"]): item
+        for item in STORE.list_agents()
+        # A local Agent's runtime is the user's machine. This server has no
+        # standing to answer in its name, and doing it through Ark would put
+        # words in a CLI's mouth, so it sits the discussion out.
+        if item.get("runtime") != "local"
+    }
+    channel = next(
+        (item for item in STORE.list_channels() if item["channel_id"] == channel_id), None
+    )
+    member_ids = [str(value) for value in (channel or {}).get("member_ids") or []]
+    chosen = [agents[value] for value in member_ids if value in agents]
+    return [_with_chat_model(item) for item in (chosen or list(agents.values()))]
+
+
+def _with_chat_model(agent: dict[str, Any]) -> dict[str, Any]:
+    """Swap the research default for a model that answers in conversation."""
+
+    model = str(agent.get("model") or "")
+    if model and model != DEFAULT_MODEL:
+        return agent
+    return {**agent, "model": DEFAULT_CHAT_MODEL}
+
+
+def _publish_discussion_event(channel_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    STORE.add_event(channel_id=channel_id, event_type=event_type, payload=payload)
+
+
+def _start_group_discussion(
+    *, channel_id: str, message: dict[str, Any], participants: list[dict[str, Any]],
+    rounds: int = DEFAULT_ROUNDS,
+) -> tuple[int, dict[str, Any]]:
+    """Kick off a discussion of one topic and return immediately."""
+
+    try:
+        pool = _ark_key_pool()
+    except NoArkKeysConfigured as exc:
+        return 503, {"error": str(exc), "status": "not_configured"}
+    if not participants:
+        return 409, {"error": "这个频道里没有可参与讨论的 Agent。", "status": "empty_room"}
+
+    with DISCUSSION_LOCK:
+        running = DISCUSSION_THREADS.get(channel_id)
+        if running is not None and running.is_alive():
+            return 409, {
+                "error": "这个频道正在讨论上一个话题，请等它结束。",
+                "status": "already_discussing",
+            }
+
+        def run() -> None:
+            discussion = GroupDiscussion(
+                store=STORE, pool=pool, complete=chat_complete,
+                publish=_publish_discussion_event, rounds=rounds,
+            )
+            try:
+                outcome = discussion.run(
+                    channel_id=channel_id,
+                    topic=str(message.get("body") or ""),
+                    topic_message_id=str(message.get("message_id") or ""),
+                    participants=participants,
+                )
+            except Exception as exc:  # noqa: BLE001 - the room must not die silently
+                log.exception("group discussion failed")
+                _publish_discussion_event(channel_id, "discussion_failed", {"error": str(exc)})
+                return
+            _publish_discussion_event(channel_id, "discussion_finished", {
+                "topic_message_id": outcome.topic_message_id,
+                "rounds": outcome.rounds,
+                "replies": len(outcome.replies),
+                "failures": len(outcome.failures),
+                "handoffs": outcome.handoffs,
+                "max_concurrent": outcome.max_concurrent,
+            })
+
+        thread = threading.Thread(
+            target=run, daemon=True, name=f"discussion-{channel_id}",
+        )
+        DISCUSSION_THREADS[channel_id] = thread
+        thread.start()
+
+    return HTTPStatus.ACCEPTED, {
+        "status": "discussion_started",
+        "participants": [str(item["agent_id"]) for item in participants],
+        "concurrency": pool.size,
+        "rounds": rounds,
+    }
 
 
 def _delete_task_after_cancellation(task_id: str, *, reason: str = "已取消") -> dict[str, Any] | None:
@@ -243,6 +451,26 @@ def _remove_custom_agent_uploads(agent: dict[str, Any], direct_channel_id: str) 
     direct_uploads = (FILE_ROOT / _safe_filename(direct_channel_id)).resolve()
     if FILE_ROOT.resolve() in direct_uploads.parents and direct_uploads.is_dir():
         shutil.rmtree(direct_uploads, ignore_errors=True)
+
+
+def _remove_builtin_agent(agent_id: str) -> bool:
+    """Take a built-in Agent out of the workspace, conversation and all.
+
+    The plugin definition is untouched, so this is reversible. Its 1:1 channel
+    is not: leaving that behind makes a removed Agent look like it is still
+    there, which reads as "delete did nothing". Restoring the Agent re-creates
+    the channel on the first message.
+    """
+
+    if not STORE.set_builtin_agent_removed(agent_id, True):
+        return False
+    direct_channel_id = f"dm-{agent_id}"
+    if any(item["channel_id"] == direct_channel_id for item in STORE.list_channels()):
+        STORE.delete_channel(direct_channel_id)
+        uploads = (FILE_ROOT / _safe_filename(direct_channel_id)).resolve()
+        if FILE_ROOT.resolve() in uploads.parents and uploads.is_dir():
+            shutil.rmtree(uploads, ignore_errors=True)
+    return True
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -2551,12 +2779,24 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             STORE.add_event(
                 channel_id=channel_id, event_type="message_created", payload={"message": message}
             )
-            quick_reply = _post_direct_acknowledgement(
+            # The Agent answers for real. Only when there is no credential at
+            # all does it fall back to the canned acknowledgement, so the user
+            # is never left staring at a message nobody responded to.
+            replying = _start_direct_agent_reply(
+                channel_id=channel_id, agent=_with_chat_model(agent),
+                root_message_id=message["message_id"],
+            )
+            quick_reply = None if replying else _post_direct_acknowledgement(
                 channel_id=channel_id,
                 root_message_id=message["message_id"],
                 agent=agent,
                 text=text,
             )
+            if replying and not _looks_like_research_request(text):
+                self._send(HTTPStatus.ACCEPTED, {
+                    "message": message, "channel": channel, "status": "agent_replying",
+                })
+                return
             if agent_id == "planner":
                 self._send(201, {
                     "message": message, "channel": channel, "reply": quick_reply, "status": "agent_replied",
@@ -2727,6 +2967,23 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "tasks": tasks,
                     },
                 )
+            elif message["body"] and not requested_thread_id:
+                # No @ means the topic belongs to the room, so the room discusses
+                # it: several Agents answer at once, and may hand work to each
+                # other as they go.
+                status, payload = _start_group_discussion(
+                    channel_id=channel_id,
+                    message=message,
+                    participants=_discussion_participants(channel_id),
+                )
+                payload["message"] = message
+                if status >= 400:
+                    # The message is already recorded; only the discussion
+                    # failed to start, and the reason says which.
+                    payload["status"] = payload.get("status", "recorded")
+                    self._send(201, payload)
+                    return
+                self._send(status, payload)
             else:
                 self._send(
                     201,
@@ -2947,9 +3204,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     "cancelled_task_ids": [task["task_id"] for task in active_tasks],
                 })
                 return
-            # A built-in Agent belongs to the plugin. Removing it from the
-            # workspace is reversible; deleting its definition is not ours to do.
-            STORE.set_builtin_agent_removed(agent_id, True)
+            _remove_builtin_agent(agent_id)
             for channel in STORE.list_channels():
                 if channel.get("kind") == "direct":
                     continue

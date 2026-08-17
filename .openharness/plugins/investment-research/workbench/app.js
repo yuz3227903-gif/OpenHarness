@@ -1341,12 +1341,15 @@ function dmAvatarHtml(agent,agentId){
   const avatar=agent?.avatar_path?`<img src="/${esc(agent.avatar_path)}" alt="">`:esc(initials(agentId));
   return `<span class="dm-avatar" style="background:${agentColors[agentId] || '#58746a'}">${avatar}</span>`;
 }
+// A row under 私信 is a member, so deleting it removes the Agent rather than
+// just the conversation. Deleting only the channel used to look like nothing
+// happened: the Agent came straight back as a member without a conversation.
 function dmButtonHtml(channel){
   const agentId=channel.channel_id.replace(/^dm-/,'');
   const agent=state.agents.find(item=>item.agent_id===agentId);
   const role=agent?.role || roles[agentId] || '';
   const itemId=sidebarItemId(channel);
-  return `<div class="row-wrap ${sidebarItemClass(itemId)}" draggable="true" data-sidebar-item="${esc(itemId)}" data-item-type="direct" data-item-id="${esc(itemId)}"><button type="button" class="dm-profile-target" data-profile-agent="${esc(agentId)}" title="查看 ${esc(channel.name)} 资料">${dmAvatarHtml(agent,agentId)}</button><button type="button" class="channel dm-channel" data-dm-agent="${esc(agentId)}" data-status="${esc(agent?.status || 'online')}" data-runtime="${esc(agent?.runtime || 'hosted')}" title="打开与 ${esc(channel.name)} 的私信"><span class="dm-copy"><b>${esc(channel.name)}</b>${role?`<em>${esc(role)}</em>`:''}</span><i class="status-dot"></i></button>${sidebarItemActions(itemId,{deleteKind:'channel',deleteId:channel.channel_id})}</div>`;
+  return `<div class="row-wrap ${sidebarItemClass(itemId)}" draggable="true" data-sidebar-item="${esc(itemId)}" data-item-type="direct" data-item-id="${esc(itemId)}"><button type="button" class="dm-profile-target" data-profile-agent="${esc(agentId)}" title="查看 ${esc(channel.name)} 资料">${dmAvatarHtml(agent,agentId)}</button><button type="button" class="channel dm-channel" data-dm-agent="${esc(agentId)}" data-status="${esc(agent?.status || 'online')}" data-runtime="${esc(agent?.runtime || 'hosted')}" title="打开与 ${esc(channel.name)} 的私信"><span class="dm-copy"><b>${esc(channel.name)}</b>${role?`<em>${esc(role)}</em>`:''}</span><i class="status-dot"></i></button>${sidebarItemActions(itemId,{deleteKind:'agent',deleteId:agentId})}</div>`;
 }
 function agentRowHtml(agent){ return dmAgentRowHtml(agent); }
 function dmAgentRowHtml(agent){
@@ -1357,7 +1360,7 @@ function dmAgentRowHtml(agent){
   const itemId=sidebarItemId(agent);
   const localBadge=agent.runtime==='local'
     ? `<span class="runtime-badge">${esc(agent.provider||'local')}</span>` : '';
-  return `<div class="row-wrap ${sidebarItemClass(itemId)}" draggable="true" data-sidebar-item="${esc(itemId)}" data-item-type="direct" data-item-id="${esc(itemId)}"><button type="button" class="dm-profile-target" data-profile-agent="${esc(agent.agent_id)}" title="查看 ${esc(name)} 资料">${dmAvatarHtml(agent,agent.agent_id)}</button><button type="button" class="channel dm-channel" data-dm-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" data-runtime="${esc(agent.runtime||'hosted')}" title="打开与 ${esc(name)} 的私信"><span class="dm-copy"><b>${esc(name)}</b><em>${esc(role)}${localBadge}</em><small>${esc(detail)}</small></span><i class="status-dot"></i></button>${sidebarItemActions(itemId)}</div>`;
+  return `<div class="row-wrap ${sidebarItemClass(itemId)}" draggable="true" data-sidebar-item="${esc(itemId)}" data-item-type="direct" data-item-id="${esc(itemId)}"><button type="button" class="dm-profile-target" data-profile-agent="${esc(agent.agent_id)}" title="查看 ${esc(name)} 资料">${dmAvatarHtml(agent,agent.agent_id)}</button><button type="button" class="channel dm-channel" data-dm-agent="${esc(agent.agent_id)}" data-status="${esc(status)}" data-runtime="${esc(agent.runtime||'hosted')}" title="打开与 ${esc(name)} 的私信"><span class="dm-copy"><b>${esc(name)}</b><em>${esc(role)}${localBadge}</em><small>${esc(detail)}</small></span><i class="status-dot"></i></button>${sidebarItemActions(itemId,{deleteKind:'agent',deleteId:agent.agent_id})}</div>`;
 }
 // Hosted and local Agents share one roster — the filter narrows it rather than
 // splitting them into separate lists, so "how many Agents do I have" has one
