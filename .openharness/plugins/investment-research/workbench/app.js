@@ -303,11 +303,50 @@ async function openReport(){
     $('report-back')?.addEventListener('click',()=>{ openContextDrawer('上下文'); renderContext(); });
   }
 }
+// A "/" at the start of a direct message calls one of that Agent's Skills by
+// name. The menu is built from the Skills actually installed on the Agent you
+// are talking to, so it can only offer something that exists.
+function slugifySkill(name){
+  return String(name||'').trim().replace(/[^A-Za-z0-9_\-]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase().slice(0,64);
+}
+async function skillsForCurrentAgent(){
+  const agentId=currentDirectAgentId();
+  if(!agentId) return [];
+  if(!state.skills[agentId]){
+    try{
+      const response=await fetch(`/api/agents/${encodeURIComponent(agentId)}/skills`,{cache:'no-store'});
+      state.skills={...state.skills,[agentId]:response.ok ? await response.json() : []};
+    }catch(_error){ state.skills={...state.skills,[agentId]:[]}; }
+  }
+  return (state.skills[agentId]||[]).filter(item=>item.enabled);
+}
+async function renderSkillMenu(input,menu){
+  const match=/^\/([^\s]*)$/.exec(input.value);
+  if(!match || !currentDirectAgentId()){ return false; }
+  const skills=await skillsForCurrentAgent();
+  const partial=match[1].toLowerCase();
+  const found=skills.filter(item=>slugifySkill(item.name).includes(partial)).slice(0,7);
+  menu.innerHTML=found.length
+    ? found.map(item=>`<div class="mention-option" data-skill="${esc(slugifySkill(item.name))}"><strong>/${esc(slugifySkill(item.name))}</strong> <span>${esc(item.description||item.name)}</span></div>`).join('')
+    : '<div class="mention-empty">这个 Agent 还没有启用的技能。到资料卡里上传一个。</div>';
+  menu.style.display='block';
+  menu.querySelectorAll('[data-skill]').forEach(el=>el.addEventListener('click',()=>{
+    input.value=`/${el.dataset.skill} `;
+    menu.style.display='none';
+    input.focus();
+  }));
+  return true;
+}
 function setupComposer(){
   const input=$('message-input'), menu=$('mention-menu');
   const choices=state.agents;
-  input.addEventListener('input',()=>{
+  input.addEventListener('input',async()=>{
     const value=input.value;
+    if(value.startsWith('/')){
+      if(await renderSkillMenu(input,menu)) return;
+      menu.style.display='none';
+      return;
+    }
     if(!value.includes('@')){menu.style.display='none';return;}
     const partial=value.split('@').pop().toLowerCase();
     const found=choices.filter(a=>(a.agent_id+a.name).toLowerCase().includes(partial)).slice(0,7);
@@ -358,7 +397,9 @@ function setupComposer(){
     }else if(data.status==='agents_started'){
       toast(`已向 ${data.agent_ids.length} 个 Agent 并行派发直接任务`);
     }else if(directAgentId){
-      toast(data.notice || 'Agent 已收到私信');
+      toast(body.startsWith('/')
+        ? `已调用技能 ${body.split(/\s+/)[0]}，${data.notice || 'Agent 正在按技能执行'}`
+        : (data.notice || 'Agent 已收到私信'));
     }else{
       toast('消息已发送到频道');
     }

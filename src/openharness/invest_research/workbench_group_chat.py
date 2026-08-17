@@ -59,6 +59,10 @@ class Speaker:
     role: str
     persona: str
     model: str = DEFAULT_MODEL
+    #: Instructions an operator installed for this Agent. They are part of how
+    #: it works, so they belong in a chat turn exactly as they do in a research
+    #: run — an installed Skill that only applies to research is half installed.
+    skills: str = ""
 
     @classmethod
     def from_agent(cls, agent: dict[str, Any]) -> Speaker:
@@ -69,6 +73,7 @@ class Speaker:
             role=str(agent.get("role") or "Agent"),
             persona=str(agent.get("system_prompt") or agent.get("profile") or "").strip(),
             model=str(agent.get("model") or DEFAULT_MODEL),
+            skills=str(agent.get("skills_prompt") or "").strip(),
         )
 
 
@@ -188,6 +193,7 @@ class GroupDiscussion:
             part for part in [
                 f"你是 {speaker.name}，在一个多 Agent 协作频道里的角色是「{speaker.role}」。",
                 speaker.persona,
+                speaker.skills,
                 f"同一频道里的其他成员：{roster}。" if roster else "",
                 "这是一场群聊讨论，不是独立报告。规则：",
                 "1) 只说你这个角色该说的部分，不要替别人下结论；",

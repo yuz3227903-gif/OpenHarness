@@ -296,6 +296,42 @@ class TestDirectMessagesCarryAttachments:
         assert server._channel_attachments("dm-risk", [elsewhere["file_id"]]) == []
 
 
+class TestSkillsReachTheChatTurn:
+    def test_installed_skills_are_attached_to_the_persona(self, store, monkeypatch, tmp_path):
+        monkeypatch.setattr(server, "STORE", store)
+        monkeypatch.setattr(
+            server, "render_skills_prompt", lambda *a, **k: "", raising=False,
+        )
+        agent = next(item for item in store.list_agents() if item["agent_id"] == "risk")
+        assert "skills_prompt" in server._agent_with_skills(agent)
+
+    def test_an_invoked_skill_leads_the_persona(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        agent = next(item for item in store.list_agents() if item["agent_id"] == "risk")
+        prepared = server._agent_with_skills(agent, invoked="调用了技能 X")
+        # The called Skill comes first: this turn is about that Skill.
+        assert prepared["skills_prompt"].startswith("调用了技能 X")
+
+    def test_the_speaker_carries_the_skill_text_into_the_prompt(self, store):
+        from openharness.invest_research.workbench_chat_model import ChatTurn
+        from openharness.invest_research.workbench_group_chat import GroupDiscussion
+
+        seen = []
+        pool = ArkKeyPool(["a"])
+
+        def record(**kwargs):
+            seen.append(kwargs["messages"][0]["content"])
+            return ChatTurn(text="好", model="m")
+
+        GroupDiscussion(store=store, pool=pool, complete=record, rounds=1).run(
+            channel_id="research-room", topic="话题", topic_message_id="M",
+            participants=[{"agent_id": "risk", "name": "顾谨", "role": "风险",
+                           "system_prompt": "你是风险", "model": "m",
+                           "skills_prompt": "## SKILL: 现金流审查\n四步法"}],
+        )
+        assert "现金流审查" in seen[0]
+
+
 class TestDirectMessagesStayASeparateSession:
     def test_a_direct_reply_reads_only_its_own_channel(self, store, monkeypatch):
         seen = []

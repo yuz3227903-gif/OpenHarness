@@ -33,6 +33,7 @@ from openharness.invest_research.collaboration_store import CollaborationStore
 from openharness.invest_research.evidence_store import EvidenceStore
 from openharness.invest_research.workbench_chat_model import ChatModelError
 from openharness.invest_research.workbench_chat_model import complete as chat_complete
+from openharness.invest_research import workbench_skill_commands as skill_commands
 from openharness.invest_research.workbench_documents import render_attachments
 from openharness.invest_research.workbench_group_chat import (
     DEFAULT_ROUNDS,
@@ -180,6 +181,30 @@ def _direct_reply_text(agent: dict[str, Any], text: str) -> str:
             "如无可用上下文，我会明确说明缺少的公司、时间范围或证据，而不会擅自读取其他频道。"
         )
     return f"已收到你的消息。作为{role}，我会在职责范围内协助；需要研究任务时请说明目标和期望交付。"
+
+
+def _skill_body(record: dict[str, Any]) -> str:
+    """Read one installed Skill's instruction text."""
+
+    from openharness.invest_research.agent_skills import _read_skill_body
+
+    return _read_skill_body(SKILL_ROOT, record)
+
+
+def _agent_with_skills(agent: dict[str, Any], *, invoked: str = "") -> dict[str, Any]:
+    """Attach an Agent's installed Skills to the persona used for a chat turn.
+
+    An installed Skill that only applied to research runs would be half
+    installed; the same instructions belong in conversation. ``invoked`` is the
+    block for a Skill the user called explicitly, which leads the prompt.
+    """
+
+    from openharness.invest_research.agent_skills import render_skills_prompt
+
+    agent_id = str(agent.get("agent_id") or "")
+    installed = render_skills_prompt(PROJECT_ROOT, agent_id)
+    layers = [part for part in (invoked, installed) if part]
+    return {**agent, "skills_prompt": "\n\n".join(layers)}
 
 
 def _start_direct_agent_reply(
@@ -336,7 +361,10 @@ def _discussion_participants(channel_id: str) -> list[dict[str, Any]]:
     )
     member_ids = [str(value) for value in (channel or {}).get("member_ids") or []]
     chosen = [agents[value] for value in member_ids if value in agents]
-    return [_with_chat_model(item) for item in (chosen or list(agents.values()))]
+    return [
+        _agent_with_skills(_with_chat_model(item))
+        for item in (chosen or list(agents.values()))
+    ]
 
 
 def _with_chat_model(agent: dict[str, Any]) -> dict[str, Any]:
@@ -2804,8 +2832,27 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             # The Agent answers for real. Only when there is no credential at
             # all does it fall back to the canned acknowledgement, so the user
             # is never left staring at a message nobody responded to.
+            # A leading "/" calls one of this Agent's Skills by name. An unknown
+            # name is refused rather than guessed at: running the closest Skill
+            # would answer a question the user did not ask.
+            invoked_layer = ""
+            try:
+                invocation = skill_commands.resolve(
+                    text, STORE.list_agent_skills(agent_id), read_body=_skill_body,
+                )
+            except skill_commands.UnknownSkill as exc:
+                self._send(400, {"error": str(exc), "status": "unknown_skill"})
+                return
+            if invocation is not None:
+                invoked_layer = invocation.prompt_layer()
+                STORE.add_event(
+                    channel_id=channel_id, event_type="skill_invoked",
+                    payload={"agent_id": agent_id, "skill_id": invocation.skill_id,
+                             "skill": invocation.name, "slug": invocation.slug},
+                )
             replying = _start_direct_agent_reply(
-                channel_id=channel_id, agent=_with_chat_model(agent),
+                channel_id=channel_id,
+                agent=_agent_with_skills(_with_chat_model(agent), invoked=invoked_layer),
                 root_message_id=message["message_id"],
             )
             quick_reply = None if replying else _post_direct_acknowledgement(
@@ -2814,9 +2861,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 agent=agent,
                 text=text,
             )
-            if replying and not _looks_like_research_request(text):
+            # A called Skill *is* the work for this turn, so it never falls
+            # through to the research-escalation branch — that branch would
+            # report "blocked" while the Skill was already answering.
+            if replying and (invocation is not None or not _looks_like_research_request(text)):
                 self._send(HTTPStatus.ACCEPTED, {
                     "message": message, "channel": channel, "status": "agent_replying",
+                    **({"skill": invocation.name} if invocation is not None else {}),
                 })
                 return
             if agent_id == "planner":
