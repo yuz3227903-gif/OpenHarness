@@ -28,7 +28,11 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from uuid import uuid4
 
-from openharness.invest_research.ark_key_pool import ArkKeyPool, NoArkKeysConfigured
+from openharness.invest_research.ark_key_pool import (
+    ArkCredential,
+    ArkKeyPool,
+    NoArkKeysConfigured,
+)
 from openharness.invest_research.collaboration_store import CollaborationStore
 from openharness.invest_research.evidence_store import EvidenceStore
 from openharness.invest_research.workbench_chat_model import ChatModelError
@@ -191,6 +195,33 @@ def _skill_body(record: dict[str, Any]) -> str:
     return _read_skill_body(SKILL_ROOT, record)
 
 
+def _role_prompt(agent_id: str) -> str:
+    """The role prompt a built-in Agent actually works from.
+
+    The roster only carries a job title for a built-in role; the prompt itself
+    lives in the plugin. Without this a 1:1 conversation would be held with
+    "风险 Agent" as its entire character, which is not the Agent the research
+    flow uses.
+    """
+
+    try:
+        from openharness.invest_research.agent_registry import PLUGIN_NAME, get_agent_entry
+        from openharness.plugins.loader import load_plugin
+
+        entry = get_agent_entry(agent_id)
+        plugin = load_plugin(PROJECT_ROOT / ".openharness" / "plugins" / PLUGIN_NAME,
+                             {PLUGIN_NAME: True})
+        if plugin is None:
+            return ""
+        definition = next(
+            (item for item in plugin.agents if item.name == entry.runtime_agent_name), None
+        )
+        return str(getattr(definition, "system_prompt", "") or "")
+    except Exception:  # noqa: BLE001 - a missing prompt must not break chat
+        log.warning("could not load the role prompt for %s", agent_id, exc_info=True)
+        return ""
+
+
 def _agent_with_skills(agent: dict[str, Any], *, invoked: str = "") -> dict[str, Any]:
     """Attach an Agent's installed Skills to the persona used for a chat turn.
 
@@ -204,7 +235,10 @@ def _agent_with_skills(agent: dict[str, Any], *, invoked: str = "") -> dict[str,
     agent_id = str(agent.get("agent_id") or "")
     installed = render_skills_prompt(PROJECT_ROOT, agent_id)
     layers = [part for part in (invoked, installed) if part]
-    return {**agent, "skills_prompt": "\n\n".join(layers)}
+    prepared = {**agent, "skills_prompt": "\n\n".join(layers)}
+    if not str(prepared.get("system_prompt") or "").strip():
+        prepared["system_prompt"] = _role_prompt(agent_id)
+    return prepared
 
 
 def _start_direct_agent_reply(
@@ -307,19 +341,72 @@ DEFAULT_CHAT_MODEL = "deepseek-v4-flash"
 _ARK_POOL_CACHE: dict[str, ArkKeyPool] = {}
 
 
-def _ark_key_probe(key: str) -> bool:
-    """Does this key actually work? One cheap call answers it."""
+#: The standard Ark endpoint. Keys from an ordinary Ark account work here;
+#: the agent-plan endpoint is a separate entitlement, and a key is rarely
+#: enabled for both.
+ARK_STANDARD_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+
+
+def _ark_key_probe(credential: ArkCredential) -> ArkCredential | None:
+    """Find out whether this key works, and where.
+
+    Three keys from three accounts is the point — one Agent each, running at
+    the same time — but they are not interchangeable: each account is
+    provisioned for its own endpoints and models. So the probe tries the plan
+    endpoint first (what the research flow uses), then the standard endpoint
+    with a model that account actually lists, and reports back the combination
+    it managed to use.
+    """
+
+    def works(base_url: str, model: str) -> bool:
+        try:
+            chat_complete(
+                messages=[{"role": "user", "content": "hi"}], model=model,
+                api_key=credential.key, base_url=base_url, max_tokens=16, timeout=25.0,
+            )
+        except ChatModelError as exc:
+            # Only a rejected credential or a missing model disqualifies a
+            # combination. A rate limit says nothing about entitlement.
+            return exc.kind not in {"provider_auth", "request_error"}
+        return True
+
+    if works(ARK_PLAN_BASE_URL, DEFAULT_CHAT_MODEL):
+        return ArkCredential(key=credential.key)
+    model = _first_available_ark_model(credential.key)
+    if model and works(ARK_STANDARD_BASE_URL, model):
+        return ArkCredential(
+            key=credential.key, base_url=ARK_STANDARD_BASE_URL, model=model,
+        )
+    return None
+
+
+def _first_available_ark_model(key: str) -> str:
+    """Ask the account which chat model it can actually run."""
 
     try:
-        chat_complete(
-            messages=[{"role": "user", "content": "hi"}],
-            model=DEFAULT_CHAT_MODEL, api_key=key, max_tokens=16, timeout=20.0,
+        import httpx
+
+        response = httpx.get(
+            f"{ARK_STANDARD_BASE_URL}/models",
+            headers={"Authorization": f"Bearer {key}"}, timeout=20.0,
         )
-    except ChatModelError as exc:
-        # Only a rejected credential disqualifies a key. A rate limit or an
-        # unreachable provider says nothing about whether the key is valid.
-        return exc.kind != "provider_auth"
-    return True
+        if response.status_code >= 400:
+            return ""
+        listed = response.json().get("data") or []
+    except Exception:  # noqa: BLE001 - an unreachable listing is not a verdict
+        return ""
+    # Newest first, skipping retired models and anything that is not a chat
+    # model: embeddings and video generators cannot hold a conversation.
+    for item in sorted(listed, key=lambda row: row.get("created") or 0, reverse=True):
+        name = str(item.get("id") or "")
+        family = str(item.get("name") or "")
+        if item.get("status") == "Shutdown":
+            continue
+        if any(word in family for word in ("embedding", "seedance", "seedream", "translation")):
+            continue
+        if name:
+            return name
+    return ""
 
 
 def _ark_key_pool() -> ArkKeyPool:
@@ -3349,6 +3436,30 @@ def reconcile_orphaned_tasks() -> list[str]:
     return interrupted
 
 
+def remove_placeholder_root_tasks() -> list[str]:
+    """Delete the "root research task" older channels were created with.
+
+    It was queued against ``unassigned``, and no worker can pick that up, so it
+    sat in 排队中 for the life of the workspace and made every channel look like
+    it had stalled work. Channels created from now on have no such row; this
+    clears the ones already there.
+
+    Deliberately narrow: only a queued, unassigned task that carries the
+    placeholder marker. A real task, even an old one, is left alone.
+    """
+
+    removed: list[str] = []
+    for task in STORE.list_tasks():
+        metadata = task.get("metadata") or {}
+        if not metadata.get("root_research_task"):
+            continue
+        if task.get("status") != "queued" or task.get("assignee_id") != "unassigned":
+            continue
+        STORE.delete_task(str(task["task_id"]))
+        removed.append(str(task["task_id"]))
+    return removed
+
+
 def build_server(port: int = 8787) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(("127.0.0.1", port), WorkbenchHandler)
 
@@ -3363,6 +3474,12 @@ def main() -> int:
         print(
             f"已将 {len(interrupted)} 条上次遗留的运行中任务标记为中断: "
             f"{', '.join(interrupted)}",
+            flush=True,
+        )
+    placeholders = remove_placeholder_root_tasks()
+    if placeholders:
+        print(
+            f"已清理 {len(placeholders)} 条创建频道时留下的空任务（无人认领，永远排队中）。",
             flush=True,
         )
     server = build_server(args.port)

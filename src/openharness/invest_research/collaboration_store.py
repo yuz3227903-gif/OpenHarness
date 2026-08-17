@@ -574,35 +574,30 @@ class CollaborationStore:
     ) -> dict[str, Any]:
         channel_id = f"channel-{uuid4().hex[:10]}"
         timestamp = _now()
-        root_task_id = f"TASK-WB-{uuid4().hex[:10].upper()}"
         unique_members = list(dict.fromkeys(member_ids))
         with self._lock, self._connect() as connection:
             connection.execute(
                 """INSERT INTO workbench_channels(
                     channel_id, workspace_id, name, kind, project_company, topic,
                     description, root_task_id, created_at
-                ) VALUES (?, ?, ?, 'project', ?, ?, ?, ?, ?)""",
-                (channel_id, workspace_id, name, topic, topic, description, root_task_id, timestamp),
+                ) VALUES (?, ?, ?, 'project', ?, ?, ?, NULL, ?)""",
+                (channel_id, workspace_id, name, topic, topic, description, timestamp),
             )
             for agent_id in unique_members:
                 connection.execute(
                     "INSERT INTO workbench_channel_members(channel_id, agent_id, created_at) VALUES (?, ?, ?)",
                     (channel_id, agent_id, timestamp),
                 )
-            connection.execute(
-                """INSERT INTO workbench_tasks(
-                    task_id, channel_id, run_id, created_by, assignee_id, title, status,
-                    metadata_json, created_at, updated_at
-                ) VALUES (?, ?, NULL, 'owner', 'unassigned', ?, 'queued', ?, ?, ?)""",
-                (root_task_id, channel_id, topic,
-                 _json({"root_research_task": True, "description": description}),
-                 timestamp, timestamp),
-            )
+            # A new channel used to open with a "root research task" assigned to
+            # nobody. No worker can pick up 'unassigned', so it sat in 排队中
+            # forever and every new channel looked like it had stalled work.
+            # A task now exists only when work is really handed to an Agent:
+            # @-ing one, a handoff in a discussion, or a research run.
             self._insert_message(
                 connection, channel_id=channel_id, author_id="system", author_type="system",
                 message_kind="system_message",
-                body=f"研究频道已创建：{topic}。请明确启动研究或 @Agent 下发任务。",
-                metadata={"root_task_id": root_task_id},
+                body=f"研究频道已创建：{topic}。直接发消息即可让频道内的 Agent 讨论，或 @某个 Agent 下发任务。",
+                metadata={"channel_created": True},
             )
         return next(item for item in self.list_channels() if item["channel_id"] == channel_id)
 

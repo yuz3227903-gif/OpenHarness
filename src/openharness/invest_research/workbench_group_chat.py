@@ -240,14 +240,19 @@ class GroupDiscussion:
                     self._publish(channel_id, "agent_speaking", {
                         "agent_id": speaker.agent_id, "key": lease.label,
                     })
+                    # Each credential knows where it is entitled to talk. A key
+                    # from an account that only serves one model must use that
+                    # model, whatever the Agent is configured with — otherwise
+                    # the call 404s on a model that account has never had.
                     turn = self._complete(
                         messages=self._messages_for(
                             speaker, topic=topic, transcript=transcript,
                             others=others, addressed_by=addressed_by,
                         ),
-                        model=speaker.model,
+                        model=lease.model or speaker.model,
                         api_key=lease.key,
                         key_label=lease.label,
+                        **({"base_url": lease.base_url} if lease.base_url else {}),
                     )
                 finally:
                     with self._lock:

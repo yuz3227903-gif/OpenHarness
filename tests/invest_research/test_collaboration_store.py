@@ -137,10 +137,11 @@ def test_custom_agent_can_be_created_and_join_research_channel(workspace_tmp: Pa
     )
     assert channel["topic"] == "宁德时代动力电池竞争力"
     assert channel["member_ids"] == ["planner", agent["agent_id"]]
-    root_task = store.get_task(channel["root_task_id"])
-    assert root_task is not None
-    assert root_task["status"] == "queued"
-    assert root_task["metadata"]["root_research_task"] is True
+    # A new channel opens with no task. The old "root research task" was queued
+    # against 'unassigned', which no worker can pick up, so it sat in 排队中
+    # forever and made every new channel look like it had stalled work.
+    assert store.list_tasks(channel["channel_id"]) == []
+    assert channel["root_task_id"] is None
 
 
 def test_custom_agent_can_be_updated_disabled_and_deleted(workspace_tmp: Path) -> None:

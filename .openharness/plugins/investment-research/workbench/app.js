@@ -1476,12 +1476,12 @@ function renderSidebar(){
   const pinnedIds=new Set(cleanPrefs.pinned);
   const visibleProjects=projects.filter(item=>!pinnedIds.has(sidebarItemId(item)));
   const visibleDirects=directs.filter(item=>!pinnedIds.has(sidebarItemId(item)));
-  const actualDirectIds=new Set(directs.map(channel=>channel.channel_id.replace(/^dm-/,'')));
-  const visibleAgents=state.agents.filter(agent=>
-    !actualDirectIds.has(agent.agent_id) && !pinnedIds.has(sidebarItemId(agent))
-  );
-  const directoryRows=visibleDirects.map(dmButtonHtml).join('')+
-    visibleAgents.map(agentRowHtml).join('');
+  // 私信 lists conversations, not the roster. Padding it with every Agent that
+  // had no conversation yet made it read as "the members of this channel",
+  // which a direct message has nothing to do with: a DM is its own session
+  // with one Agent, independent of any channel. New ones start from 成员 or
+  // the + above.
+  const directoryRows=visibleDirects.map(dmButtonHtml).join('');
   const renderItem=id=>{
     const item=itemById.get(id);
     if(!item) return '';
@@ -1494,7 +1494,7 @@ function renderSidebar(){
     sectionHtml('favorites','已收藏',cleanPrefs.favorites.length,favoriteRows || '<p class="sidebar-hint">收藏的频道和私信会显示在这里。</p>')+
     sectionHtml('pinned','已置顶',cleanPrefs.pinned.length,pinnedBody)+
     sectionHtml('channels','频道',visibleProjects.length,visibleProjects.map(channelButtonHtml).join('') || '<p class="sidebar-hint">没有未置顶的频道。</p>',plus('create-channel'))+
-    sectionHtml('dms','私信',visibleDirects.length+visibleAgents.length,directoryRows || '<p class="sidebar-hint">没有未置顶的私信。</p>',plus('create-dm'))+
+    sectionHtml('dms','私信',visibleDirects.length,directoryRows || '<p class="sidebar-hint">还没有私信。点右上角 + 或到「成员」里找一个 Agent 单独聊。</p>',plus('create-dm'))+
     (removed.length ? sectionHtml('removedAgents','已移除',removed.length,removedRows) : '');
   bindSidebar();
 }

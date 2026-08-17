@@ -7,6 +7,7 @@ import threading
 import pytest
 
 from openharness.invest_research.ark_key_pool import (
+    ArkCredential,
     ArkKeyPool,
     ArkKeyUnavailable,
     NoArkKeysConfigured,
@@ -162,7 +163,9 @@ class TestLeasing:
 class TestDroppingDeadKeys:
     def test_a_rejected_key_is_removed_from_the_pool(self):
         pool = ArkKeyPool(["good", "dead", "also-good"])
-        usable, dropped = pool.keep_usable(lambda key: key != "dead")
+        usable, dropped = pool.keep_usable(
+            lambda credential: None if credential.key == "dead" else credential,
+        )
         assert usable.size == 2
         assert dropped == [1]
 
@@ -170,20 +173,59 @@ class TestDroppingDeadKeys:
         # Emptying it would leave nothing to fail against, and the per-turn
         # error is what tells the user their credentials are rejected.
         pool = ArkKeyPool(["dead"])
-        usable, dropped = pool.keep_usable(lambda _key: False)
+        usable, dropped = pool.keep_usable(lambda _credential: None)
         assert (usable.size, dropped) == (1, [0])
 
     def test_an_unreachable_provider_does_not_condemn_a_key(self):
-        def exploding(_key):
+        def exploding(_credential):
             raise OSError("network down")
 
         usable, dropped = ArkKeyPool(["a", "b"]).keep_usable(exploding)
         assert (usable.size, dropped) == (2, [])
 
     def test_the_surviving_keys_are_the_working_ones(self):
-        usable, _ = ArkKeyPool(["dead", "live"]).keep_usable(lambda key: key == "live")
+        usable, _ = ArkKeyPool(["dead", "live"]).keep_usable(
+            lambda credential: credential if credential.key == "live" else None,
+        )
         with usable.lease() as lease:
             assert lease.key == "live"
+
+
+class TestCredentialsCarryWhereTheyWork:
+    """Three keys from three accounts are not interchangeable."""
+
+    def test_a_lease_carries_the_endpoint_and_model_the_probe_found(self):
+        pool = ArkKeyPool([ArkCredential(key="k", base_url="https://other/api/v3",
+                                         model="doubao-seed-2-0-lite")])
+        with pool.lease() as lease:
+            assert lease.base_url == "https://other/api/v3"
+            assert lease.model == "doubao-seed-2-0-lite"
+
+    def test_a_plain_key_carries_no_override(self):
+        with ArkKeyPool(["k"]).lease() as lease:
+            # Nothing to override: the Agent's own model and the default
+            # endpoint are used.
+            assert (lease.base_url, lease.model) == ("", "")
+
+    def test_the_probe_can_rewrite_a_credential(self):
+        def probe(credential):
+            return ArkCredential(key=credential.key, base_url="https://found",
+                                 model="found-model")
+
+        usable, _ = ArkKeyPool(["k"]).keep_usable(probe)
+        with usable.lease() as lease:
+            assert (lease.base_url, lease.model) == ("https://found", "found-model")
+
+    def test_keys_from_different_accounts_keep_their_own_endpoints(self):
+        pool = ArkKeyPool([
+            ArkCredential(key="plan-key"),
+            ArkCredential(key="standard-key", base_url="https://std", model="m"),
+        ])
+        seen = []
+        for _ in range(2):
+            with pool.lease() as lease:
+                seen.append((lease.key, lease.base_url))
+        assert seen == [("plan-key", ""), ("standard-key", "https://std")]
 
 
 class TestSecrecy:

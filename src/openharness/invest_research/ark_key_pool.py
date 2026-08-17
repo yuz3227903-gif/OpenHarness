@@ -37,8 +37,27 @@ class ArkKeyUnavailable(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ArkCredential:
+    """One key and where it actually works.
+
+    Keys come from different Ark accounts, and an account is provisioned for
+    particular endpoints and models. Carrying that with the key is what lets
+    three unrelated accounts serve one discussion: each speaker talks to
+    whichever endpoint its own credential is entitled to.
+
+    ``model`` is set only when the account is restricted to one — then it must
+    win over the Agent's configured model, because that model does not exist
+    on this account. Left empty, the Agent's own choice is used.
+    """
+
+    key: str
+    base_url: str = ""
+    model: str = ""
+
+
+@dataclass(frozen=True)
 class ArkKeyLease:
-    """One key, held for one turn.
+    """One credential, held for one turn.
 
     ``index`` is stable and safe to show: it says which of the configured keys
     spoke without revealing any of it.
@@ -46,6 +65,8 @@ class ArkKeyLease:
 
     index: int
     key: str
+    base_url: str = ""
+    model: str = ""
 
     @property
     def label(self) -> str:
@@ -77,13 +98,18 @@ def parse_keys(raw: str) -> list[str]:
 class ArkKeyPool:
     """Hands out one key per concurrent speaker."""
 
-    def __init__(self, keys: list[str]) -> None:
-        cleaned = [key.strip() for key in keys if key and key.strip()]
+    def __init__(self, keys: list[str | ArkCredential]) -> None:
+        cleaned = [
+            item if isinstance(item, ArkCredential) else ArkCredential(key=str(item).strip())
+            for item in keys
+            if item and (item.key.strip() if isinstance(item, ArkCredential) else str(item).strip())
+        ]
         if not cleaned:
             raise NoArkKeysConfigured(
                 "没有配置任何 Ark API Key；请设置 ARK_API_KEYS（逗号分隔）或 ARK_API_KEY。"
             )
-        self._keys = cleaned
+        self._credentials = cleaned
+        self._keys = [item.key for item in cleaned]
         self._available = list(range(len(cleaned)))
         self._condition = threading.Condition()
         self._in_use: set[int] = set()
@@ -106,26 +132,31 @@ class ArkKeyPool:
         with self._condition:
             return len(self._in_use)
 
-    def keep_usable(self, probe: Callable[[str], bool]) -> tuple[ArkKeyPool, list[int]]:
-        """Return a pool of the keys that actually work, and which were dropped.
+    def keep_usable(
+        self, probe: Callable[[ArkCredential], ArkCredential | None],
+    ) -> tuple[ArkKeyPool, list[int]]:
+        """Return a pool of the credentials that actually work.
 
-        A key that is configured but rejected by the provider would otherwise
-        fail every turn it is handed, so a pool of three with one live key would
-        look like an Agent problem rather than a credential problem. Checking
-        once up front turns that into a fact reported at startup.
+        ``probe`` answers two questions at once: does this key work, and where.
+        Keys from different accounts are entitled to different endpoints and
+        models, so a probe returns the credential it managed to use — that is
+        what the pool then hands out.
+
+        A key that is configured but rejected would otherwise fail every turn it
+        was given, making a credential problem look like an Agent problem.
         """
 
-        usable: list[str] = []
+        usable: list[ArkCredential] = []
         dropped: list[int] = []
-        for index, key in enumerate(self._keys):
+        for index, credential in enumerate(self._credentials):
             try:
-                alive = bool(probe(key))
+                resolved = probe(credential)
             except Exception:  # noqa: BLE001 - an unreachable provider is not a verdict
-                alive = True
-            if alive:
-                usable.append(key)
-            else:
+                resolved = credential
+            if resolved is None:
                 dropped.append(index)
+            else:
+                usable.append(resolved)
         if not usable:
             # Every key failed. Keep the pool as configured rather than leaving
             # the workspace with none: the per-turn error then says why.
@@ -135,8 +166,12 @@ class ArkKeyPool:
     @contextmanager
     def lease(self, *, timeout: float = LEASE_TIMEOUT_SECONDS) -> Iterator[ArkKeyLease]:
         index = self._acquire(timeout)
+        credential = self._credentials[index]
         try:
-            yield ArkKeyLease(index=index, key=self._keys[index])
+            yield ArkKeyLease(
+                index=index, key=credential.key,
+                base_url=credential.base_url, model=credential.model,
+            )
         finally:
             self._release(index)
 
@@ -163,6 +198,7 @@ class ArkKeyPool:
 __all__ = [
     "ARK_KEYS_ENV",
     "ARK_KEY_ENV",
+    "ArkCredential",
     "ArkKeyLease",
     "ArkKeyPool",
     "ArkKeyUnavailable",

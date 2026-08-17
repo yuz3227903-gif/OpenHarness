@@ -296,6 +296,48 @@ class TestDirectMessagesCarryAttachments:
         assert server._channel_attachments("dm-risk", [elsewhere["file_id"]]) == []
 
 
+class TestANewChannelHasNoPhantomTask:
+    def test_creating_a_channel_creates_no_task(self, store):
+        channel = store.create_channel(
+            name="新频道", topic="研究一下", description="", member_ids=["risk"],
+        )
+        assert store.list_tasks(channel["channel_id"]) == []
+
+    def test_the_welcome_message_still_explains_what_to_do(self, store):
+        channel = store.create_channel(
+            name="新频道", topic="研究一下", description="", member_ids=["risk"],
+        )
+        body = store.list_messages(channel["channel_id"])[0]["body"]
+        assert "直接发消息" in body and "@" in body
+
+    def test_an_existing_placeholder_is_cleaned_up(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        stale = store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="unassigned",
+            title="旧的根任务", status="queued",
+            metadata={"root_research_task": True},
+        )
+        assert server.remove_placeholder_root_tasks() == [stale["task_id"]]
+        assert store.get_task(stale["task_id"]) is None
+
+    def test_a_real_task_is_never_removed_by_the_cleanup(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        real = store.create_task(
+            channel_id="research-room", created_by="planner", assignee_id="risk",
+            title="真正的任务", status="queued",
+        )
+        # Also a placeholder that has since been assigned: somebody took it, so
+        # it is real work now.
+        adopted = store.create_task(
+            channel_id="research-room", created_by="owner", assignee_id="risk",
+            title="被认领的根任务", status="queued",
+            metadata={"root_research_task": True},
+        )
+        assert server.remove_placeholder_root_tasks() == []
+        assert store.get_task(real["task_id"]) is not None
+        assert store.get_task(adopted["task_id"]) is not None
+
+
 class TestSkillsReachTheChatTurn:
     def test_installed_skills_are_attached_to_the_persona(self, store, monkeypatch, tmp_path):
         monkeypatch.setattr(server, "STORE", store)
@@ -304,6 +346,26 @@ class TestSkillsReachTheChatTurn:
         )
         agent = next(item for item in store.list_agents() if item["agent_id"] == "risk")
         assert "skills_prompt" in server._agent_with_skills(agent)
+
+    def test_a_builtin_agent_speaks_from_its_real_role_prompt(self, store, monkeypatch):
+        """The roster only carries a job title; the prompt lives in the plugin."""
+
+        monkeypatch.setattr(server, "STORE", store)
+        agent = next(item for item in store.list_agents() if item["agent_id"] == "risk")
+        assert not str(agent.get("system_prompt") or "").strip()
+        prepared = server._agent_with_skills(agent)
+        # Holding a 1:1 conversation with "风险 Agent" as the entire character
+        # is not the Agent the research flow uses.
+        assert len(prepared["system_prompt"]) > 200
+
+    def test_a_custom_prompt_is_never_overwritten(self, store, monkeypatch):
+        monkeypatch.setattr(server, "STORE", store)
+        custom = store.create_agent(
+            name="校验员", profile="p", role="r",
+            system_prompt="只做数据校验。", model="deepseek-v4-flash",
+        )
+        prepared = server._agent_with_skills(custom)
+        assert prepared["system_prompt"] == "只做数据校验。"
 
     def test_an_invoked_skill_leads_the_persona(self, store, monkeypatch):
         monkeypatch.setattr(server, "STORE", store)

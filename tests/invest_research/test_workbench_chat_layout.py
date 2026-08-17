@@ -124,9 +124,12 @@ def test_pinned_sidebar_items_are_removed_from_original_groups():
     assert "const pinnedIds=new Set(cleanPrefs.pinned)" in javascript
     assert "const visibleProjects=projects.filter(item=>!pinnedIds.has(sidebarItemId(item))" in javascript
     assert "const visibleDirects=directs.filter(item=>!pinnedIds.has(sidebarItemId(item))" in javascript
-    assert "!actualDirectIds.has(agent.agent_id) && !pinnedIds.has(sidebarItemId(agent))" in javascript
     assert "sectionHtml('channels','频道',visibleProjects.length" in javascript
-    assert "sectionHtml('dms','私信',visibleDirects.length+visibleAgents.length" in javascript
+    # 私信 counts conversations, not the roster. Padding it with every Agent
+    # that had no conversation yet made it read as "the members of this
+    # channel", which a direct message has nothing to do with.
+    assert "sectionHtml('dms','私信',visibleDirects.length," in javascript
+    assert "visibleAgents" not in javascript
 
 
 def test_task_channel_filter_uses_real_channel_labels():
