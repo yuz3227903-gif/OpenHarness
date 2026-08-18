@@ -1645,6 +1645,63 @@ function showUtilityDrawer(kind){
   document.querySelectorAll('[data-help]').forEach(item=>item.addEventListener('click',()=>showSimpleOverlay('帮助',item.dataset.help==='mentions'?'在频道输入 @Agent 名称即可派发任务；一次可 @多个 Agent。':item.dataset.help==='tasks'?'频道任务会显示在“任务”标签中，并保留负责人和状态。':'研究完成后可在“文件”或“查看报告”中打开 Markdown 报告。')));
   document.querySelectorAll('[data-setting]').forEach(item=>item.addEventListener('click',()=>showSimpleOverlay('设置',item.dataset.setting==='models'?'模型和 API Key 只保存在本机后端，不在页面中显示明文。':'该设置入口暂未接入持久化配置。')));
 }
+// 主题只换色号，形态由 tech.css 统一提供，所以这里不需要知道任何一套主题
+// 长什么样——只要把 data-theme 挂到根元素上。色卡直接用该主题的三个主色画，
+// 不用读名字就知道点开会变成什么。
+const THEME_KEY='workbench.theme';
+const THEMES=[
+  {id:'crimson',   name:'投研红',   swatch:['#FFFFFF','#C8102E','#F6C5CF']},
+  {id:'deepspace', name:'深空蓝',   swatch:['#070E16','#38BDF8','#0A1622']},
+  {id:'amber',     name:'琥珀终端', swatch:['#100B04','#F59E0B','#1A1206']},
+  {id:'graphite',  name:'石墨绿',   swatch:['#FBFDFC','#0D9488','#CFE6E2']},
+];
+function currentTheme(){
+  return document.documentElement.dataset.theme || 'crimson';
+}
+function applyTheme(id){
+  const theme=THEMES.some(item=>item.id===id) ? id : 'crimson';
+  document.documentElement.dataset.theme=theme;
+  try{ localStorage.setItem(THEME_KEY,theme); }catch(_error){ /* 私密模式：只在本次会话生效 */ }
+  renderThemeMenu();
+  // 关系图是画上去的，不吃 CSS 变量，换主题后要重画一次
+  if(state.workspaceView==='graph' && typeof renderGraphBoard==='function') renderGraphBoard();
+}
+function renderThemeMenu(){
+  const menu=$('theme-menu');
+  if(!menu) return;
+  const active=currentTheme();
+  menu.innerHTML='<p class="theme-menu-title">主题</p>'+THEMES.map(theme=>
+    `<button type="button" role="menuitem" class="theme-option${theme.id===active?' active':''}" data-theme-id="${esc(theme.id)}">
+       <span class="theme-swatch">${theme.swatch.map(color=>`<i style="background:${esc(color)}"></i>`).join('')}</span>
+       <span class="theme-name">${esc(theme.name)}</span>
+     </button>`).join('');
+  menu.querySelectorAll('[data-theme-id]').forEach(button=>button.addEventListener('click',()=>{
+    applyTheme(button.dataset.themeId);
+    $('theme-switch')?.classList.remove('is-open');
+    toast(`已切换到「${THEMES.find(item=>item.id===button.dataset.themeId)?.name}」`);
+  }));
+}
+function setupThemeSwitch(){
+  const wrap=$('theme-switch'), toggle=$('theme-toggle');
+  if(!wrap || !toggle) return;
+  renderThemeMenu();
+  toggle.addEventListener('click',event=>{
+    event.stopPropagation();
+    const open=wrap.classList.toggle('is-open');
+    toggle.setAttribute('aria-expanded',String(open));
+  });
+  // 点别处就收起来，否则这个浮层会一直挡着左栏
+  document.addEventListener('click',event=>{
+    if(!wrap.contains(event.target)){
+      wrap.classList.remove('is-open');
+      toggle.setAttribute('aria-expanded','false');
+    }
+  });
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape') wrap.classList.remove('is-open');
+  });
+}
+
 function setupChatChrome(){
   $('close-context')?.addEventListener('click',closeContextDrawer);
   $('drawer-scrim')?.addEventListener('click',closeContextDrawer);
@@ -1970,7 +2027,7 @@ function setupCreationDialogs(){
 document.addEventListener('DOMContentLoaded',setupCreationDialogs);
 // Load the graph once at startup so its tab count is real before the pane is
 // ever opened, matching how the task and file counts behave.
-document.addEventListener('DOMContentLoaded',()=>{ setupNavigation(); setupAttachments(); setupSearch(); setupChatChrome(); loadGraph(); });
+document.addEventListener('DOMContentLoaded',()=>{ setupNavigation(); setupAttachments(); setupSearch(); setupChatChrome(); setupThemeSwitch(); loadGraph(); });
 
 // Attachments belong to the message they were sent with, so they render in the
 // timeline instead of only appearing in the files tab.

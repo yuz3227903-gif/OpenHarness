@@ -1,0 +1,200 @@
+/* 主题 —— 四套配色，一套形态
+ *
+ * 形状、光效、字体全部在 tech.css 里，用的是这里定义的变量。所以换主题
+ * 只换色号，不复制一遍样式；加第五个主题也只需要再写一个 [data-theme] 块。
+ *
+ * 每套主题必须给齐这几个量，缺一个就会露出上一套的颜色：
+ *
+ *   --accent-rgb / --accent-deep-rgb   主色（辉光、发丝线、点阵都由它派生）
+ *   --sheen-rgb                        高光色：亮底用白，暗底用主色的亮相
+ *   --soft-rgb                         磨砂条的底色
+ *   --surface / --panel                页面底 / 组件面
+ *   --text / --muted                   正文 / 次要文字
+ *   --divider / --border               分隔线 / 硬描边
+ *   --brand / --brand-dark / --brand-hover
+ *   --brand-soft / --brand-softer      主色的两级淡底
+ *   --rail-bg                          左栏底色
+ */
+
+/* ============================================================ 1 · 投研红
+ * 默认主题，也就是一直在用的这套，一个色号都没动。 */
+:root,
+[data-theme="crimson"]{
+  --accent-rgb:200,16,46;
+  --accent-deep-rgb:118,9,31;
+  --sheen-rgb:255,255,255;
+  --soft-rgb:253,232,237;
+  --brand:#C8102E;
+  --brand-dark:#76091F;
+  --brand-hover:#A30C25;
+  --rail-bg:#F6C5CF;
+  --brand-soft:#FDE8ED;
+  --brand-softer:#FFF7F9;
+  --surface:#FFFFFF;
+  --surface-muted:#FBF8F9;
+  --panel:#FFFFFF;
+  --text:#171313;
+  --muted:#746B6D;
+  --border:#111111;
+  --divider:#DDD5D7;
+  --danger:#A30C25;
+  --success:#477A67;
+  --warning:#9A6810;
+}
+
+/* ============================================================ 2 · 深空蓝
+ * 暗色终端：近黑的面 + 电光蓝。做"科技感"时大家最先想到的那一种，
+ * 也是唯一能让辉光真正发亮的底色——亮底上的光是装饰，暗底上的光是光源。 */
+[data-theme="deepspace"]{
+  --accent-rgb:56,189,248;
+  --accent-deep-rgb:8,47,73;
+  --sheen-rgb:125,211,252;
+  --soft-rgb:12,26,38;
+  --brand:#38BDF8;
+  --brand-dark:#0EA5E9;
+  --brand-hover:#7DD3FC;
+  --rail-bg:#0A1622;
+  --brand-soft:#12283A;
+  --brand-softer:#0C1A26;
+  --surface:#070E16;
+  --surface-muted:#0B1622;
+  --panel:#0D1926;
+  --text:#DCEAF5;
+  --muted:#7E97AC;
+  --border:#1E3A50;
+  --divider:#1B3040;
+  --danger:#F87171;
+  --success:#34D399;
+  --warning:#FBBF24;
+}
+
+/* ============================================================ 3 · 琥珀终端
+ * 暖调暗色：黑底 + 琥珀磷光，老式 CRT 终端的读法。和深空蓝同为暗色，
+ * 但冷暖相反，长时间盯屏的观感完全不同。 */
+[data-theme="amber"]{
+  --accent-rgb:245,158,11;
+  --accent-deep-rgb:69,39,3;
+  --sheen-rgb:253,224,71;
+  --soft-rgb:31,22,8;
+  --brand:#F59E0B;
+  --brand-dark:#B45309;
+  --brand-hover:#FBBF24;
+  --rail-bg:#1A1206;
+  --brand-soft:#2A1D08;
+  --brand-softer:#1C1407;
+  --surface:#100B04;
+  --surface-muted:#171008;
+  --panel:#181106;
+  --text:#F3E7CE;
+  --muted:#A38C63;
+  --border:#3D2C10;
+  --divider:#33260F;
+  --danger:#F87171;
+  --success:#84CC16;
+  --warning:#FDE047;
+}
+
+/* ============================================================ 4 · 石墨绿
+ * 亮色但冷：近白的纸面 + 深墨绿，示波器和实验仪器的配色。
+ * 亮色主题不是只有红这一种选择，这套用来对照。 */
+[data-theme="graphite"]{
+  --accent-rgb:13,148,136;
+  --accent-deep-rgb:6,60,55;
+  --sheen-rgb:255,255,255;
+  --soft-rgb:224,242,240;
+  --brand:#0D9488;
+  --brand-dark:#0F766E;
+  --brand-hover:#14B8A6;
+  --rail-bg:#CFE6E2;
+  --brand-soft:#E0F2F0;
+  --brand-softer:#F3FAF9;
+  --surface:#FBFDFC;
+  --surface-muted:#F1F6F5;
+  --panel:#FFFFFF;
+  --text:#10201E;
+  --muted:#5F7370;
+  --border:#0E1B1A;
+  --divider:#CFDDDA;
+  --danger:#B91C1C;
+  --success:#0D9488;
+  --warning:#A16207;
+}
+
+/* ---------------------------------------------------------------- 暗色修正
+ * 亮色主题里"更白"是更高一层，暗色主题里它反而是更亮的一层，语义相同但
+ * 取值相反。这几处原本写死了亮底假设，在暗色下需要翻过来。 */
+[data-theme="deepspace"],[data-theme="amber"]{
+  color-scheme:dark;
+}
+[data-theme="deepspace"] .activity-output,
+[data-theme="amber"] .activity-output{
+  background:rgba(0,0,0,.45);color:var(--text);
+}
+/* 头像与徽标上的白色高光在暗底上要收掉，否则像贴了一层雾 */
+[data-theme="deepspace"] .message-avatar:not(:has(img)),[data-theme="amber"] .message-avatar:not(:has(img)),
+[data-theme="deepspace"] .agent-avatar:not(:has(img)),[data-theme="amber"] .agent-avatar:not(:has(img)),
+[data-theme="deepspace"] .dm-avatar:not(:has(img)),[data-theme="amber"] .dm-avatar:not(:has(img)){
+  box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.35),0 0 12px -3px rgba(var(--accent-rgb),.8);
+}
+/* 表单控件在暗底上默认还是白的，交给浏览器统一处理 */
+[data-theme="deepspace"] input,[data-theme="deepspace"] textarea,[data-theme="deepspace"] select,
+[data-theme="amber"] input,[data-theme="amber"] textarea,[data-theme="amber"] select{
+  background:var(--surface-muted);color:var(--text);border-color:var(--divider);
+}
+/* 附件缩略图和报告预览这类"纸"，在暗色下不该继续是纸 */
+[data-theme="deepspace"] .report-preview,[data-theme="amber"] .report-preview,
+[data-theme="deepspace"] .attachment-file,[data-theme="amber"] .attachment-file{
+  background:var(--surface-muted);color:var(--text);
+}
+
+/* ------------------------------------------------------------ 头像配色
+ * 每个 Agent 的头像底色写在 app.js 里，是它的身份色（用来一眼区分谁在说话），
+ * 不是主题色。但那组颜色全是红系的，套到别的主题上就成了上一套主题的残留。
+ * 这里整体旋转色相：身份之间的差异保留，整体色系跟着主题走。 */
+[data-theme="deepspace"] .agent-avatar:not(:has(img)),[data-theme="deepspace"] .dm-avatar:not(:has(img)),
+[data-theme="deepspace"] .message-avatar:not(:has(img)),[data-theme="deepspace"] .comment-avatar:not(:has(img)),
+[data-theme="deepspace"] .member-card-avatar:not(:has(img)),[data-theme="deepspace"] .activity-icon{
+  filter:hue-rotate(186deg) saturate(.85);
+}
+[data-theme="amber"] .agent-avatar:not(:has(img)),[data-theme="amber"] .dm-avatar:not(:has(img)),
+[data-theme="amber"] .message-avatar:not(:has(img)),[data-theme="amber"] .comment-avatar:not(:has(img)),
+[data-theme="amber"] .member-card-avatar:not(:has(img)),[data-theme="amber"] .activity-icon{
+  filter:hue-rotate(34deg) saturate(1.1);
+}
+[data-theme="graphite"] .agent-avatar:not(:has(img)),[data-theme="graphite"] .dm-avatar:not(:has(img)),
+[data-theme="graphite"] .message-avatar:not(:has(img)),[data-theme="graphite"] .comment-avatar:not(:has(img)),
+[data-theme="graphite"] .member-card-avatar:not(:has(img)),[data-theme="graphite"] .activity-icon{
+  filter:hue-rotate(152deg) saturate(.8);
+}
+/* 只对没有上传照片的那些生效：filter 会作用到整个子树，父元素旋了色相，
+   子元素再写 filter:none 也救不回来，所以照片头像从一开始就不参与。 */
+/* ------------------------------------------------------------ 主题切换器
+ * 放在左栏底部，和通知/帮助/设置同一组。收起时是一个图标，展开是四个色块，
+ * 每个色块直接用该主题的三个主色画出来——不用读名字就知道点开会变成什么。 */
+.theme-switch{position:relative}
+.theme-menu{
+  position:absolute;left:calc(100% + 10px);bottom:0;z-index:300;
+  display:none;grid-gap:6px;padding:10px;min-width:186px;
+  border:1px solid var(--brand);background:var(--panel);
+  box-shadow:var(--glow);
+}
+.theme-switch.is-open .theme-menu{display:grid}
+.theme-menu-title{
+  margin-bottom:2px;color:var(--muted);font-size:10px;letter-spacing:.12em;
+  font-family:var(--font-data);text-transform:uppercase;
+}
+.theme-option{
+  display:flex;align-items:center;gap:9px;width:100%;padding:7px 8px;
+  border:1px solid transparent;background:transparent;color:var(--text);
+  font-size:12px;text-align:left;cursor:pointer;
+}
+.theme-option:hover{border-color:var(--hair-strong);background:var(--brand-softer)}
+.theme-option.active{border-color:var(--brand);box-shadow:var(--glow-soft)}
+.theme-option.active .theme-name::after{content:" ·";color:var(--brand)}
+/* 色卡：三条竖带 = 底色 / 主色 / 左栏色，一眼看出这套主题长什么样 */
+.theme-swatch{
+  display:flex;width:34px;height:18px;flex:0 0 auto;border:1px solid var(--divider);
+  overflow:hidden;
+}
+.theme-swatch i{flex:1;display:block}
+.theme-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

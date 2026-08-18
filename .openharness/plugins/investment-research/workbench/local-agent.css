@@ -16,7 +16,7 @@
 .roster-filter{display:flex;flex-wrap:wrap;gap:6px;padding:0 22px 12px}
 .filter-chip{border:2px solid var(--divider);background:var(--surface);color:var(--muted);padding:4px 12px;font-size:12px}
 .filter-chip:hover{border-color:var(--border);box-shadow:2px 2px 0 var(--border)}
-.filter-chip.active{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:700}
+.filter-chip.active{background:var(--brand);border-color:var(--brand);color:var(--panel);font-weight:700}
 
 /* --------------------------------------------------- choosing a kind */
 .kind-choices{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:16px}
@@ -78,7 +78,7 @@
 .activity-error{border-left-color:var(--danger);background:var(--brand-soft);color:var(--danger)}
 /* A file outside the workspace is the one case worth interrupting for. */
 .activity-outside{border:2px solid var(--warning);border-left-width:3px;background:#FFFBF2;color:var(--warning)}
-.outside-flag{background:var(--warning);color:#fff;padding:1px 6px;font-size:10px;font-weight:700}
+.outside-flag{background:var(--warning);color:var(--panel);padding:1px 6px;font-size:10px;font-weight:700}
 .activity-output{margin:0;border-left:3px solid var(--border);background:#1F1A1B;color:#EDE4E6;padding:9px 11px;font:11px/1.55 Consolas,monospace;white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto}
 
 /* ------------------------------------------------------------ approval */
