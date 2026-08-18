@@ -68,7 +68,13 @@ function renderMessages(){
     // to the Agent on screen — switching Agents starts a fresh one.
     const existing=document.getElementById('local-stream');
     if(!existing || existing.dataset.localAgent!==localAgent.agent_id){
-      list.innerHTML=`<div class="local-intro"><div class="local-intro-copy">${icon('monitor')} 与本机 <strong>${esc(localAgent.name)}</strong>（${esc(localAgent.provider)}）对话<small>工作目录：${esc(localAgent.workspace||'')}</small></div><button type="button" class="secondary" id="local-cancel">中止当前任务</button></div><div id="local-stream" class="local-stream" data-local-agent="${esc(localAgent.agent_id)}"></div>`;
+      // 演示 Agent 的对话是脚本跑出来的，页面上必须一直说明这件事，
+      // 否则截图发出去就分不清哪次是真的连上了 Codex。
+      const isDemo=String(localAgent.bridge_id||'').startsWith('demo://');
+      const demoStrip=isDemo
+        ? `<div class="demo-banner">${icon('sparkle')} 演示模式：以下对话由脚本生成，不是真实的 ${esc(localAgent.provider)} 运行结果。</div>`
+        : '';
+      list.innerHTML=`${demoStrip}<div class="local-intro"><div class="local-intro-copy">${icon('monitor')} 与本机 <strong>${esc(localAgent.name)}</strong>（${esc(localAgent.provider)}${isDemo?' · 演示':''}）对话<small>工作目录：${esc(localAgent.workspace||'')}</small></div><button type="button" class="secondary" id="local-cancel">中止当前任务</button></div><div id="local-stream" class="local-stream" data-local-agent="${esc(localAgent.agent_id)}"></div>`;
       $('local-cancel')?.addEventListener('click',()=>cancelLocalTurn());
     }
     return;
@@ -608,6 +614,8 @@ const taskStatusLabels = {
   // never has. They are named rather than collapsed into "offline".
   offline:'本机离线', bridge_offline:'Bridge 未运行', agent_not_found:'未找到该 Agent',
   connecting:'连接中', busy:'忙碌中', error:'连接异常', unknown:'尚未连接',
+  // 本地 Agent 一轮结束时报的是 idle；不翻译的话界面上会直接冒出英文。
+  idle:'空闲', denied:'已拒绝',
 };
 function taskStatusText(status){ return taskStatusLabels[status] || status || '在线'; }
 function formatElapsed(seconds){

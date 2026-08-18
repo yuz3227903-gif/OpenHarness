@@ -243,7 +243,10 @@ async function submitLocalAgent(event) {
     profile: form.get('profile'),
     workspace: form.get('workspace'),
     permission_mode: form.get('permission_mode'),
-    bridge_id: localState.bridgeUrl,
+    // 演示模式创建出来的 Agent 在数据上就带着标记，任何时候都能和真的本地
+    // Agent 区分开——包括它自己的资料页和聊天页上的提示。
+    bridge_id: (typeof demoEnabled === 'function' && demoEnabled())
+      ? 'demo://local-bridge' : localState.bridgeUrl,
     avatar_data_url: avatar,
   };
   const response = await fetch('/api/agents', {
@@ -372,7 +375,7 @@ function fileActivity(data, symbol, verb) {
 }
 
 const ACTIVITY_RENDERERS = {
-  'command.start': d => `<div class="activity activity-command"><code>$ ${esc(d.command)}</code><small>${esc(d.cwd || '')}</small></div>`,
+  'command.start': d => `<div class="activity activity-command"><code>$ ${esc(d.command)}</code>${d.cwd ? `<small>于 ${esc(d.cwd)}</small>` : ''}</div>`,
   'command.output': d => `<pre class="activity-output">${esc(d.line)}</pre>`,
   'command.end': d => `<div class="activity activity-end">退出码 ${esc(d.exit_code)}</div>`,
   'tool.start': d => `<div class="activity activity-tool">${icon('sparkle')} 调用 ${esc(d.name || '工具')}</div>`,

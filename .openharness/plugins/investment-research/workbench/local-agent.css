@@ -5,6 +5,20 @@
 /* A stopped task explains itself on the card. */
 .board-reason{display:block;margin-top:4px;padding:5px 7px;border-left:3px solid var(--warning);background:#FFFBF2;color:var(--warning);font-size:11px;line-height:1.5}
 
+/* -------------------------------------------------------------- 演示模式
+   演示出来的东西必须自己说明它是演示，所以这些标记做得显眼，而且不随主题
+   淡化——分不清真假的代价比界面上多一条黄条要大得多。 */
+.demo-toggle{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;
+  border:1px dashed var(--warning);background:#FFFBF2;color:var(--warning);font-size:12px}
+.demo-toggle input{margin-top:3px;flex:0 0 auto}
+.demo-toggle strong{display:block;color:var(--warning)}
+.demo-toggle small{display:block;margin-top:2px;color:var(--muted);line-height:1.5}
+.demo-note{margin:0 0 8px;padding:6px 9px;border-left:3px solid var(--warning);
+  background:#FFFBF2;color:var(--warning);font-size:11px}
+.demo-banner{display:flex;align-items:center;gap:7px;margin-bottom:10px;padding:9px 12px;
+  border:1px solid var(--warning);background:#FFFBF2;color:var(--warning);
+  font-size:12px;font-weight:700}
+
 /* ----------------------------------------------------------------- files */
 .file-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap}
 .file-delete{display:inline-grid;place-items:center;border:2px solid var(--divider);background:var(--surface);color:var(--muted);width:30px;height:28px;padding:0}
