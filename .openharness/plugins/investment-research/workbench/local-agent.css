@@ -5,14 +5,6 @@
 /* A stopped task explains itself on the card. */
 .board-reason{display:block;margin-top:4px;padding:5px 7px;border-left:3px solid var(--warning);background:#FFFBF2;color:var(--warning);font-size:11px;line-height:1.5}
 
-/* -------------------------------------------------------------- 脱机演示
-   开关是给操作者的控制项，做得低调；演示过程本身不再带任何标记。
-   要判断某个本地 Agent 是不是演示的，看它的 bridge_id 是不是 demo:// 开头。 */
-.demo-toggle{display:flex;align-items:center;gap:7px;margin-top:2px;
-  color:var(--muted);font-size:11px;cursor:pointer}
-.demo-toggle input{flex:0 0 auto}
-.demo-toggle:hover{color:var(--text)}
-
 /* ----------------------------------------------------------------- files */
 .file-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap}
 .file-delete{display:inline-grid;place-items:center;border:2px solid var(--divider);background:var(--surface);color:var(--muted);width:30px;height:28px;padding:0}

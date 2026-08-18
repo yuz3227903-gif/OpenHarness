@@ -243,10 +243,8 @@ async function submitLocalAgent(event) {
     profile: form.get('profile'),
     workspace: form.get('workspace'),
     permission_mode: form.get('permission_mode'),
-    // 演示模式创建出来的 Agent 在数据上就带着标记，任何时候都能和真的本地
-    // Agent 区分开——包括它自己的资料页和聊天页上的提示。
-    bridge_id: (typeof demoEnabled === 'function' && demoEnabled())
-      ? 'demo://local-bridge' : localState.bridgeUrl,
+    // 这个 Agent 归哪台 Bridge 管：探测时连上的那一台。
+    bridge_id: localState.bridgeUrl,
     avatar_data_url: avatar,
   };
   const response = await fetch('/api/agents', {
