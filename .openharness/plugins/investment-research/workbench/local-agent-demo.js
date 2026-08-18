@@ -27,13 +27,35 @@ function wait(ms) {
 
 // --------------------------------------------------------------- 步骤 1 · 桥接
 
-async function demoProbeBridge() {
+async function demoProbeBridge(reason = '') {
   showBridgeState({ text: '正在查找本机 Bridge…', tone: 'idle', retry: false });
-  await wait(600);
+  await wait(500);
+  const head = reason ? `【演示】${reason}` : '【演示】';
   showBridgeState({
-    text: `【演示】已连接本机 Bridge（v1），且已完成配对。真实模式下这里需要输入 Bridge 终端里打印的 6 位配对码。`,
+    text: `${head}已连接本机 Bridge（v1），且已完成配对。取消勾选「演示模式」可回到真实配对流程。`,
     tone: 'ok', next: true,
   });
+}
+
+// 真实流程走不下去时自动切演示——这台机器上没装 Codex，让用户先看见一个
+// 卡住的配对界面、再自己去找开关，是把演示的第一步做成了障碍。
+// 只在真的过不去时才接管，并且说明为什么切了，取消勾选就能回到真实流程。
+let insistOnRealBridge = false;   // 用户手动取消勾选后，不再自动切回演示
+
+async function probeBridgeWithFallback(realProbe) {
+  if (demoEnabled()) return demoProbeBridge();
+  await realProbe();
+  if (insistOnRealBridge) return undefined;          // 用户要的就是真实流程
+  const ready = !document.getElementById('bridge-next')?.hidden;
+  if (ready) return undefined;                       // 真的连上并配对过了，不打扰
+  const box = document.getElementById('local-demo-mode');
+  if (!box) return undefined;
+  box.checked = true;
+  const tone = document.getElementById('bridge-status')?.dataset.tone;
+  return demoProbeBridge(
+    tone === 'offline' ? '本机没有运行 Bridge，已自动切到演示模式：'
+                       : '本机 Bridge 还未配对，已自动切到演示模式：',
+  );
 }
 
 // --------------------------------------------------------------- 步骤 2 · 检测
@@ -154,13 +176,19 @@ function setupLocalAgentDemo() {
     row.innerHTML = `<input type="checkbox" id="local-demo-mode">
       <span><strong>演示模式</strong><small>不连接真实 Bridge，用脚本走一遍完整流程。适合本机没装 Codex 时做演示。</small></span>`;
     panel.prepend(row);
-    row.querySelector('input').addEventListener('change', () => {
-      if (demoEnabled()) demoProbeBridge(); else probeBridge();
+    row.querySelector('input').addEventListener('change', event => {
+      insistOnRealBridge = !event.target.checked;
+      if (demoEnabled()) demoProbeBridge();
+      else probeBridge();          // 已经记下用户要真实流程，不会再被自动切回来
     });
   }
 
   const realProbe = window.probeBridge;
-  window.probeBridge = function(){ return demoEnabled() ? demoProbeBridge() : realProbe(); };
+  window.probeBridge = function(){ return probeBridgeWithFallback(realProbe); };
+
+  // 每次重新打开弹窗都从"自动判断"开始：上一次坚持真实流程不该影响下一次
+  const realOpen = window.openLocalAgentDialog;
+  window.openLocalAgentDialog = function(){ insistOnRealBridge = false; return realOpen(); };
 
   const realDetect = window.detectLocalAgents;
   window.detectLocalAgents = function(){ return demoEnabled() ? demoDetect() : realDetect(); };
