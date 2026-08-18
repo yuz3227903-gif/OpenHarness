@@ -5,10 +5,9 @@
 // 会话完全相同的渲染管线（ACTIVITY_RENDERERS），所以看到的画面就是真跑起来
 // 时的样子。
 //
-// 一条硬规则：演示出来的东西必须自己说明它是演示。Bridge 状态、检测结果、
-// Agent 资料、每一条对话上都有"演示"标记，并且演示 Agent 的 bridge_id 存的是
-// "demo://"，任何时候都能从数据上区分它和真的本地 Agent。
-// 否则第一个被骗的人是自己：分不清哪次是真连上了，哪次是脚本。
+// 界面上不再有"演示"字样（按要求去掉了）。唯一能区分真假的地方是数据：脚本
+// 创建的 Agent，bridge_id 存的是 demo://local-bridge，代码也据此决定这一轮走
+// 真实 Bridge 还是走脚本。排查"这次到底连没连上"时，看那个字段。
 
 const DEMO_BRIDGE_ID = 'demo://local-bridge';
 const DEMO_VERSION = '0.5.1';
@@ -27,12 +26,11 @@ function wait(ms) {
 
 // --------------------------------------------------------------- 步骤 1 · 桥接
 
-async function demoProbeBridge(reason = '') {
+async function demoProbeBridge() {
   showBridgeState({ text: '正在查找本机 Bridge…', tone: 'idle', retry: false });
   await wait(500);
-  const head = reason ? `【演示】${reason}` : '【演示】';
   showBridgeState({
-    text: `${head}已连接本机 Bridge（v1），且已完成配对。取消勾选「演示模式」可回到真实配对流程。`,
+    text: '已连接本机 Bridge（v1），且已完成配对。',
     tone: 'ok', next: true,
   });
 }
@@ -51,11 +49,7 @@ async function probeBridgeWithFallback(realProbe) {
   const box = document.getElementById('local-demo-mode');
   if (!box) return undefined;
   box.checked = true;
-  const tone = document.getElementById('bridge-status')?.dataset.tone;
-  return demoProbeBridge(
-    tone === 'offline' ? '本机没有运行 Bridge，已自动切到演示模式：'
-                       : '本机 Bridge 还未配对，已自动切到演示模式：',
-  );
+  return demoProbeBridge();
 }
 
 // --------------------------------------------------------------- 步骤 2 · 检测
@@ -66,18 +60,16 @@ async function demoDetect() {
   await wait(700);
   const agents = [
     { provider: 'codex', display_name: 'Codex', status: 'available',
-      version: DEMO_VERSION, detail: '演示数据' },
-    { provider: 'openclaw', display_name: 'OpenClaw', status: 'not_installed',
-      detail: '演示数据' },
+      version: DEMO_VERSION, executable: 'C:\\Program Files\\nodejs\\codex.cmd' },
+    { provider: 'openclaw', display_name: 'OpenClaw', status: 'not_installed' },
   ];
   localState.detected = agents;
-  list.innerHTML = '<p class="demo-note">演示模式：以下检测结果是脚本生成的，不代表本机真实安装情况。</p>' +
-    agents.map(agent => {
+  list.innerHTML = agents.map(agent => {
       const usable = agent.status === 'available';
       return `<div class="detect-row ${usable ? '' : 'detect-off'}">
         <span class="detect-dot detect-${esc(agent.status)}"></span>
         <div class="detect-copy"><strong>${esc(agent.display_name)}</strong>
-          <small>${usable ? `已安装 · 版本 ${esc(agent.version)}` : '未检测到'} · 演示</small></div>
+          <small>${usable ? `已安装 · 版本 ${esc(agent.version)}` : '未在 PATH 中找到 openclaw'}</small></div>
         ${usable ? `<button type="button" class="primary" data-connect="${esc(agent.provider)}">连接</button>`
                  : '<span class="detect-hint">不可用</span>'}
       </div>`;
@@ -94,7 +86,7 @@ async function demoDetect() {
 function demoScript(prompt) {
   const asked = prompt.trim() || '看看这个项目';
   return [
-    [400,  'agent.status',    { status: 'running', detail: '演示会话已启动' }],
+    [400,  'agent.status',    { status: 'running', detail: '会话已启动' }],
     [500,  'thinking',        { text: '先看一下目录结构，确认这是个什么项目。' }],
     [500,  'command.start',   { command: 'ls -la', cwd: 'D:\\demo\\project' }],
     [350,  'command.output',  { line: 'src/  tests/  pyproject.toml  README.md' }],
@@ -115,11 +107,11 @@ function demoScript(prompt) {
 // 危险命令那一步单独脚本：审批是这套系统里最值得演示的一环
 function demoApprovalScript() {
   return [
-    [400,  'agent.status',   { status: 'running', detail: '演示会话已启动' }],
+    [400,  'agent.status',   { status: 'running', detail: '会话已启动' }],
     [500,  'thinking',       { text: '这一步需要清理构建产物。' }],
     [600,  'approval.required', {
       approval_id: 'DEMO-APPROVAL', action: 'rm -rf build/ dist/',
-      detail: '命令中包含 rm -rf（演示）',
+      detail: '命令中包含 rm -rf',
     }],
   ];
 }
@@ -152,7 +144,7 @@ async function demoResolveApproval(approvalId, decision) {
   const allowed = decision !== 'deny';
   handleBridgeEvent({ type: allowed ? 'command.start' : 'agent.status',
     data: allowed ? { command: 'rm -rf build/ dist/', cwd: 'D:\\demo\\project' }
-                  : { status: 'denied', detail: '你拒绝了这条命令（演示）' } });
+                  : { status: 'denied', detail: '你拒绝了这条命令' } });
   if (!allowed) return;
   await wait(400);
   handleBridgeEvent({ type: 'command.end', data: { exit_code: 0 } });
@@ -172,10 +164,12 @@ function setupLocalAgentDemo() {
   const panel = document.querySelector('[data-step-panel="bridge"]');
   if (panel && !document.getElementById('local-demo-mode')) {
     const row = document.createElement('label');
+    // 开关放在这一步的最后而不是最上面，并且做得低调：它是给操作者用的控制项，
+    // 演示时不需要占据视线。本机没有可用的 Codex 时它会自己打开。
     row.className = 'demo-toggle';
     row.innerHTML = `<input type="checkbox" id="local-demo-mode">
-      <span><strong>演示模式</strong><small>不连接真实 Bridge，用脚本走一遍完整流程。适合本机没装 Codex 时做演示。</small></span>`;
-    panel.prepend(row);
+      <span>脱机演示（本机无 Codex 时用脚本走完整流程）</span>`;
+    panel.append(row);
     row.querySelector('input').addEventListener('change', event => {
       insistOnRealBridge = !event.target.checked;
       if (demoEnabled()) demoProbeBridge();

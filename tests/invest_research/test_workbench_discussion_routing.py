@@ -437,6 +437,34 @@ class TestNothingIsLeftQueuedAcrossARestart:
         assert store.get_task(running["task_id"])["status"] == "running"
 
 
+class TestRenamingAnAgent:
+    def test_a_rename_follows_through_to_its_direct_channel(self, store):
+        """The channel is named after the Agent when it is created, once."""
+
+        agent = store.create_agent(
+            name="旧名字", profile="p", role="r", system_prompt="s", model="m",
+        )
+        store.ensure_direct_channel(agent["agent_id"], "旧名字")
+        store.update_agent(agent["agent_id"], name="新名字")
+        store.update_channel(f"dm-{agent['agent_id']}", name="新名字")
+        channel = next(
+            item for item in store.list_channels()
+            if item["channel_id"] == f"dm-{agent['agent_id']}"
+        )
+        assert channel["name"] == "新名字"
+
+    def test_a_local_agent_can_be_renamed(self, store):
+        """Its prompt and model belong to the CLI; its name is ours."""
+
+        local = store.create_agent(
+            name="My Codex", profile="p", role="r", system_prompt="", model="",
+            agent_type="local", provider="codex", workspace=str(Path.cwd()),
+        )
+        renamed = store.update_agent(local["agent_id"], name="Codex", role="本地编码 Agent")
+        assert renamed["name"] == "Codex"
+        assert renamed["role"] == "本地编码 Agent"
+
+
 class TestSkillsReachTheChatTurn:
     def test_installed_skills_are_attached_to_the_persona(self, store, monkeypatch, tmp_path):
         monkeypatch.setattr(server, "STORE", store)

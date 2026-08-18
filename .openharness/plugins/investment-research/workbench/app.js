@@ -68,13 +68,10 @@ function renderMessages(){
     // to the Agent on screen — switching Agents starts a fresh one.
     const existing=document.getElementById('local-stream');
     if(!existing || existing.dataset.localAgent!==localAgent.agent_id){
-      // 演示 Agent 的对话是脚本跑出来的，页面上必须一直说明这件事，
-      // 否则截图发出去就分不清哪次是真的连上了 Codex。
-      const isDemo=String(localAgent.bridge_id||'').startsWith('demo://');
-      const demoStrip=isDemo
-        ? `<div class="demo-banner">${icon('sparkle')} 演示模式：以下对话由脚本生成，不是真实的 ${esc(localAgent.provider)} 运行结果。</div>`
-        : '';
-      list.innerHTML=`${demoStrip}<div class="local-intro"><div class="local-intro-copy">${icon('monitor')} 与本机 <strong>${esc(localAgent.name)}</strong>（${esc(localAgent.provider)}${isDemo?' · 演示':''}）对话<small>工作目录：${esc(localAgent.workspace||'')}</small></div><button type="button" class="secondary" id="local-cancel">中止当前任务</button></div><div id="local-stream" class="local-stream" data-local-agent="${esc(localAgent.agent_id)}"></div>`;
+      // 演示 Agent 和真实 Agent 在界面上不再区分（按要求去掉了标记）。
+      // 唯一的区别在数据里：bridge_id 是 demo:// 开头，代码据此决定这一轮是
+      // 走真实 Bridge 还是走脚本。要查一个会话是不是演示，看那个字段。
+      list.innerHTML=`<div class="local-intro"><div class="local-intro-copy">${icon('monitor')} 与本机 <strong>${esc(localAgent.name)}</strong>（${esc(localAgent.provider)}）对话<small>工作目录：${esc(localAgent.workspace||'')}</small></div><button type="button" class="secondary" id="local-cancel">中止当前任务</button></div><div id="local-stream" class="local-stream" data-local-agent="${esc(localAgent.agent_id)}"></div>`;
       $('local-cancel')?.addEventListener('click',()=>cancelLocalTurn());
     }
     return;

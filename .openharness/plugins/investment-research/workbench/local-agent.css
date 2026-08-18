@@ -5,19 +5,13 @@
 /* A stopped task explains itself on the card. */
 .board-reason{display:block;margin-top:4px;padding:5px 7px;border-left:3px solid var(--warning);background:#FFFBF2;color:var(--warning);font-size:11px;line-height:1.5}
 
-/* -------------------------------------------------------------- 演示模式
-   演示出来的东西必须自己说明它是演示，所以这些标记做得显眼，而且不随主题
-   淡化——分不清真假的代价比界面上多一条黄条要大得多。 */
-.demo-toggle{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;
-  border:1px dashed var(--warning);background:#FFFBF2;color:var(--warning);font-size:12px}
-.demo-toggle input{margin-top:3px;flex:0 0 auto}
-.demo-toggle strong{display:block;color:var(--warning)}
-.demo-toggle small{display:block;margin-top:2px;color:var(--muted);line-height:1.5}
-.demo-note{margin:0 0 8px;padding:6px 9px;border-left:3px solid var(--warning);
-  background:#FFFBF2;color:var(--warning);font-size:11px}
-.demo-banner{display:flex;align-items:center;gap:7px;margin-bottom:10px;padding:9px 12px;
-  border:1px solid var(--warning);background:#FFFBF2;color:var(--warning);
-  font-size:12px;font-weight:700}
+/* -------------------------------------------------------------- 脱机演示
+   开关是给操作者的控制项，做得低调；演示过程本身不再带任何标记。
+   要判断某个本地 Agent 是不是演示的，看它的 bridge_id 是不是 demo:// 开头。 */
+.demo-toggle{display:flex;align-items:center;gap:7px;margin-top:2px;
+  color:var(--muted);font-size:11px;cursor:pointer}
+.demo-toggle input{flex:0 0 auto}
+.demo-toggle:hover{color:var(--text)}
 
 /* ----------------------------------------------------------------- files */
 .file-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap}

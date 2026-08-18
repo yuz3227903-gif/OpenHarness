@@ -3321,7 +3321,18 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             if "model" in updates and str(updates["model"]) not in model_ids():
                 self._send(400, {"error": "model is not available in the Ark Plan catalog"})
                 return
-            if agent.get("type") != "custom":
+            if agent.get("type") == "local":
+                # A local Agent's prompt and model belong to the CLI on the
+                # user's machine, but its name, description and role are this
+                # platform's own record of it — the operator named it, so the
+                # operator can rename it.
+                rejected = set(updates) & {"system_prompt", "model"}
+                if rejected:
+                    self._send(400, {
+                        "error": "本地 Agent 的提示词和模型由本机上的 CLI 管理，平台不参与配置。",
+                    })
+                    return
+            elif agent.get("type") != "custom":
                 # A built-in role's prompt and contract stay fixed, but the
                 # operator still owns its model choice and its avatar.
                 if set(updates) - {"model"}:
@@ -3350,6 +3361,17 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     self._send(400, {"error": str(exc)})
                     return
             updated = STORE.update_agent(agent_id, **updates)
+            # A direct channel is named after its Agent at the moment it is
+            # created, so a later rename left the conversation carrying the old
+            # name in its header and in the sidebar.
+            if updated and "name" in updates:
+                direct_channel_id = f"dm-{agent_id}"
+                if any(item["channel_id"] == direct_channel_id for item in STORE.list_channels()):
+                    STORE.update_channel(direct_channel_id, name=str(updates["name"]))
+                    STORE.add_event(
+                        channel_id=direct_channel_id, event_type="channel_updated",
+                        payload={"channel_id": direct_channel_id, "name": updates["name"]},
+                    )
             self._send(200, updated)
             return
         self._send(404, {"error": "not found"})
