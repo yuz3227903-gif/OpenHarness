@@ -97,6 +97,8 @@ class DiscussionOutcome:
     unanswered: list[str] = field(default_factory=list)
     #: What the discussion delivered, once it had something to conclude.
     conclusion: dict[str, Any] | None = None
+    #: 被新课题打断时为真——这场讨论没有谈完，也不该有结论。
+    stopped: bool = False
     max_concurrent: int = 0
 
 
@@ -152,6 +154,22 @@ class GroupDiscussion:
         self._lock = threading.Lock()
         self._live = 0
         self._peak = 0
+        self._stopped = threading.Event()
+
+    def stop(self, reason: str = "") -> None:
+        """请求停止这场讨论。
+
+        在轮次之间生效：正在飞行中的那一轮说完就收，不会把已经花掉的调用丢掉，
+        但不会再开下一轮。换课题时用它——让 Agent 继续聊上一个课题，比多等一轮
+        更糟。
+        """
+
+        self._stop_reason = reason
+        self._stopped.set()
+
+    @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
 
     # ------------------------------------------------------------------ prompt
 
@@ -341,7 +359,7 @@ class GroupDiscussion:
         open_handoffs: dict[str, list[str]] = {}
 
         for round_index in range(self._rounds):
-            if not queue:
+            if not queue or self._stopped.is_set():
                 break
             wave, queue = queue[:width], queue[width:]
             outcome.rounds = round_index + 1
@@ -396,7 +414,9 @@ class GroupDiscussion:
         for task_ids in open_handoffs.values():
             outcome.unanswered.extend(task_ids)
             self._expire_handoffs(task_ids)
-        if outcome.replies:
+        outcome.stopped = self._stopped.is_set()
+        # 被打断的讨论不写结论：那份结论会替一场没谈完的讨论下判断。
+        if outcome.replies and not outcome.stopped:
             outcome.conclusion = self._deliver_conclusion(
                 channel_id=channel_id, topic=topic,
                 topic_message_id=topic_message_id, speakers=speakers,

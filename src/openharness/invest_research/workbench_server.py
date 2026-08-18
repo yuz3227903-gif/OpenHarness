@@ -43,6 +43,11 @@ from openharness.invest_research.workbench_group_chat import (
     DEFAULT_ROUNDS,
     GroupDiscussion,
 )
+from openharness.invest_research.workbench_intents import (
+    classify_mention,
+    is_stop_command,
+    looks_like_new_topic,
+)
 from openharness.invest_research.workbench_agent_tasks import (
     DIRECT_AGENT_IDS,
     DirectAgentTaskError,
@@ -326,6 +331,9 @@ def _post_direct_acknowledgement(
 #: channel that is still talking is refused rather than queued behind it — the
 #: conversation would be answering a stale transcript by the time it ran.
 DISCUSSION_THREADS: dict[str, threading.Thread] = {}
+#: 正在跑的那场讨论本身，用来在换课题时叫停它。只存活跃的一场：一个频道同一
+#: 时间只讨论一个课题，这也是"发新课题就该打断旧的"这条规则的前提。
+DISCUSSION_RUNNING: dict[str, Any] = {}
 DISCUSSION_LOCK = threading.Lock()
 
 #: What an Agent talks with when nothing was chosen for it. The workspace
@@ -532,18 +540,36 @@ def _start_group_discussion(
 
     with DISCUSSION_LOCK:
         running = DISCUSSION_THREADS.get(channel_id)
+        preempted = False
         if running is not None and running.is_alive():
-            return 409, {
-                "error": "这个频道正在讨论上一个话题，请等它结束。",
-                "status": "already_discussing",
-            }
+            # 发了新课题就该谈新课题。以前这里直接拒绝，结果是你想换题目却被
+            # 挡回来，Agent 继续聊上一个——比多等一轮糟得多。现在打断旧的：
+            # 飞行中的那一轮说完就收，不再开下一轮。
+            previous = DISCUSSION_RUNNING.get(channel_id)
+            if previous is not None:
+                previous.stop("新的课题开始了")
+            preempted = True
+            _publish_discussion_event(channel_id, "discussion_preempted", {
+                "reason": "新的课题开始了", "topic_message_id": str(message.get("message_id") or ""),
+            })
+            STORE.add_message(
+                channel_id=channel_id, author_id="system", author_type="system",
+                message_kind="system_message",
+                body="上一个课题的讨论已结束，接下来讨论新课题。",
+                metadata={"discussion_preempted": True},
+            )
+
+        discussion = GroupDiscussion(
+            store=STORE, pool=pool, complete=chat_complete,
+            publish=_publish_discussion_event, rounds=rounds,
+            render_attachments=_render_message_attachments,
+        )
+        DISCUSSION_RUNNING[channel_id] = discussion
 
         def run() -> None:
-            discussion = GroupDiscussion(
-                store=STORE, pool=pool, complete=chat_complete,
-                publish=_publish_discussion_event, rounds=rounds,
-                render_attachments=_render_message_attachments,
-            )
+            # 旧讨论要给它一点时间收尾，否则两场会同时往同一个频道里说话
+            if preempted and running is not None:
+                running.join(timeout=90)
             try:
                 outcome = discussion.run(
                     channel_id=channel_id,
@@ -561,8 +587,12 @@ def _start_group_discussion(
                 "replies": len(outcome.replies),
                 "failures": len(outcome.failures),
                 "handoffs": outcome.handoffs,
+                "stopped": outcome.stopped,
                 "max_concurrent": outcome.max_concurrent,
             })
+            with DISCUSSION_LOCK:
+                if DISCUSSION_RUNNING.get(channel_id) is discussion:
+                    DISCUSSION_RUNNING.pop(channel_id, None)
 
         thread = threading.Thread(
             target=run, daemon=True, name=f"discussion-{channel_id}",
@@ -576,6 +606,175 @@ def _start_group_discussion(
         "concurrency": pool.size,
         "rounds": rounds,
     }
+
+
+def _stop_channel_work(
+    channel_id: str, *, reason: str, agent_ids: list[str] | None = None,
+    announce_idle: bool = False,
+) -> dict[str, Any]:
+    """在频道里喊停：讨论收尾，排队和在跑的任务撤掉。
+
+    停两样东西，因为频道里同时有两样在动：一场多 Agent 讨论（线程里一轮一轮
+    地跑），以及被 @ 出来的直接任务（在各自的队列里）。只停一样，另一样会继续
+    往频道里写字，看起来就像没停住。
+
+    ``agent_ids`` 限定只停这几个人的活儿——"@某某 停下"是对一个人说的，把整个
+    频道的任务一并撤掉是越权。它同时意味着不动那场多 Agent 讨论：讨论属于整个
+    频道，不属于被 @ 的那个人。
+
+    ``announce_idle`` 决定"本来就没在跑"要不要说一声。明确喊停的人在等一个答复，
+    该说；换课题时顺手清场的没人在等，不说。
+
+    飞行中的那一轮不强杀——模型调用已经发出去了，中途丢掉只会留下半句话。
+    停的是"下一轮不要再开"。
+    """
+
+    whole_channel = agent_ids is None
+    stopping_discussion = False
+    if whole_channel:
+        with DISCUSSION_LOCK:
+            discussion = DISCUSSION_RUNNING.get(channel_id)
+            if discussion is not None:
+                discussion.stop(reason)
+            stopping_discussion = discussion is not None
+
+    targeted = set(agent_ids or ())
+    active = [
+        task for task in STORE.list_tasks(channel_id)
+        if task.get("status") in {"queued", "running", "cancelling"}
+        and (whole_channel or str(task.get("assignee_id")) in targeted)
+    ]
+    for task in active:
+        task_id = str(task["task_id"])
+        _request_task_cancellation(task_id)
+        STORE.update_task(
+            task_id, "cancelling",
+            metadata_json=json.dumps(
+                {**(task.get("metadata") or {}), "cancel_requested": True, "stop_reason": reason},
+                ensure_ascii=False,
+            ),
+        )
+        STORE.add_event(
+            channel_id=channel_id, event_type="task_cancelling",
+            payload={"task_id": task_id, "agent_id": task.get("assignee_id"), "reason": reason},
+        )
+
+    cancelled = [str(item["task_id"]) for item in active]
+    # 本来就没在跑还宣布"已终止当前课题"，只会让人以为自己刚打断了什么。频道
+    # 里第一条消息就是新课题时最容易撞上这种情况。
+    notice = None
+    stopped_something = stopping_discussion or bool(active)
+    if stopped_something or announce_idle:
+        if not stopped_something:
+            body = "当前没有正在进行的讨论或任务。"
+        else:
+            body = (
+                (f"已终止当前课题：{reason}。" if whole_channel
+                 else f"已停下 {'、'.join(sorted(targeted))} 手上的工作：{reason}。")
+                + (f"撤回了 {len(active)} 个进行中的任务。" if active else "")
+                + ("可以直接发新的课题。" if whole_channel else "")
+            )
+        notice = STORE.add_message(
+            channel_id=channel_id, author_id="system", author_type="system",
+            message_kind="system_message", body=body,
+            metadata={"stopped": stopped_something, "cancelled_task_ids": cancelled},
+        )
+        STORE.add_event(channel_id=channel_id, event_type="discussion_stopped", payload={
+            "reason": reason, "cancelled_task_ids": cancelled, "message": notice,
+        })
+    return {
+        "status": "stopped",
+        "stopped_discussion": stopping_discussion,
+        "cancelled_task_ids": cancelled,
+        "notice": notice,
+    }
+
+
+def _latest_agent_objective(channel_id: str, agent_id: str) -> str:
+    """这个 Agent 在本频道最近一次被派到的活儿。
+
+    "重新做当前的子任务"里的"当前"就是它。取最近一条而不是最近一条未完成的：
+    刚跑完但结果不满意，正是最常见的重做理由。
+    """
+
+    for task in STORE.list_tasks(channel_id):     # 已按 updated_at 倒序
+        if str(task.get("assignee_id")) != agent_id:
+            continue
+        metadata = task.get("metadata") or {}
+        objective = str(metadata.get("objective") or task.get("title") or "").strip()
+        if objective:
+            return objective
+    return ""
+
+
+def _start_channel_agent_reply(
+    *, channel_id: str, agent: dict[str, Any], root_message_id: str, topic: str,
+) -> bool:
+    """让一个 Agent 在频道里当场把话接住，而不是排一个研究任务。
+
+    和私信走同一套（一个人的讨论，一轮），因为要的东西是一样的：读这个频道的
+    上下文，回一句话。区别只在 ``topic`` 由调用方给——重做时要把"重做哪件事"
+    说清楚，光靠原消息看不出来。
+
+    没配 Key 时返回 False，调用方好退回到"消息已记录"，而不是让人对着静默。
+    """
+
+    try:
+        pool = _ark_key_pool()
+    except NoArkKeysConfigured:
+        return False
+
+    def run() -> None:
+        discussion = GroupDiscussion(
+            store=STORE, pool=pool, complete=chat_complete,
+            publish=_publish_discussion_event, rounds=1,
+            render_attachments=_render_message_attachments,
+        )
+        try:
+            discussion.run(
+                channel_id=channel_id, topic=topic,
+                topic_message_id=root_message_id, participants=[agent],
+            )
+        except Exception:  # noqa: BLE001 - 一次回话不该把服务带走
+            log.exception("channel mention reply failed")
+
+    threading.Thread(
+        target=run, daemon=True, name=f"mention-reply-{agent.get('agent_id')}",
+    ).start()
+    return True
+
+
+def _handle_channel_mention_intent(
+    *, channel_id: str, message: dict[str, Any], agent_ids: list[str], intent: Any,
+) -> dict[str, Any]:
+    """把一条对话性的 @ 交给被 @ 的 Agent 当场回答。
+
+    ``redo`` 会把它最近那件活儿的内容一并塞进话题里，所以"重新做一下"这种没
+    有宾语的话也知道说的是什么。
+    """
+
+    agents = {str(item["agent_id"]): item for item in _discussion_participants(channel_id)}
+    answered: list[str] = []
+    for agent_id in agent_ids:
+        agent = agents.get(agent_id)
+        if agent is None:
+            continue
+        topic = intent.text or str(message.get("body") or "")
+        if intent.intent == "redo":
+            previous = _latest_agent_objective(channel_id, agent_id)
+            topic = (
+                f"用户要求你重做刚才那件事：{topic}\n"
+                + (f"你上一次接到的任务是：{previous}\n" if previous else "")
+                + "请直接把这件事重新做一遍并给出结论，不要只回复「收到」。"
+            )
+        if _start_channel_agent_reply(
+            channel_id=channel_id, agent=agent,
+            root_message_id=str(message.get("message_id") or ""), topic=topic,
+        ):
+            answered.append(agent_id)
+    if not answered:
+        return {"status": "recorded", "notice": "没有可回话的 Agent，或未配置 Ark Key；消息已记录。"}
+    return {"status": "agents_replying", "intent": intent.intent, "agent_ids": answered}
 
 
 def _delete_task_after_cancellation(task_id: str, *, reason: str = "已取消") -> dict[str, Any] | None:
@@ -3161,6 +3360,19 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             )
             mentions = message["mentions"]
             channel_mode = _channel_mode(channel)
+            # "@终止" 后面跟的不是 Agent 名字，所以这一条要在按 @ 分流之前处理，
+            # 否则它会被当成一句没 @ 到人的普通消息，反而开一场新讨论。
+            if message["body"] and is_stop_command(raw_body):
+                payload = _stop_channel_work(
+                    channel_id, reason="你在频道里要求终止", announce_idle=True,
+                )
+                payload["message"] = message
+                self._send(HTTPStatus.ACCEPTED, payload)
+                return
+            # 宣布换课题时先把上一场收掉，再让下面的分支去开新的一场。不这么做的
+            # 话，旧讨论会带着旧课题的记录继续说话，和新课题掺在一起。
+            if message["body"] and not requested_thread_id and looks_like_new_topic(raw_body):
+                _stop_channel_work(channel_id, reason="你提出了新的课题")
             # Planner starts a new complete research run only from the channel
             # timeline.  Inside an existing thread, the research Agents handle
             # targeted follow-up work without accidentally restarting a run.
@@ -3177,6 +3389,30 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 payload["message"] = message
                 self._send(status, payload)
             elif channel_mode == "research" and message["body"] and any(agent_id in DIRECT_AGENT_IDS for agent_id in mentions):
+                # 以前所有 @ 都排一份正式研究任务：说一句"重新做一下"，要等
+                # 四十秒才换来一句"用户问题与授权研究对象错配"。先认意图——只有
+                # 真的在要一份产出时才走研究合约，其余当场把话接住。
+                intent = classify_mention(raw_body)
+                targets = [item for item in mentions if item in DIRECT_AGENT_IDS]
+                if intent.intent == "stop":
+                    payload = _stop_channel_work(
+                        channel_id, reason="你要求停下", agent_ids=targets,
+                        announce_idle=True,
+                    )
+                    payload["message"] = message
+                    self._send(HTTPStatus.ACCEPTED, payload)
+                    return
+                if intent.is_conversational:
+                    payload = _handle_channel_mention_intent(
+                        channel_id=channel_id, message=message,
+                        agent_ids=targets, intent=intent,
+                    )
+                    payload["message"] = message
+                    self._send(
+                        201 if payload["status"] == "recorded" else HTTPStatus.ACCEPTED,
+                        payload,
+                    )
+                    return
                 as_of_text = str(body.get("as_of_date") or time.strftime("%Y-%m-%d"))
                 try:
                     as_of = date.fromisoformat(as_of_text)
@@ -3220,6 +3456,29 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "notice": "被 @ 的 Agent 不在当前频道成员中；消息已记录，未触发回复。",
                     })
                     return
+                # 聊天频道里 @ 某人也一样要先认意图：不认的话，"重新做一下"会
+                # 被当成新课题，把正在跑的那场讨论打断掉。
+                if mentions:
+                    intent = classify_mention(raw_body)
+                    if intent.intent == "stop":
+                        payload = _stop_channel_work(
+                            channel_id, reason="你要求停下", agent_ids=list(mentions),
+                            announce_idle=True,
+                        )
+                        payload["message"] = message
+                        self._send(HTTPStatus.ACCEPTED, payload)
+                        return
+                    if intent.is_conversational:
+                        payload = _handle_channel_mention_intent(
+                            channel_id=channel_id, message=message,
+                            agent_ids=list(mentions), intent=intent,
+                        )
+                        payload["message"] = message
+                        self._send(
+                            201 if payload["status"] == "recorded" else HTTPStatus.ACCEPTED,
+                            payload,
+                        )
+                        return
                 participants = _discussion_participants(channel_id)
                 if mentions:
                     mentioned_ids = set(mentions)

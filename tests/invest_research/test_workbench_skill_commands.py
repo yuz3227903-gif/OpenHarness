@@ -154,3 +154,60 @@ class TestPackagedSkills:
             "__MACOSX/._SKILL.md": "垃圾", "SKILL.md": "真正的内容",
         })
         assert "真正的内容" in read_packaged_skill(archive)
+
+
+class TestASkillPackedInsideAnotherPack:
+    """导出的技能常常是一个 zip 里再套一个 zip，多压的那层不该让技能装不上。"""
+
+    def _pack(self, path, files):
+        with zipfile.ZipFile(path, "w") as bundle:
+            for name, content in files.items():
+                bundle.writestr(name, content)
+        return path
+
+    def _wrap(self, path, inner, extra=None):
+        with zipfile.ZipFile(path, "w") as bundle:
+            bundle.write(inner, arcname=inner.name)
+            for name, content in (extra or {}).items():
+                bundle.writestr(name, content)
+        return path
+
+    def test_the_inner_packs_instructions_are_inlined(self, tmp_path):
+        inner = self._pack(tmp_path / "inner.zip", {"SKILL.md": "内层的技能说明"})
+        archive = self._wrap(tmp_path / "outer.zip", inner)
+
+        assert "内层的技能说明" in read_packaged_skill(archive)
+
+    def test_the_outers_own_instructions_still_win(self, tmp_path):
+        inner = self._pack(tmp_path / "inner.zip", {"SKILL.md": "内层的"})
+        archive = self._wrap(tmp_path / "outer.zip", inner, {"SKILL.md": "外层的"})
+
+        assert "外层的" in read_packaged_skill(archive)
+
+    def test_a_stray_text_file_does_not_beat_the_inner_skill(self, tmp_path):
+        # 外层常常只剩许可证；挑它就等于装了一份不相干的文本。
+        inner = self._pack(tmp_path / "inner.zip", {"SKILL.md": "真正的技能"})
+        archive = self._wrap(tmp_path / "outer.zip", inner, {"LICENSE.txt": "MIT"})
+
+        assert "真正的技能" in read_packaged_skill(archive)
+
+    def test_two_layers_deep_still_resolves(self, tmp_path):
+        deepest = self._pack(tmp_path / "deepest.zip", {"SKILL.md": "埋了两层"})
+        middle = self._wrap(tmp_path / "middle.zip", deepest)
+        archive = self._wrap(tmp_path / "outer.zip", middle)
+
+        assert "埋了两层" in read_packaged_skill(archive)
+
+    def test_a_corrupt_inner_pack_does_not_sink_the_others(self, tmp_path):
+        good = self._pack(tmp_path / "good.zip", {"SKILL.md": "能读的那个"})
+        with zipfile.ZipFile(tmp_path / "outer.zip", "w") as bundle:
+            bundle.writestr("aaa-broken.zip", "not a zip at all")
+            bundle.write(good, arcname="good.zip")
+
+        assert "能读的那个" in read_packaged_skill(tmp_path / "outer.zip")
+
+    def test_an_inner_pack_with_nothing_useful_is_reported(self, tmp_path):
+        inner = self._pack(tmp_path / "inner.zip", {"logo.png": "x"})
+        archive = self._wrap(tmp_path / "outer.zip", inner)
+
+        assert "没有找到说明文件" in read_packaged_skill(archive)

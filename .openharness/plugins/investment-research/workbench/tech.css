@@ -319,6 +319,9 @@
 .attach-btn:hover{border-color:var(--brand);box-shadow:var(--glow)}
 .mention-menu,.workbench-dialog{border:1px solid var(--brand);box-shadow:var(--glow)}
 .mention-option strong{font-family:var(--font-data)}
+/* @终止 不是一个人，读起来也不该像一个人 */
+.mention-control{border-bottom:1px solid var(--hair-strong);margin-bottom:4px;padding-bottom:9px}
+.mention-control strong{color:var(--danger,#c8503f)}
 
 /* ================================================================= 抽屉 */
 .context-pane{

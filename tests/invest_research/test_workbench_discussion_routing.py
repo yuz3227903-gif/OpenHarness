@@ -23,11 +23,12 @@ def _no_discussion_left_running(monkeypatch):
     """One test's discussion must not make the next one look busy.
 
     The running-discussion registry is module state, and a channel that is
-    already talking refuses a second topic — which is right in production and
-    is cross-test contamination here.
+    already talking interrupts itself for a second topic — which is right in
+    production and is cross-test contamination here.
     """
 
     monkeypatch.setattr(server, "DISCUSSION_THREADS", {})
+    monkeypatch.setattr(server, "DISCUSSION_RUNNING", {})
 
 
 @pytest.fixture
@@ -153,7 +154,7 @@ class TestStartingADiscussion:
             item["author_type"] == "agent" for item in store.list_messages("research-room")
         ))
 
-    def test_a_second_topic_is_refused_while_the_room_is_talking(self, store, monkeypatch):
+    def test_a_second_topic_interrupts_the_one_being_discussed(self, store, monkeypatch):
         monkeypatch.setattr(server, "_ark_key_pool", lambda: ArkKeyPool(["a"]))
         release = threading.Event()
 
@@ -167,15 +168,26 @@ class TestStartingADiscussion:
             message_kind="user_message", body="话题一",
         )
         agents = store.list_agents()[:1]
-        first, _ = server._start_group_discussion(
-            channel_id="research-room", message=message, participants=agents, rounds=1,
+        first_status, _ = server._start_group_discussion(
+            channel_id="research-room", message=message, participants=agents, rounds=3,
         )
-        assert first == 202
+        assert first_status == 202
+        first_discussion = server.DISCUSSION_RUNNING["research-room"]
+
+        second = store.add_message(
+            channel_id="research-room", author_id="owner", author_type="human",
+            message_kind="user_message", body="话题二",
+        )
         status, payload = server._start_group_discussion(
-            channel_id="research-room", message=message, participants=agents, rounds=1,
+            channel_id="research-room", message=second, participants=agents, rounds=1,
         )
-        # Queuing it would answer a transcript that is already out of date.
-        assert (status, payload["status"]) == (409, "already_discussing")
+        # 换课题不该被上一个课题挡住：旧的收尾，新的开始。
+        assert (status, payload["status"]) == (202, "discussion_started")
+        assert first_discussion.stopped
+        assert any(
+            event["event_type"] == "discussion_preempted"
+            for event in store.events_since("research-room", after_seq=0)
+        )
         release.set()
 
     def test_an_empty_room_is_refused_with_a_reason(self, store, quiet_pool):

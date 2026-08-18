@@ -353,8 +353,13 @@ function setupComposer(){
     const choices=channelAgentCandidates();
     const partial=value.split('@').pop().toLowerCase();
     const found=choices.filter(a=>(a.agent_id+a.name).toLowerCase().includes(partial)).slice(0,7);
-    menu.innerHTML=found.map(a=>`<div class="mention-option" data-mention="${esc(a.agent_id)}"><strong>@${esc(a.agent_id)}</strong> <span>${esc(a.role||'')}</span></div>`).join('');
-    menu.style.display=found.length?'block':'none';
+    // @终止 不是一个 Agent，但它出现在同一个 @ 后面。放进这张菜单是让人能发现
+    // 它的唯一位置——否则只有读过说明的人知道可以这么停。
+    const control=('终止停止stop'.includes(partial) && partial)
+      ? [{id:'终止', hint:'结束当前课题，撤回进行中的任务'}] : [];
+    menu.innerHTML=control.map(c=>`<div class="mention-option mention-control" data-mention="${esc(c.id)}"><strong>@${esc(c.id)}</strong> <span>${esc(c.hint)}</span></div>`).join('')
+      + found.map(a=>`<div class="mention-option" data-mention="${esc(a.agent_id)}"><strong>@${esc(a.agent_id)}</strong> <span>${esc(a.role||'')}</span></div>`).join('');
+    menu.style.display=(found.length||control.length)?'block':'none';
     menu.querySelectorAll('[data-mention]').forEach(el=>el.addEventListener('click',()=>{
       input.value=input.value.replace(/@[^\s@]*$/,'@'+el.dataset.mention+' ');
       menu.style.display='none';
@@ -399,6 +404,14 @@ function setupComposer(){
       toast('已创建完整研究任务，页面会实时显示进度');
     }else if(data.status==='agents_started'){
       toast(`已向 ${data.agent_ids.length} 个 Agent 并行派发直接任务`);
+    }else if(data.status==='stopped'){
+      // 停下来是一个动作，得有回执；否则看起来和普通发言没区别。
+      toast(data.cancelled_task_ids?.length
+        ? `已终止，并撤回 ${data.cancelled_task_ids.length} 个进行中的任务`
+        : '已终止当前课题');
+    }else if(data.status==='agents_replying'){
+      const what={redo:'重做', stop:'停下'}[data.intent] || '回复';
+      toast(`${data.agent_ids.join('、')} 正在${what}，稍等片刻`);
     }else if(directAgentId){
       toast(body.startsWith('/')
         ? `已调用技能 ${body.split(/\s+/)[0]}，${data.notice || 'Agent 正在按技能执行'}`
