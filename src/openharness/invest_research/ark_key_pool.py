@@ -11,10 +11,12 @@ speaker cannot leak a key out of the pool.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import os
 import threading
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 
 #: Where the workbench looks for the pool. Comma or newline separated.
@@ -26,6 +28,9 @@ ARK_KEY_ENV = "ARK_API_KEY"
 #: behind two other turns, short enough that a stuck turn surfaces as an error
 #: rather than a hang.
 LEASE_TIMEOUT_SECONDS = 180.0
+
+_ENV_POOL_LOCK = threading.Lock()
+_ENV_POOL_CACHE: tuple[str, "ArkKeyPool"] | None = None
 
 
 class NoArkKeysConfigured(RuntimeError):
@@ -175,6 +180,47 @@ class ArkKeyPool:
         finally:
             self._release(index)
 
+    @asynccontextmanager
+    async def lease_async(
+        self, *, timeout: float = LEASE_TIMEOUT_SECONDS
+    ) -> AsyncIterator[ArkKeyLease]:
+        """Lease a key without blocking the event loop while waiting.
+
+        The underlying pool deliberately uses a thread condition because the
+        workbench also has synchronous callers.  The RuntimeAdapter is
+        asynchronous, so acquire/release are moved to a worker thread here.
+        A bounded timeout is important: a provider outage or a leaked caller
+        must become a visible task failure rather than an endlessly spinning
+        research run.
+        """
+
+        # Shield the worker future.  Cancelling the coroutine while the worker
+        # is waiting on the condition must not leave a key acquired in the
+        # background with no matching release.
+        acquire_task = asyncio.create_task(asyncio.to_thread(self._acquire, timeout))
+        try:
+            index = await asyncio.shield(acquire_task)
+        except asyncio.CancelledError:
+            try:
+                late_index = await asyncio.shield(acquire_task)
+            except Exception:
+                # The worker either timed out or failed before acquiring a
+                # slot, so there is nothing to release.
+                raise
+            else:
+                await asyncio.to_thread(self._release, late_index)
+            raise
+        credential = self._credentials[index]
+        try:
+            yield ArkKeyLease(
+                index=index,
+                key=credential.key,
+                base_url=credential.base_url,
+                model=credential.model,
+            )
+        finally:
+            await asyncio.shield(asyncio.to_thread(self._release, index))
+
     def _acquire(self, timeout: float) -> int:
         with self._condition:
             if not self._condition.wait_for(lambda: bool(self._available), timeout=timeout):
@@ -195,6 +241,32 @@ class ArkKeyPool:
             self._condition.notify()
 
 
+def shared_environment_pool() -> ArkKeyPool | None:
+    """Return one process-wide pool for the current Ark environment.
+
+    The workbench has several entry points that may construct a runtime
+    gateway independently.  Returning a shared pool keeps those entry points
+    under one concurrency limit instead of letting each adapter believe it
+    owns all configured credentials.  The cache key is a one-way fingerprint;
+    raw credentials are never logged or exposed by this helper.
+    """
+
+    raw = os.environ.get(ARK_KEYS_ENV, "").strip()
+    if not raw:
+        raw = os.environ.get(ARK_KEY_ENV, "").strip()
+    if not raw:
+        return None
+
+    fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    global _ENV_POOL_CACHE
+    with _ENV_POOL_LOCK:
+        if _ENV_POOL_CACHE is not None and _ENV_POOL_CACHE[0] == fingerprint:
+            return _ENV_POOL_CACHE[1]
+        pool = ArkKeyPool.from_environment()
+        _ENV_POOL_CACHE = (fingerprint, pool)
+        return pool
+
+
 __all__ = [
     "ARK_KEYS_ENV",
     "ARK_KEY_ENV",
@@ -204,4 +276,5 @@ __all__ = [
     "ArkKeyUnavailable",
     "NoArkKeysConfigured",
     "parse_keys",
+    "shared_environment_pool",
 ]

@@ -85,7 +85,7 @@ def test_recovery_builds_provisional_card_and_explicit_competitor_placeholder():
     )
 
 
-def test_recovery_refuses_untraceable_planner_output():
+def test_recovery_allows_structured_output_without_sources_but_marks_unverified():
     payload = _partial_output()
     payload["company_identity"]["source_ids"] = []
     payload["evidence_refs"] = []
@@ -98,7 +98,18 @@ def test_recovery_refuses_untraceable_planner_output():
         source_ids=[],
     )
 
-    assert outcome is None
+    assert outcome is not None
+    assert outcome.payload["evidence_refs"] == []
+    assert any(
+        "没有可持久化的 S-ID" in item for item in outcome.payload["limitations"]
+    )
+    assert any(
+        item["item"] == "Planner 原始参数的来源链"
+        for item in outcome.payload["unverified_items"]
+    )
+    assert outcome.reason.startswith(
+        "planner_partial_parameter_card_recovered_without_traceable_sources"
+    )
 
 
 def test_recovery_uses_two_real_candidates_without_placeholder():

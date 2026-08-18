@@ -54,19 +54,24 @@ def recover_partial_planner_output(
 ) -> PlannerRecoveryOutcome | None:
     """Build a provisional parameter card from a traceable partial result.
 
-    Recovery is intentionally refused when Planner produced no structured
-    output or no traceable source at all.  Those cases still use the normal
-    failure/fallback path.
+    Recovery is refused when Planner produced no structured output or no
+    recognizable planning fields.  A structured planning result without a
+    persisted source is still recoverable, but only as an explicitly
+    unverified provisional handoff.  This distinction matters: a temporary
+    Planner delivery problem should not discard all downstream work, while a
+    completely empty result must not be turned into a fake parameter card.
     """
 
     if not isinstance(output, dict):
         return None
 
+    if not _has_planner_shape(output):
+        return None
+
     traceable_sources = _unique_strings(
         [*source_ids, *_collect_company_sources(output.get("company_identity"))]
     )
-    if not traceable_sources:
-        return None
+    has_traceable_sources = bool(traceable_sources)
 
     recovered = dict(output)
     company_identity = _company_identity(
@@ -118,20 +123,35 @@ def recover_partial_planner_output(
     recovered["evidence_refs"] = _unique_strings(
         [*recovered["evidence_refs"], *traceable_sources]
     )
-    recovered["limitations"] = _unique_strings(
-        [
-            *recovered["limitations"],
-            "Planner 未完整满足参数卡合同；系统仅基于已有可追溯结果恢复暂定参数卡。",
-        ]
-    )
+    limitations = [
+        *recovered["limitations"],
+        (
+            "Planner 未完整满足参数卡合同；系统仅基于已有可追溯结果恢复暂定参数卡。"
+            if has_traceable_sources
+            else "Planner 未完整满足参数卡合同，且当前结果没有可持久化的 S-ID；参数仅作为暂定输入，必须由下游 Agent 重新核验。"
+        ),
+    ]
+    recovered["limitations"] = _unique_strings(limitations)
     recovered["unverified_items"] = [
         *recovered["unverified_items"],
         {
             "item": "Planner 暂定参数卡",
-            "reason": "原始 Planner 结果为 partial，未生成可持久化的 Gate 1 参数卡。",
+            "reason": (
+                "原始 Planner 结果为 partial，未生成可持久化的 Gate 1 参数卡。"
+                if has_traceable_sources
+                else "原始 Planner 结果包含可用的规划字段，但没有可持久化的 S-ID；不能将其中内容视为已确认事实。"
+            ),
             "required_evidence": "由后续专业 Agent 核验公司资料与两家主要竞品。",
         },
     ]
+    if not has_traceable_sources:
+        recovered["unverified_items"].append(
+            {
+                "item": "Planner 原始参数的来源链",
+                "reason": "本次 Planner 结果没有可追溯 S-ID。",
+                "required_evidence": "由 Fundamental、IndustryCompetition 和 MarketCatalyst 使用真实来源核验。",
+            }
+        )
     if placeholder_count:
         recovered["handoff_requests"] = [
             *recovered["handoff_requests"],
@@ -150,11 +170,18 @@ def recover_partial_planner_output(
     # weakened globally.
     validated = PlannerResult.model_validate(recovered).model_dump(mode="json")
     parameter_card_id = _parameter_card_id(run_id)
-    reason = (
-        "planner_partial_parameter_card_recovered"
-        if not placeholder_count
-        else "planner_partial_parameter_card_recovered_with_competitor_placeholders"
-    )
+    if has_traceable_sources:
+        reason = (
+            "planner_partial_parameter_card_recovered"
+            if not placeholder_count
+            else "planner_partial_parameter_card_recovered_with_competitor_placeholders"
+        )
+    else:
+        reason = (
+            "planner_partial_parameter_card_recovered_without_traceable_sources"
+            if not placeholder_count
+            else "planner_partial_parameter_card_recovered_without_traceable_sources_and_competitor_placeholders"
+        )
     return PlannerRecoveryOutcome(
         payload=validated,
         parameter_card_id=parameter_card_id,
@@ -298,6 +325,36 @@ def _collect_company_sources(value: object) -> list[str]:
     if not isinstance(value, dict):
         return []
     return [str(item) for item in value.get("source_ids", []) if str(item).startswith("S-")]
+
+
+def _has_planner_shape(payload: dict[str, Any]) -> bool:
+    """Return whether a partial response contains meaningful planning fields.
+
+    This is deliberately a shape check, not an evidence check.  It lets the
+    flow continue with a provisional card when a provider returned useful
+    company/window/competitor fields but failed to persist sources.  The
+    caller marks that card unverified; no IDs are invented here.
+    """
+
+    identity = payload.get("company_identity")
+    has_identity = isinstance(identity, dict) and any(
+        str(identity.get(key) or "").strip()
+        for key in ("legal_name", "short_name", "ticker", "primary_business")
+    )
+    has_window = isinstance(payload.get("research_period"), dict) or isinstance(
+        payload.get("catalyst_window"), dict
+    )
+    competitor_values = (
+        payload.get("recommended_competitors"),
+        payload.get("competitor_candidates"),
+    )
+    has_competitor = any(
+        isinstance(item, dict) and str(item.get("company_name") or "").strip()
+        for values in competitor_values
+        if isinstance(values, list)
+        for item in values
+    )
+    return has_identity or has_window or has_competitor
 
 
 def _unique_strings(values: list[object]) -> list[str]:

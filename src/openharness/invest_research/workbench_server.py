@@ -436,33 +436,62 @@ def _ark_key_pool() -> ArkKeyPool:
     return usable
 
 
-def _discussion_participants(channel_id: str) -> list[dict[str, Any]]:
-    """Who is in the room.
+def _channel_record(channel_id: str) -> dict[str, Any] | None:
+    return next(
+        (item for item in STORE.list_channels() if item["channel_id"] == channel_id),
+        None,
+    )
 
-    A channel's members if it has any, otherwise every Agent in the workspace.
-    Removed Agents are excluded by the roster itself.
-    """
 
-    agents = {
+def _channel_mode(channel: dict[str, Any] | None) -> str:
+    """Return the channel's collaboration mode, including old DB fallback."""
+
+    value = str((channel or {}).get("channel_mode") or "").lower()
+    if value in {"chat", "research"}:
+        return value
+    return "research" if (channel or {}).get("channel_id") == "research-room" else "chat"
+
+
+def _enabled_workspace_agents() -> dict[str, dict[str, Any]]:
+    return {
         str(item["agent_id"]): item
         for item in STORE.list_agents()
-        # A local Agent's runtime is the user's machine. This server has no
-        # standing to answer in its name, and doing it through Ark would put
-        # words in a CLI's mouth, so it sits the discussion out.
-        if item.get("runtime") != "local"
+        if item.get("enabled", True) and item.get("runtime") != "local"
     }
-    channel = next(
-        (item for item in STORE.list_channels() if item["channel_id"] == channel_id), None
-    )
-    member_ids = [str(value) for value in (channel or {}).get("member_ids") or []]
-    chosen = [agents[value] for value in member_ids if value in agents]
-    if not chosen:
-        # Nobody was named for this channel, so pick a small default room. The
-        # whole roster talking at once is a roll call, not a discussion, and it
-        # buries the conversation the demo is meant to show. A channel with
-        # explicit members always gets exactly those members.
+
+
+def _allowed_channel_agent_ids(channel: dict[str, Any] | None) -> set[str]:
+    """Return the only hosted Agents allowed to speak in this channel."""
+
+    if not channel:
+        return set()
+    agents = _enabled_workspace_agents()
+    member_ids = {str(value) for value in (channel.get("member_ids") or [])}
+    if channel.get("kind") == "direct":
+        channel_id = str(channel.get("channel_id") or "")
+        if channel_id.startswith("dm-"):
+            member_ids.add(channel_id[3:])
+    if _channel_mode(channel) == "research" and not member_ids:
+        return set(agents)
+    return {value for value in member_ids if value in agents}
+
+
+def _discussion_participants(channel_id: str) -> list[dict[str, Any]]:
+    """Return only the Agents allowed to participate in this room.
+
+    Ordinary channels are strict group chats: their saved member list is the
+    boundary and an empty/invalid list means nobody is silently added. The
+    built-in research room keeps its historical small default room behavior.
+    """
+
+    agents = _enabled_workspace_agents()
+    channel = _channel_record(channel_id)
+    allowed_ids = _allowed_channel_agent_ids(channel)
+    if _channel_mode(channel) == "research" and not (channel or {}).get("member_ids"):
         chosen = [agents[value] for value in DEFAULT_DISCUSSION_ROOM if value in agents]
-        chosen = chosen or list(agents.values())[:MAX_DISCUSSION_PARTICIPANTS]
+        chosen = chosen or [agents[value] for value in allowed_ids][:MAX_DISCUSSION_PARTICIPANTS]
+    else:
+        chosen = [agents[value] for value in (channel or {}).get("member_ids") or [] if value in agents]
     return [
         _agent_with_skills(_with_chat_model(item))
         for item in chosen[:MAX_DISCUSSION_PARTICIPANTS]
@@ -1666,6 +1695,8 @@ def _direct_failure_message(result: Any) -> str:
         advice = "模型或工具调用超时。稍后重试；若反复超时，缩小问题范围。"
     elif failure_class in {"network", "rate_limit"}:
         advice = "与模型服务的连接不稳定或触发限流，稍后重试。"
+    elif failure_class == "key_unavailable":
+        advice = "当前没有空闲的 Ark Key，系统已在有界等待后结束本次任务；请稍后重试，或配置更多可用 Key。"
     elif failure_class == "provider_auth":
         advice = "模型服务认证失败，请检查 Provider 配置。"
     elif failure_class == "empty_response":
@@ -2462,6 +2493,12 @@ def _start_research(
         return HTTPStatus.BAD_REQUEST, {"error": "as_of_date must use YYYY-MM-DD"}
     if not company or len(company) > 120:
         return HTTPStatus.BAD_REQUEST, {"error": "company is required"}
+    channel = _channel_record(channel_id)
+    if channel is not None and _channel_mode(channel) != "research":
+        return HTTPStatus.CONFLICT, {
+            "error": "普通协作频道不会启动完整研究流程，请在固定研究频道中使用 @Planner。",
+            "status": "chat_channel",
+        }
     with RUN_STATE_LOCK:
         if RUN_STATE.get("flow_orphaned"):
             return HTTPStatus.CONFLICT, {"error": "上一次流程没有正常退出，请先重启工作台", "status": _snapshot()}
@@ -2538,7 +2575,22 @@ def _parse_mentions(body: str, provided: Any) -> list[str]:
         normalized = MENTION_ALIASES.get(raw.lower())
         if normalized:
             result.append(normalized)
-    return list(dict.fromkeys(item for item in result if item in AGENT_IDS))
+    known_ids = {
+        str(item["agent_id"])
+        for item in STORE.list_agents()
+        if item.get("enabled", True)
+    }
+    # Keep the built-in IDs available during bootstrap/migration even if the
+    # roster endpoint is temporarily being rebuilt.
+    known_ids.update(AGENT_IDS)
+    return list(dict.fromkeys(item for item in result if item in known_ids))
+
+
+def _filter_mentions_for_channel(
+    channel: dict[str, Any], mentions: list[str]
+) -> list[str]:
+    allowed = _allowed_channel_agent_ids(channel)
+    return [item for item in mentions if item in allowed]
 
 
 def _ensure_flow_events_projected(channel_id: str) -> dict[str, Any]:
@@ -3049,6 +3101,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 name = _required_text(body, "name", 80)
                 topic = _required_text(body, "topic", 240)
                 description = str(body.get("description") or "").strip()
+                channel_mode = str(body.get("channel_mode") or "chat").strip().lower()
+                if channel_mode not in {"chat", "research"}:
+                    raise ValueError("channel_mode must be chat or research")
                 raw_members = body.get("member_ids")
                 if not isinstance(raw_members, list) or not raw_members:
                     raise ValueError("member_ids must contain at least one Agent")
@@ -3057,7 +3112,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 if any(item not in known_agents for item in member_ids):
                     raise ValueError("member_ids contains an unknown or disabled Agent")
                 channel = STORE.create_channel(
-                    name=name, topic=topic, description=description, member_ids=member_ids
+                    name=name, topic=topic, description=description, member_ids=member_ids,
+                    channel_mode=channel_mode,
                 )
             except ValueError as exc:
                 self._send(400, {"error": str(exc)})
@@ -3067,15 +3123,28 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/channels/") and path.endswith("/messages"):
             channel_id = path.split("/")[3]
+            channel = _channel_record(channel_id)
+            if channel is None:
+                self._send(404, {"error": "channel not found"})
+                return
             requested_thread_id = str(body.get("thread_id") or "").strip() or None
             if requested_thread_id and STORE.get_thread(requested_thread_id, channel_id) is None:
                 self._send(404, {"error": "thread not found"})
                 return
             attachments = _channel_attachments(channel_id, body.get("attachment_ids"))
+            raw_body = str(body.get("body") or "").strip()
+            raw_mentions = _parse_mentions(raw_body, body.get("mentions"))
+            mentions = _filter_mentions_for_channel(channel, raw_mentions)
+            ignored_mentions = [item for item in raw_mentions if item not in mentions]
             message = STORE.add_message(
                 channel_id=channel_id, author_id="owner", author_type="human", message_kind="user_message",
-                body=str(body.get("body") or "").strip(), mentions=_parse_mentions(str(body.get("body") or ""), body.get("mentions")), thread_id=requested_thread_id,
-                metadata={"demo": False, "attachments": attachments},
+                body=raw_body, mentions=mentions, thread_id=requested_thread_id,
+                metadata={
+                    "demo": False,
+                    "attachments": attachments,
+                    "channel_mode": _channel_mode(channel),
+                    **({"ignored_mentions": ignored_mentions} if ignored_mentions else {}),
+                },
             )
             for attachment in attachments:
                 STORE.add_file(
@@ -3091,10 +3160,11 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 payload={"message": message},
             )
             mentions = message["mentions"]
+            channel_mode = _channel_mode(channel)
             # Planner starts a new complete research run only from the channel
             # timeline.  Inside an existing thread, the research Agents handle
             # targeted follow-up work without accidentally restarting a run.
-            if message["body"] and "planner" in mentions and not requested_thread_id:
+            if channel_mode == "research" and message["body"] and "planner" in mentions and not requested_thread_id:
                 company = str(body.get("company") or "科大讯飞").strip()
                 as_of = str(body.get("as_of_date") or time.strftime("%Y-%m-%d"))
                 status, payload = _start_research(
@@ -3106,7 +3176,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 )
                 payload["message"] = message
                 self._send(status, payload)
-            elif message["body"] and any(agent_id in DIRECT_AGENT_IDS for agent_id in mentions):
+            elif channel_mode == "research" and message["body"] and any(agent_id in DIRECT_AGENT_IDS for agent_id in mentions):
                 as_of_text = str(body.get("as_of_date") or time.strftime("%Y-%m-%d"))
                 try:
                     as_of = date.fromisoformat(as_of_text)
@@ -3142,7 +3212,40 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "tasks": tasks,
                     },
                 )
-            elif message["body"] and not requested_thread_id:
+            elif channel_mode == "chat" and message["body"] and not requested_thread_id:
+                if raw_mentions and not mentions:
+                    self._send(201, {
+                        "message": message,
+                        "status": "recorded",
+                        "notice": "被 @ 的 Agent 不在当前频道成员中；消息已记录，未触发回复。",
+                    })
+                    return
+                participants = _discussion_participants(channel_id)
+                if mentions:
+                    mentioned_ids = set(mentions)
+                    participants = [
+                        item for item in participants
+                        if str(item.get("agent_id")) in mentioned_ids
+                    ]
+                if not participants:
+                    self._send(201, {
+                        "message": message,
+                        "status": "recorded",
+                        "notice": "当前频道没有可参与的 Agent；消息已记录。",
+                    })
+                    return
+                status, payload = _start_group_discussion(
+                    channel_id=channel_id,
+                    message=message,
+                    participants=participants,
+                )
+                payload["message"] = message
+                if status >= 400:
+                    payload["status"] = payload.get("status", "recorded")
+                    self._send(201, payload)
+                    return
+                self._send(status, payload)
+            elif channel_mode == "research" and message["body"] and not requested_thread_id:
                 # No @ means the topic belongs to the room, so the room discusses
                 # it: several Agents answer at once, and may hand work to each
                 # other as they go.

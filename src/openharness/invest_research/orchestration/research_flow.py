@@ -178,8 +178,14 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
     ) -> AgentExecutionResult:
         """Recover a traceable provisional card from a partial Planner output."""
 
-        if result.status != "succeeded" or result.parameter_card_id:
+        # A provider can return a useful structured fragment together with a
+        # transient/network/schema failure.  Try deterministic recovery for
+        # every non-blocked result that has a dict payload; only an existing
+        # card or an empty payload should skip recovery.
+        if result.parameter_card_id or not isinstance(result.structured_output, dict):
             return result
+        original_status = result.status
+        original_error = result.error
         outcome = recover_partial_planner_output(
             run_id=self.state.run_id,
             company_query=self.state.company_query,
@@ -222,15 +228,26 @@ class InvestmentResearchSmokeFlow(Flow[ResearchFlowState]):
         result.parameter_card_id = outcome.parameter_card_id
         result.degraded = True
         warning = (
-            "Planner returned a traceable partial result without a usable parameter card; "
+            "Planner returned a structured partial result without a usable parameter card; "
             "the backend created a provisional card so specialist research could continue."
         )
+        if original_status != "succeeded":
+            warning += (
+                f" 原始执行状态为 {original_status}"
+                + (f"，原错误：{original_error}。" if original_error else "。")
+                + "该状态已转换为可审计的暂定交接，不代表原始调用没有问题。"
+            )
         if outcome.placeholder_competitor_count:
             warning += (
                 f" IndustryCompetition must identify and replace "
                 f"{outcome.placeholder_competitor_count} competitor placeholder(s)."
             )
         result.warnings = list(dict.fromkeys([*result.warnings, warning]))
+        # Downstream Flow listeners use `succeeded + parameter_card_id` as the
+        # handoff contract.  Promote only after the provisional card has been
+        # persisted and keep the original failure class/warning for audit.
+        result.status = "succeeded"
+        result.error = None
         self.state.recovery_used = True
         if not self.state.recovery_reason:
             self.state.recovery_reason = outcome.reason

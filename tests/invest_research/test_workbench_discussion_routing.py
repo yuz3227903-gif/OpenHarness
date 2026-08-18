@@ -59,6 +59,27 @@ def wait_for(predicate, timeout=8.0):
 
 
 class TestWhoIsInTheRoom:
+    def test_new_channels_default_to_chat_mode(self, store):
+        channel = store.create_channel(
+            name="新协作组", topic="t", description="", member_ids=["risk"],
+        )
+
+        saved = next(
+            item for item in store.list_channels()
+            if item["channel_id"] == channel["channel_id"]
+        )
+        assert channel["channel_mode"] == "chat"
+        assert saved["channel_mode"] == "chat"
+
+    def test_mentions_are_limited_to_saved_channel_members(self, store):
+        channel = store.create_channel(
+            name="限定成员组", topic="t", description="", member_ids=["risk"],
+        )
+
+        assert server._filter_mentions_for_channel(
+            channel, ["risk", "planner", "fundamental"]
+        ) == ["risk"]
+
     def test_a_channel_with_members_uses_them(self, store):
         channel = store.create_channel(
             name="小组", topic="t", description="", member_ids=["risk", "fundamental"],

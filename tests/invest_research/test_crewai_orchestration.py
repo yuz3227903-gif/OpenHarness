@@ -617,6 +617,18 @@ class _PartialPlannerRuntime(_FakeRuntime):
         )
 
 
+class _InvalidPartialPlannerRuntime(_PartialPlannerRuntime):
+    """Simulate a schema-invalid Planner response with useful partial data."""
+
+    async def execute_agent(self, request):
+        result = await super().execute_agent(request)
+        if request.agent_id == "planner":
+            result.status = "invalid_output"
+            result.failure_class = "schema_error"
+            result.error = "PlannerResult schema validation failed"
+        return result
+
+
 def _run_flow(runtime: _FakeRuntime, *, complete_report: bool = False):
     gateway = OpenHarnessRuntimeGateway(runtime)
     flow = InvestmentResearchSmokeFlow(gateway, complete_report=complete_report)
@@ -805,6 +817,32 @@ def test_partial_planner_card_is_recovered_before_parallel_research():
         event["event_type"] == "planner_parameter_card_recovered"
         for event in result["events"]
     )
+
+
+def test_invalid_partial_planner_is_promoted_after_provisional_recovery():
+    runtime = _InvalidPartialPlannerRuntime()
+    gateway = OpenHarnessRuntimeGateway(runtime)
+    flow = InvestmentResearchSmokeFlow(gateway)
+    result = asyncio.run(
+        flow.kickoff_async(
+            inputs={
+                "run_id": "RUN-CREWAI-PLANNER-INVALID-RECOVERY-001",
+                "company_query": "科大讯飞",
+                "as_of_date": "2026-08-13",
+            }
+        )
+    )
+
+    assert result["recovery_used"] is True
+    assert result["fallback_used"] is False
+    assert result["parameter_card_id"].startswith("PC-")
+    assert result["pipeline_status"] == "awaiting_reviewer_recheck"
+    assert result["agent_results"]["planner"]["execution_status"] == "succeeded"
+    assert any(
+        "原始执行状态为 invalid_output" in warning
+        for warning in result["warnings"]
+    )
+    assert gateway.execution_count > 1
 
 
 def test_one_parallel_research_failure_continues_to_risk_and_reviewer():

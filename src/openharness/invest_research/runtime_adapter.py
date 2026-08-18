@@ -8,6 +8,7 @@ import json
 import os
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from uuid import uuid4
@@ -25,6 +26,13 @@ from openharness.engine.stream_events import (
 )
 from openharness.invest_research.agent_registry import PLUGIN_NAME, get_agent_entry
 from openharness.invest_research.agent_skills import render_skills_prompt
+from openharness.invest_research.ark_key_pool import (
+    ARK_KEY_ENV,
+    ARK_KEYS_ENV,
+    ArkKeyPool,
+    ArkKeyUnavailable,
+    shared_environment_pool,
+)
 from openharness.invest_research.calculator_tool import CalculatorTool
 from openharness.invest_research.contracts import ReportSectionResult
 from openharness.invest_research.evidence_query_tool import EvidenceQueryTool
@@ -77,6 +85,7 @@ FailureClass = Literal[
     "tool_error",
     "permission_error",
     "input_error",
+    "key_unavailable",
     "unknown",
 ]
 
@@ -174,6 +183,56 @@ class RuntimePreflight(AdapterModel):
     ready_for_real_run: bool
 
 
+class _KeyPoolStreamingClient:
+    """Per-turn Ark client that leases credentials without mutating env vars.
+
+    QueryEngine may call ``stream_message`` several times for one Agent (tool
+    turns, repair turns, and the final answer).  Leasing at this boundary
+    means every actual provider request gets a pool slot, while a completed
+    turn immediately returns the key for another Agent.  No process-global
+    ``OPENAI_API_KEY`` mutation is needed, so concurrent Agents cannot cross
+    wires and accidentally use one another's credentials.
+    """
+
+    def __init__(
+        self,
+        adapter: InvestmentResearchRuntimeAdapter,
+        settings: Settings,
+        pool: ArkKeyPool,
+        timeout_seconds: float,
+    ) -> None:
+        self._adapter = adapter
+        self._settings = settings
+        self._pool = pool
+        self._timeout_seconds = timeout_seconds
+
+    async def stream_message(self, request):
+        try:
+            async with self._pool.lease_async(timeout=self._timeout_seconds) as lease:
+                call_settings = self._settings.model_copy(
+                    update={
+                        "api_key": lease.key,
+                        "base_url": lease.base_url or self._settings.base_url,
+                    }
+                ).materialize_active_profile()
+                call_request = request
+                if lease.model and lease.model != request.model:
+                    call_request = replace(request, model=lease.model)
+                client = self._adapter._create_single_api_client(call_settings)
+                try:
+                    async for event in client.stream_message(call_request):
+                        yield event
+                finally:
+                    await _close_api_client(client)
+        except ArkKeyUnavailable:
+            # Keep the error explicit and sanitized.  RuntimeAdapter classifies
+            # this as a bounded network/runtime failure instead of hanging.
+            raise
+
+    async def close(self) -> None:
+        """The underlying client is closed after every leased turn."""
+
+
 class InvestmentResearchRuntimeAdapter:
     """Run exactly one registered role through a restricted QueryEngine."""
 
@@ -186,6 +245,8 @@ class InvestmentResearchRuntimeAdapter:
         tool_overrides: dict[str, BaseTool] | None = None,
         evidence_store: EvidenceStore | None = None,
         require_search_configuration: bool = True,
+        ark_key_pool: ArkKeyPool | None = None,
+        key_lease_timeout_seconds: float = 45.0,
     ) -> None:
         default_root = Path(__file__).resolve().parents[3]
         self._project_root = Path(project_root or default_root).resolve()
@@ -195,6 +256,8 @@ class InvestmentResearchRuntimeAdapter:
         self._tool_overrides = dict(tool_overrides or {})
         self._evidence_store = evidence_store or EvidenceStore.for_project(self._project_root)
         self._require_search_configuration = require_search_configuration
+        self._ark_key_pool = ark_key_pool
+        self._key_lease_timeout_seconds = max(1.0, float(key_lease_timeout_seconds))
 
     @property
     def evidence_store(self) -> EvidenceStore:
@@ -210,7 +273,11 @@ class InvestmentResearchRuntimeAdapter:
         del runtime_context
         entry = get_agent_entry(agent_id)
         settings = self._settings_loader().materialize_active_profile()
-        runtime_settings, runtime_model = self._resolve_runtime_settings(settings, None)
+        runtime_settings, runtime_model = self._resolve_runtime_settings(
+            settings,
+            None,
+            ark_configured=self._get_ark_key_pool() is not None,
+        )
         registry = self.build_restricted_tool_registry(agent_id)
         actual_tools = [tool.name for tool in registry.list_tools()]
         missing_tools = [name for name in entry.allowed_tools if name not in actual_tools]
@@ -339,6 +406,7 @@ class InvestmentResearchRuntimeAdapter:
         settings, effective_model = self._resolve_runtime_settings(
             base_settings,
             request.model_override,
+            ark_configured=self._get_ark_key_pool() is not None,
         )
         preflight = self.preflight(entry.agent_id)
         if not preflight.ready_for_real_run:
@@ -811,16 +879,45 @@ class InvestmentResearchRuntimeAdapter:
         )
 
     def _create_api_client(self, settings: Settings) -> SupportsStreamingMessages:
+        pool = self._get_ark_key_pool()
+        if pool is not None and settings.api_format == "openai":
+            return _KeyPoolStreamingClient(
+                self,
+                settings,
+                pool,
+                self._key_lease_timeout_seconds,
+            )
+        return self._create_single_api_client(settings)
+
+    def _create_single_api_client(self, settings: Settings) -> SupportsStreamingMessages:
         if self._api_client_factory is not None:
             return self._api_client_factory(settings)
         from openharness.ui.runtime import _resolve_api_client_from_settings
 
         return _resolve_api_client_from_settings(settings)
 
+    def _get_ark_key_pool(self) -> ArkKeyPool | None:
+        """Return the injected or environment-backed pool, lazily."""
+
+        if self._ark_key_pool is not None:
+            return self._ark_key_pool
+        if not (
+            os.environ.get(ARK_KEYS_ENV, "").strip()
+            or os.environ.get(ARK_KEY_ENV, "").strip()
+        ):
+            return None
+        # All adapters created in one process share the same pool. Separate
+        # gateways must not each hand out the same credentials as if they had
+        # independent pools.
+        self._ark_key_pool = shared_environment_pool()
+        return self._ark_key_pool
+
     @staticmethod
     def _resolve_runtime_settings(
         settings: Settings,
         model_override: str | None,
+        *,
+        ark_configured: bool | None = None,
     ) -> tuple[Settings, str]:
         """Select Ark for investment research when its local credential exists.
 
@@ -837,8 +934,14 @@ class InvestmentResearchRuntimeAdapter:
         )
 
         requested_model = (model_override or "").strip()
-        ark_configured = bool(os.environ.get("ARK_API_KEY", "").strip())
-        use_ark = ark_configured and (not requested_model or requested_model in model_ids())
+        if ark_configured is None:
+            ark_configured = bool(
+                os.environ.get(ARK_KEYS_ENV, "").strip()
+                or os.environ.get(ARK_KEY_ENV, "").strip()
+            )
+        use_ark = bool(ark_configured) and (
+            not requested_model or requested_model in model_ids()
+        )
         if not use_ark:
             return settings, requested_model or settings.model
 
@@ -1109,6 +1212,15 @@ def _classify_failure(
     """Normalize provider/runtime failures for orchestration and UI decisions."""
 
     normalized = (error or "").lower()
+    if (
+        "ark key" in normalized
+        and (
+            "没有空闲" in normalized
+            or "unavailable" in normalized
+            or "busy" in normalized
+        )
+    ):
+        return "key_unavailable"
     if "empty model output" in normalized or "empty assistant" in normalized:
         return "empty_response"
     if "401" in normalized or "403" in normalized or "unauthorized" in normalized:

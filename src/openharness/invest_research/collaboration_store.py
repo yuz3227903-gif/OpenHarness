@@ -52,7 +52,8 @@ class CollaborationStore:
                 CREATE TABLE IF NOT EXISTS workbench_channels (
                     channel_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL,
                     kind TEXT NOT NULL DEFAULT 'project', project_company TEXT, topic TEXT,
-                    description TEXT, root_task_id TEXT, created_at TEXT NOT NULL
+                    description TEXT, root_task_id TEXT,
+                    channel_mode TEXT NOT NULL DEFAULT 'chat', created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS workbench_agents (
                     agent_id TEXT PRIMARY KEY, name TEXT NOT NULL, profile TEXT NOT NULL,
@@ -130,7 +131,8 @@ class CollaborationStore:
                 row["name"] for row in connection.execute("PRAGMA table_info(workbench_channels)")
             }
             for name, definition in (
-                ("topic", "TEXT"), ("description", "TEXT"), ("root_task_id", "TEXT")
+                ("topic", "TEXT"), ("description", "TEXT"), ("root_task_id", "TEXT"),
+                ("channel_mode", "TEXT NOT NULL DEFAULT 'chat'"),
             ):
                 if name not in channel_columns:
                     connection.execute(
@@ -184,9 +186,16 @@ class CollaborationStore:
             )
             connection.execute(
                 """INSERT OR IGNORE INTO workbench_channels(
-                    channel_id, workspace_id, name, kind, project_company, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)""",
-                ("research-room", "default", "research-room", "project", "科大讯飞", timestamp),
+                    channel_id, workspace_id, name, kind, project_company, channel_mode, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("research-room", "default", "research-room", "project", "科大讯飞", "research", timestamp),
+            )
+            # Existing databases may have created the fixed room before the
+            # channel_mode column existed. Keep that room as the only built-in
+            # research room; newly created channels default to ordinary chat.
+            connection.execute(
+                "UPDATE workbench_channels SET channel_mode='research' WHERE channel_id=?",
+                ("research-room",),
             )
             exists = connection.execute(
                 "SELECT 1 FROM workbench_messages WHERE channel_id=? LIMIT 1", ("research-room",)
@@ -570,8 +579,10 @@ class CollaborationStore:
 
     def create_channel(
         self, *, name: str, topic: str, description: str, member_ids: list[str],
-        workspace_id: str = "default",
+        workspace_id: str = "default", channel_mode: str = "chat",
     ) -> dict[str, Any]:
+        if channel_mode not in {"chat", "research"}:
+            raise ValueError("channel_mode must be chat or research")
         channel_id = f"channel-{uuid4().hex[:10]}"
         timestamp = _now()
         unique_members = list(dict.fromkeys(member_ids))
@@ -579,9 +590,9 @@ class CollaborationStore:
             connection.execute(
                 """INSERT INTO workbench_channels(
                     channel_id, workspace_id, name, kind, project_company, topic,
-                    description, root_task_id, created_at
-                ) VALUES (?, ?, ?, 'project', ?, ?, ?, NULL, ?)""",
-                (channel_id, workspace_id, name, topic, topic, description, timestamp),
+                    description, root_task_id, channel_mode, created_at
+                ) VALUES (?, ?, ?, 'project', ?, ?, ?, NULL, ?, ?)""",
+                (channel_id, workspace_id, name, topic, topic, description, channel_mode, timestamp),
             )
             for agent_id in unique_members:
                 connection.execute(
@@ -596,8 +607,13 @@ class CollaborationStore:
             self._insert_message(
                 connection, channel_id=channel_id, author_id="system", author_type="system",
                 message_kind="system_message",
-                body=f"研究频道已创建：{topic}。直接发消息即可让频道内的 Agent 讨论，或 @某个 Agent 下发任务。",
-                metadata={"channel_created": True},
+                body=(
+                    f"协作频道已创建：{topic}。直接发消息即可让本频道已加入的 Agent 讨论；"
+                    "只有已加入本频道的 Agent 会参与，@某个 Agent 可以点名交流。"
+                    if channel_mode == "chat"
+                    else f"研究频道已创建：{topic}。可在这里通过 @Planner 启动完整研究流程。"
+                ),
+                metadata={"channel_created": True, "channel_mode": channel_mode},
             )
         return next(item for item in self.list_channels() if item["channel_id"] == channel_id)
 

@@ -339,7 +339,6 @@ async function renderSkillMenu(input,menu){
 }
 function setupComposer(){
   const input=$('message-input'), menu=$('mention-menu');
-  const choices=state.agents;
   input.addEventListener('input',async()=>{
     const value=input.value;
     if(value.startsWith('/')){
@@ -348,6 +347,7 @@ function setupComposer(){
       return;
     }
     if(!value.includes('@')){menu.style.display='none';return;}
+    const choices=channelAgentCandidates();
     const partial=value.split('@').pop().toLowerCase();
     const found=choices.filter(a=>(a.agent_id+a.name).toLowerCase().includes(partial)).slice(0,7);
     menu.innerHTML=found.map(a=>`<div class="mention-option" data-mention="${esc(a.agent_id)}"><strong>@${esc(a.agent_id)}</strong> <span>${esc(a.role||'')}</span></div>`).join('');
@@ -670,7 +670,8 @@ async function refreshSelectedThread(showLoading=true){
     const artifactHtml=(data.artifacts||[]).length
       ? data.artifacts.map(item=>`<div class="thread-item"><strong>${esc(item.title)}</strong><span>${esc(labels[item.agent_id]||item.agent_id)} · ${esc(item.status)}</span><p>${esc(item.summary || '暂无摘要')}</p></div>`).join('')
       : '<p class="muted">尚未产生交付物；后续回复会显示在这里。</p>';
-    $('context-content').innerHTML=`<div class="thread-card"><div class="thread-title"><div><span class="eyebrow">线程交接</span><h2>${esc(kindLabel(data.root.message_kind))}</h2></div><button id="thread-back" class="secondary">返回概览</button></div><section><h3>原始请求</h3>${threadMessageHtml(data.root,data.root.message_id)}</section><section><h3>协作回复（${(data.replies||[]).length}）</h3>${(data.replies||[]).map(item=>threadMessageHtml(item,data.root.message_id)).join('')||'<p class="muted">暂时没有回复。Agent 接收、进度、交付和失败说明都会追加到此处。</p>'}</section><section><h3>关联任务</h3>${taskHtml}</section><section><h3>交付物</h3>${artifactHtml}</section><section><h3>证据编号</h3><div class="thread-refs">${refs.map(ref=>`<span class="tool-tag">${esc(ref)}</span>`).join('')||'<span class="muted">暂无新增 S/F/L/Risk 编号</span>'}</div></section><section class="thread-composer-section"><h3>继续协作</h3><form id="thread-composer" class="thread-composer"><textarea id="thread-input" rows="3" placeholder="例如：@Fundamental 请补充最近一年收入变化的原因"></textarea><div class="thread-agent-quick">${state.agents.filter(agent=>agent.agent_id!=='planner').map(agent=>`<button type="button" data-thread-mention="${esc(agent.agent_id)}">@${esc(agent.agent_id)}</button>`).join('')}</div><div class="thread-composer-footer"><span>线程内 @多个 Agent 会创建独立任务并行执行。</span><button type="submit" class="send">${icon('send')} 发送并派单</button></div></form></section></div>`;
+    const threadCandidates=channelAgentCandidates().filter(agent=>agent.agent_id!=='planner');
+    $('context-content').innerHTML=`<div class="thread-card"><div class="thread-title"><div><span class="eyebrow">线程交接</span><h2>${esc(kindLabel(data.root.message_kind))}</h2></div><button id="thread-back" class="secondary">返回概览</button></div><section><h3>原始请求</h3>${threadMessageHtml(data.root,data.root.message_id)}</section><section><h3>协作回复（${(data.replies||[]).length}）</h3>${(data.replies||[]).map(item=>threadMessageHtml(item,data.root.message_id)).join('')||'<p class="muted">暂时没有回复。Agent 接收、进度、交付和失败说明都会追加到此处。</p>'}</section><section><h3>关联任务</h3>${taskHtml}</section><section><h3>交付物</h3>${artifactHtml}</section><section><h3>证据编号</h3><div class="thread-refs">${refs.map(ref=>`<span class="tool-tag">${esc(ref)}</span>`).join('')||'<span class="muted">暂无新增 S/F/L/Risk 编号</span>'}</div></section><section class="thread-composer-section"><h3>继续协作</h3><form id="thread-composer" class="thread-composer"><textarea id="thread-input" rows="3" placeholder="例如：@Fundamental 请补充最近一年收入变化的原因"></textarea><div class="thread-agent-quick">${threadCandidates.map(agent=>`<button type="button" data-thread-mention="${esc(agent.agent_id)}">@${esc(agent.agent_id)}</button>`).join('')}</div><div class="thread-composer-footer"><span>线程内 @多个 Agent 会创建独立任务并行执行。</span><button type="submit" class="send">${icon('send')} 发送并派单</button></div></form></section></div>`;
     $('thread-back')?.addEventListener('click',()=>{ state.selectedThreadMessageId=null; openContextDrawer('上下文'); renderContext(); });
     setupThreadComposer(data.root.message_id);
   }catch(_error){
@@ -837,6 +838,19 @@ function channelOptions(selected, placeholder='全部频道'){
   }).join('');
 }
 function currentChannel(){ return state.channels.find(item=>item.channel_id===state.channelId); }
+function channelAgentCandidates(){
+  const channel=currentChannel();
+  const enabled=state.agents.filter(agent=>agent.enabled!==false);
+  if(!channel) return [];
+  const memberIds=new Set((channel.member_ids||[]).map(String));
+  if(channel.kind==='direct'){
+    const raw=String(channel.channel_id||'');
+    if(raw.startsWith('dm-')) memberIds.add(raw.slice(3));
+  }
+  const mode=String(channel.channel_mode || (channel.channel_id==='research-room'?'research':'chat'));
+  if(mode==='research' && memberIds.size===0) return enabled;
+  return enabled.filter(agent=>memberIds.has(String(agent.agent_id)));
+}
 function currentChannelLabel(){
   const channel=currentChannel();
   if(!channel) return '当前频道';
@@ -1838,8 +1852,8 @@ function openChannelDialog(){
   editingChannelId=null;
   const form=$('channel-form');
   form.reset();
-  $('channel-dialog-title').textContent='创建研究频道';
-  $('channel-dialog-subtitle').textContent='一个频道对应一个研究课题和根任务';
+  $('channel-dialog-title').textContent='创建协作频道';
+  $('channel-dialog-subtitle').textContent='新频道只允许已加入的 Agent 讨论，不自动启动完整投研流程';
   $('channel-submit').textContent='创建频道';
   $('channel-members-field').hidden=false;
   $('channel-agent-options').innerHTML=state.agents.filter(agent=>agent.enabled!==false).map(agent=>`<label><input type="checkbox" name="member_ids" value="${esc(agent.agent_id)}"> <span>${esc(agent.name || agent.agent_id)} · ${esc(agent.role || 'Agent')}</span></label>`).join('');
@@ -1933,7 +1947,7 @@ function setupCreationDialogs(){
     const editing=editingChannelId;
     const response=editing
       ? await fetch(`/api/channels/${encodeURIComponent(editing)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-      : await fetch('/api/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,member_ids:form.getAll('member_ids')})});
+      : await fetch('/api/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,channel_mode:'chat',member_ids:form.getAll('member_ids')})});
     const result=await response.json();
     if(!response.ok){ toast(result.error || (editing?'保存频道失败':'创建频道失败')); return; }
     channelDialog.close();
@@ -1949,7 +1963,7 @@ function setupCreationDialogs(){
     await loadMessages();
     applyChannelHeader();
     connectEvents();
-    toast(editing ? `频道「${result.name}」已更新` : `研究频道「${result.name}」已创建，根任务等待启动`);
+    toast(editing ? `频道「${result.name}」已更新` : `协作频道「${result.name}」已创建，仅邀请的 Agent 可参与聊天`);
   });
 }
 

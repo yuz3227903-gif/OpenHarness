@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, Literal, Protocol
 
+from openharness.invest_research.ark_key_pool import ArkKeyUnavailable
 from openharness.invest_research.runtime_adapter import (
     AgentExecutionRequest,
     AgentExecutionResult,
@@ -110,6 +111,11 @@ def _retryable_result(result: AgentExecutionResult) -> bool:
 
 def _classify_exception(exc: Exception) -> str:
     text = str(exc).lower()
+    if isinstance(exc, ArkKeyUnavailable) or (
+        "ark key" in text
+        and ("没有空闲" in text or "unavailable" in text or "busy" in text)
+    ):
+        return "key_unavailable"
     if "401" in text or "403" in text or "unauthorized" in text:
         return "provider_auth"
     if "429" in text or "rate limit" in text:
