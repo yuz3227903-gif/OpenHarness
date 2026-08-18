@@ -1,0 +1,359 @@
+{
+  "$defs": {
+    "DateRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end_date": {
+          "format": "date",
+          "title": "End Date",
+          "type": "string"
+        },
+        "start_date": {
+          "format": "date",
+          "title": "Start Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_date",
+        "end_date"
+      ],
+      "title": "DateRange",
+      "type": "object"
+    },
+    "HandoffRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "request": {
+          "minLength": 1,
+          "title": "Request",
+          "type": "string"
+        },
+        "target_agent_id": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Target Agent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_agent_id",
+        "request"
+      ],
+      "title": "HandoffRequest",
+      "type": "object"
+    },
+    "ReportBlocker": {
+      "additionalProperties": false,
+      "properties": {
+        "problem": {
+          "minLength": 1,
+          "title": "Problem",
+          "type": "string"
+        },
+        "required_record_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Record Ids",
+          "type": "array"
+        },
+        "section_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section Id"
+        }
+      },
+      "required": [
+        "problem"
+      ],
+      "title": "ReportBlocker",
+      "type": "object"
+    },
+    "ReportMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of_date": {
+          "format": "date",
+          "title": "As Of Date",
+          "type": "string"
+        },
+        "catalyst_window": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "company_name": {
+          "minLength": 1,
+          "title": "Company Name",
+          "type": "string"
+        },
+        "protocol_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "research_period": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "ticker": {
+          "minLength": 1,
+          "title": "Ticker",
+          "type": "string"
+        }
+      },
+      "required": [
+        "company_name",
+        "ticker",
+        "as_of_date",
+        "research_period",
+        "catalyst_window"
+      ],
+      "title": "ReportMetadata",
+      "type": "object"
+    },
+    "ReportSection": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "section_id": {
+          "enum": [
+            "company_overview",
+            "operating_changes",
+            "investment_logics",
+            "peer_comparison",
+            "catalysts",
+            "risks",
+            "tracking_indicators",
+            "limitations"
+          ],
+          "title": "Section Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section_id",
+        "title",
+        "content"
+      ],
+      "title": "ReportSection",
+      "type": "object"
+    },
+    "UnverifiedItem": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "minLength": 1,
+          "title": "Item",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Evidence"
+        }
+      },
+      "required": [
+        "item",
+        "reason"
+      ],
+      "title": "UnverifiedItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "blocking_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocking Reasons",
+      "type": "array"
+    },
+    "completed_scope": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Completed Scope",
+      "type": "array"
+    },
+    "compliance_statement": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Compliance Statement"
+    },
+    "evidence_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "handoff_requests": {
+      "items": {
+        "$ref": "#/$defs/HandoffRequest"
+      },
+      "title": "Handoff Requests",
+      "type": "array"
+    },
+    "included_logic_ids": {
+      "items": {
+        "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Included Logic Ids",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "metadata": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReportMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "report_blockers": {
+      "items": {
+        "$ref": "#/$defs/ReportBlocker"
+      },
+      "title": "Report Blockers",
+      "type": "array"
+    },
+    "section_evidence_map": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Section Evidence Map",
+      "type": "object"
+    },
+    "sections": {
+      "items": {
+        "$ref": "#/$defs/ReportSection"
+      },
+      "title": "Sections",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "blocked",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "tracking_indicators": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tracking Indicators",
+      "type": "array"
+    },
+    "unverified_items": {
+      "items": {
+        "$ref": "#/$defs/UnverifiedItem"
+      },
+      "title": "Unverified Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "status",
+    "completed_scope",
+    "evidence_refs",
+    "unverified_items",
+    "limitations",
+    "handoff_requests",
+    "blocking_reasons"
+  ],
+  "title": "ReportResult",
+  "type": "object"
+}

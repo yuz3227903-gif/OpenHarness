@@ -1,0 +1,161 @@
+{
+  "$defs": {
+    "ParameterCardRef": {
+      "additionalProperties": false,
+      "properties": {
+        "parameter_card_id": {
+          "minLength": 1,
+          "title": "Parameter Card Id",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parameter_card_id",
+        "version"
+      ],
+      "title": "ParameterCardRef",
+      "type": "object"
+    },
+    "SupplementRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expected Fields",
+          "type": "array"
+        },
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "issue_id": {
+          "pattern": "^ISSUE-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Issue Id",
+          "type": "string"
+        },
+        "problem_statement": {
+          "minLength": 1,
+          "title": "Problem Statement",
+          "type": "string"
+        },
+        "supplement_round": {
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Supplement Round",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "issue_id",
+        "supplement_round",
+        "problem_statement"
+      ],
+      "title": "SupplementRequest",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "const": "fundamental",
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "fact_ids": {
+      "items": {
+        "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Fact Ids",
+      "type": "array"
+    },
+    "input_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Refs",
+      "type": "array"
+    },
+    "objective": {
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "parameter_card": {
+      "$ref": "#/$defs/ParameterCardRef"
+    },
+    "parameter_card_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parameter Card Version"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "source_ids": {
+      "items": {
+        "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Source Ids",
+      "type": "array"
+    },
+    "supplement": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SupplementRequest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "task_id": {
+      "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "uploaded_file_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Uploaded File Refs",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "task_id",
+    "objective",
+    "agent_id",
+    "parameter_card"
+  ],
+  "title": "FundamentalInput",
+  "type": "object"
+}

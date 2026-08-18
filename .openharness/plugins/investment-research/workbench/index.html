@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI帮投研助手 · 协作工作台</title>
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/shell.css">
+  <link rel="stylesheet" href="/views.css">
+  <link rel="stylesheet" href="/local-agent.css">
+</head>
+<body>
+  <!-- Icon sprite: Lucide (ISC licence, https://lucide.dev). Inlined because a
+       strict local server cannot fetch an icon font or CDN bundle. Every symbol
+       keeps Lucide's 24x24 grid so stroke weights stay consistent at any size. -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false"><defs>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-tasks" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></symbol>
+    <symbol id="i-check-square" viewBox="0 0 24 24"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+    <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="m15 4 5 5-3 3v5l-3 3-2-2-4 4-1-1 4-4-2-2 3-3h5l3-3-5-5Z"/><path d="m6 6 5 5"/></symbol>
+    <symbol id="i-graph" viewBox="0 0 24 24"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24"><line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/><line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></symbol>
+    <symbol id="i-report" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
+    <symbol id="i-reply" viewBox="0 0 24 24"><path d="m9 17-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 0 10h-1"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.66V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.66"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.17 2.83a3.12 3.12 0 0 0-4.42 0L3 16.59V21h4.41L21.17 7.25a3.12 3.12 0 0 0 0-4.42z"/><path d="m15.5 4.5 4 4"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="m5.6 5.6 2.8 2.8"/><path d="m15.6 15.6 2.8 2.8"/><path d="m18.4 5.6-2.8 2.8"/><path d="m8.4 15.6-2.8 2.8"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-7 4 14 2-7h6"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 1 1 5.8 1c0 2-3 2-3 4"/><path d="M12 18h.01"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1"/></symbol>
+  </defs></svg>
+  <div class="app-shell" data-workspace-view="channel" data-channel-tab="chat">
+    <aside class="rail">
+      <div class="brand-mark">研</div>
+      <button class="rail-btn" data-view="search" title="搜索 (Ctrl+K)"><svg class="icon"><use href="#i-search"/></svg><span class="rail-label">搜索</span></button>
+      <button class="rail-btn active" data-view="channel" title="协作频道"><svg class="icon"><use href="#i-message"/></svg><span class="rail-label">聊天</span></button>
+      <button class="rail-btn" data-view="activity" title="动态"><svg class="icon"><use href="#i-activity"/></svg><span class="rail-label">动态</span></button>
+      <button class="rail-btn" data-view="tasks" title="任务"><svg class="icon"><use href="#i-check-square"/></svg><span class="rail-label">任务</span></button>
+      <button class="rail-btn" data-view="members" title="成员"><svg class="icon"><use href="#i-users"/></svg><span class="rail-label">成员</span></button>
+      <button class="rail-btn" data-view="graph" title="关系图"><svg class="icon"><use href="#i-graph"/></svg><span class="rail-label">关系图</span></button>
+      <div class="rail-spacer"></div>
+      <button class="rail-btn rail-utility" data-drawer="notifications" title="通知中心"><svg class="icon"><use href="#i-bell"/></svg><span class="rail-label">通知中心</span></button>
+      <button class="rail-btn rail-utility" data-drawer="help" title="帮助"><svg class="icon"><use href="#i-help"/></svg><span class="rail-label">帮助</span></button>
+      <button class="rail-btn rail-utility" data-drawer="settings" title="设置"><svg class="icon"><use href="#i-settings"/></svg><span class="rail-label">设置</span></button>
+    </aside>
+    <aside class="sidebar" id="sidebar">
+      <div class="workspace-head"><div><strong id="sidebar-title">聊天</strong><span id="sidebar-subtitle">本地工作区</span></div><button id="sidebar-action" title="新建"><svg class="icon"><use href="#i-plus"/></svg></button></div>
+      <div id="sidebar-body"></div>
+    </aside>
+    <main class="main-pane">
+      <header class="channel-head">
+        <div class="channel-mark"><svg class="icon"><use href="#i-hash"/></svg></div>
+        <div class="channel-identity"><div class="channel-title-line"><h1>加载中…</h1><span id="channel-muted-label" hidden>已静音</span></div><p>正在读取当前频道</p></div>
+        <div class="head-actions"><button id="channel-search" class="channel-icon-btn" title="搜索此频道"><svg class="icon"><use href="#i-search"/></svg></button><button id="channel-mute" class="channel-icon-btn" title="为此频道静音活动"><svg class="icon"><use href="#i-volume"/></svg></button><button id="pause-run" class="channel-icon-btn" type="button" title="停止此频道中的所有 Agent"><svg class="icon"><use href="#i-stop"/></svg></button><button id="resume-run" class="channel-icon-btn" type="button" title="继续此频道中的 Agent" hidden><svg class="icon"><use href="#i-play"/></svg></button><button id="channel-settings" class="channel-icon-btn" title="频道设置"><svg class="icon"><use href="#i-settings"/></svg></button><button id="channel-members" class="member-count-btn" title="频道成员"><svg class="icon"><use href="#i-users"/></svg><span id="member-count">0</span></button><span class="connection-indicator" hidden><span class="live-dot"></span><span id="connection-state">正在连接</span></span><button id="refresh" hidden title="刷新当前工作区"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+      </header>
+      <div class="run-banner" id="run-banner"><span class="status-dot"></span><span id="run-label">等待研究任务</span><span id="run-meta"></span></div>
+      <nav class="pane-tabs" id="pane-tabs"><button type="button" class="pane-tab active" data-channel-tab="chat"><svg class="icon"><use href="#i-message"/></svg> 聊天</button><button type="button" class="pane-tab" data-channel-tab="tasks"><svg class="icon"><use href="#i-tasks"/></svg> 任务 <b id="tab-task-count">0</b></button><button type="button" class="pane-tab" data-channel-tab="files"><svg class="icon"><use href="#i-paperclip"/></svg> 文件 <b id="tab-file-count">0</b></button></nav>
+      <section id="message-list" class="message-list workspace-pane" data-workspace-pane="chat"></section>
+      <section id="task-board" class="task-board workspace-pane" data-workspace-pane="tasks" hidden></section>
+      <section id="file-board" class="file-board workspace-pane" data-workspace-pane="files" hidden></section>
+      <section id="activity-board" class="directory-board workspace-pane" data-workspace-pane="activity" hidden></section>
+      <section id="members-board" class="directory-board workspace-pane" data-workspace-pane="members" hidden></section>
+      <section id="graph-board" class="graph-board workspace-pane" data-workspace-pane="graph" hidden></section>
+      <section id="search-board" class="search-board workspace-pane" data-workspace-pane="search" hidden>
+        <div class="search-topbar">
+          <button class="search-icon-button" type="button" aria-label="搜索"><svg class="icon"><use href="#i-search"/></svg></button>
+          <div class="search-input-component">
+            <input id="search-input" type="search" placeholder="搜索频道、私信、消息…" autocomplete="off" aria-label="搜索工作区">
+            <kbd id="search-hint">Ctrl+K</kbd>
+            <button type="button" id="search-close" class="search-escape">ESC</button>
+          </div>
+        </div>
+        <div class="search-filterbar" aria-label="搜索筛选">
+          <label class="search-filter-component"><svg class="icon"><use href="#i-user"/></svg><select id="search-sender" aria-label="发送者"><option value="">全部发送者</option></select></label>
+          <label class="search-filter-component"><svg class="icon"><use href="#i-sparkle"/></svg><select id="search-scope" aria-label="范围"><option value="all">全部内容</option><option value="message">消息</option><option value="task">任务</option><option value="file">文件</option><option value="agent">成员</option><option value="channel">频道</option></select></label>
+          <label class="search-filter-component"><svg class="icon"><use href="#i-hash"/></svg><select id="search-channel" aria-label="频道"><option value="">全部频道</option></select></label>
+          <label class="search-filter-component"><svg class="icon"><use href="#i-refresh"/></svg><select id="search-since" aria-label="时间"><option value="0">不限时间</option><option value="1">最近一天</option><option value="7">最近一周</option><option value="30">最近一月</option></select></label>
+          <label class="search-filter-component search-filter-component--muted"><svg class="icon"><use href="#i-tasks"/></svg><select id="search-sort" aria-label="排序" disabled><option value="relevance">相关度</option><option value="recent">最新</option></select></label>
+          <button type="button" id="search-clear" class="search-clear-button" hidden>清除筛选</button>
+        </div>
+        <div class="search-results-viewport"><div id="search-results" class="search-results"></div></div>
+      </section>
+      <form id="composer" class="composer"><div class="composer-inner"><textarea id="message-input" rows="2" placeholder="发送消息至当前频道"></textarea><div id="attachment-tray" class="attachment-tray" hidden></div><div class="composer-footer"><div class="composer-tools"><label class="attach-btn" title="添加文件或图片"><svg class="icon"><use href="#i-paperclip"/></svg><input id="attachment-input" type="file" multiple hidden></label><span class="composer-capability">可同时 @多个 Agent</span></div><div class="composer-actions"><label class="task-toggle"><input id="composer-as-task" type="checkbox"><span>作为任务</span></label><button type="button" id="report-btn" class="secondary"><svg class="icon"><use href="#i-report"/></svg><span>查看报告</span></button><button type="submit" class="send" aria-label="发送"><svg class="icon"><use href="#i-send"/></svg></button></div></div><div id="mention-menu" class="mention-menu"></div></div></form>
+    </main>
+    <aside class="context-pane" aria-hidden="true"><div class="context-head"><span id="context-title"><svg class="icon"><use href="#i-user"/></svg> 上下文</span><button id="close-context" title="关闭"><svg class="icon"><use href="#i-x"/></svg></button></div><div id="context-content" class="context-content"></div></aside>
+    <div class="drawer-scrim" id="drawer-scrim" hidden></div>
+  </div>
+  <dialog id="agent-dialog" class="workbench-dialog"><form id="agent-form"><div class="dialog-head"><div><strong id="agent-dialog-title">创建 Agent</strong><span id="agent-dialog-subtitle">配置一个可以加入频道协作的研究成员</span></div><button type="button" data-close="agent-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><label>名称<input name="name" maxlength="80" required></label><label>个人简介<textarea name="profile" maxlength="500" required></textarea></label><label>职责<input name="role" maxlength="120" required></label><label>系统提示词<textarea name="system_prompt" rows="6" maxlength="12000" required></textarea></label><label>模型<select name="model"><option value="ark-code-latest">Ark Code Latest · Auto</option></select><small id="model-description" class="model-description">默认使用效果与速度双维度智能调度。</small></label><label>头像图片<div class="avatar-editor"><img id="agent-avatar-preview" alt="头像预览" hidden><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>不选择新图片时保留现有头像，最大 2 MB</small></div></label><div class="dialog-actions"><button type="button" class="secondary" data-close="agent-dialog">取消</button><button id="agent-submit" class="primary" type="submit">创建 Agent</button></div></form></dialog>
+  <dialog id="channel-dialog" class="workbench-dialog"><form id="channel-form"><div class="dialog-head"><div><strong id="channel-dialog-title">创建研究频道</strong><span id="channel-dialog-subtitle">一个频道对应一个研究课题和根任务</span></div><button type="button" data-close="channel-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><label>频道名称<input name="name" maxlength="80" required></label><label>研究课题<input name="topic" maxlength="240" required></label><label>课题说明<textarea name="description" maxlength="1000"></textarea></label><fieldset id="channel-members-field"><legend>选择 Agent（至少一个）</legend><div id="channel-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="channel-dialog">取消</button><button id="channel-submit" class="primary" type="submit">创建频道</button></div></form></dialog>
+  <dialog id="agent-kind-dialog" class="workbench-dialog"><div class="dialog-head"><div><strong>请选择 Agent 创建方式</strong><span>两种 Agent 之后在同一个列表里管理和对话</span></div><button type="button" data-close="agent-kind-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><div class="kind-choices"><button type="button" class="kind-card" id="choose-hosted"><span class="kind-icon kind-icon-hosted"><svg class="icon"><use href="#i-sparkle"/></svg></span><strong>创建普通 Agent</strong><p>使用模型、Prompt、Skill、Tools 创建由本平台托管运行的 Agent。</p><em>Hosted · OpenHarness</em></button><button type="button" class="kind-card" id="choose-local"><span class="kind-icon kind-icon-local"><svg class="icon"><use href="#i-monitor"/></svg></span><strong>连接本地 Agent</strong><p>连接你电脑上已安装的 Codex、OpenClaw 等 Agent，它继续运行在本机。</p><em>Local · 需要 Local Bridge</em></button></div></dialog>
+
+  <dialog id="local-agent-dialog" class="workbench-dialog local-dialog"><div class="dialog-head"><div><strong>连接本地 Agent</strong><span id="local-step-hint">第 1 步 · 连接本机 Bridge</span></div><button type="button" data-close="local-agent-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div>
+    <ol class="local-steps"><li data-step="bridge" class="active">连接 Bridge</li><li data-step="detect">选择 Agent</li><li data-step="configure">配置</li></ol>
+    <section class="local-step" data-step-panel="bridge">
+      <div id="bridge-status" class="bridge-status">正在查找本机 Bridge…</div>
+      <div id="bridge-pair" class="bridge-pair" hidden><p class="muted">Bridge 已在你的终端里打印了一个 6 位配对码，请输入：</p><div class="pair-row"><input id="pair-code" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="off"><button type="button" id="pair-confirm" class="primary">确认配对</button></div><p id="pair-error" class="pair-error" hidden></p></div>
+      <div class="local-actions"><button type="button" id="bridge-retry" class="secondary"><svg class="icon"><use href="#i-refresh"/></svg> 重新检测</button><button type="button" id="bridge-pair-start" class="primary" hidden>发起配对</button><button type="button" id="bridge-next" class="primary" hidden>下一步</button></div>
+    </section>
+    <section class="local-step" data-step-panel="detect" hidden>
+      <div id="detect-list" class="detect-list">正在检测本机 Agent…</div>
+      <div class="local-actions"><button type="button" id="detect-refresh" class="secondary"><svg class="icon"><use href="#i-refresh"/></svg> 重新检测</button></div>
+    </section>
+    <section class="local-step" data-step-panel="configure" hidden>
+      <form id="local-agent-form">
+        <label>Agent 名称<input name="name" maxlength="80" required placeholder="例如：My Coding Agent"></label>
+        <label>描述<input name="profile" maxlength="500" placeholder="这个 Agent 负责什么"></label>
+        <label>工作目录 Workspace<input name="workspace" maxlength="500" required placeholder="D:\Projects\my-app"><small>Agent 的操作会被限制在这个目录内；不要选择磁盘根目录、用户主目录或凭据目录。</small></label>
+        <label>权限模式<select name="permission_mode"><option value="ask">危险操作前询问（推荐）</option><option value="accept_edits">自动接受文件修改</option><option value="read_only">只读，不允许修改</option></select></label>
+        <label>头像图片<div class="avatar-editor"><img id="local-avatar-preview" alt="头像预览" hidden><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>可不选，最大 2 MB</small></div></label>
+        <p id="local-form-error" class="pair-error" hidden></p>
+        <div class="dialog-actions"><button type="button" class="secondary" data-close="local-agent-dialog">取消</button><button class="primary" type="submit">创建本地 Agent</button></div>
+      </form>
+    </section>
+  </dialog>
+
+  <dialog id="dm-dialog" class="workbench-dialog"><form id="dm-form"><div class="dialog-head"><div><strong>发起私信</strong><span>选择一个 Agent，开一条只有你和它的对话</span></div><button type="button" data-close="dm-dialog"><svg class="icon"><use href="#i-x"/></svg></button></div><fieldset><legend>选择对话对象</legend><div id="dm-agent-options" class="agent-options"></div></fieldset><div class="dialog-actions"><button type="button" class="secondary" data-close="dm-dialog">取消</button><button class="primary" type="submit">开始对话</button></div></form></dialog>
+  <div id="toast" class="toast"></div>
+  <!-- D3 v7 (ISC licence), vendored because this server has no outbound fetch. -->
+  <script src="/vendor/d3.v7.min.js"></script>
+  <script src="/app.js"></script>
+  <script src="/local-agent.js"></script>
+</body>
+</html>

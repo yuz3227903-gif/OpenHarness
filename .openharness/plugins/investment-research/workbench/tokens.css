@@ -1,0 +1,41 @@
+:root{
+  --brand:#C8102E;
+  --brand-dark:#76091F;
+  --brand-hover:#A30C25;
+  --rail-bg:#F6C5CF;
+  --brand-soft:#FDE8ED;
+  --brand-softer:#FFF7F9;
+  --surface:#FFFFFF;
+  --surface-muted:#FBF8F9;
+  --text:#171313;
+  --muted:#746B6D;
+  --border:#111111;
+  --divider:#DDD5D7;
+  --danger:#A30C25;
+  --success:#477A67;
+  --warning:#9A6810;
+  --hard-shadow:4px 4px 0 #111111;
+  --rail-width:64px;
+  --sidebar-width:240px;
+  --drawer-width:320px;
+  --header-height:62px;
+  --tabs-height:44px;
+  --rail-button:44px;
+  --rail-icon:22px;
+  --font-ui:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--surface);color:var(--text);font:14px/1.5 var(--font-ui)}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid rgba(200,16,46,.28);outline-offset:2px}
+[hidden]{display:none!important}
+.icon-sprite{position:absolute;width:0;height:0;overflow:hidden}
+.icon{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-.14em}
+.muted{color:var(--muted)}
+.primary,.send{border:2px solid var(--brand);background:var(--brand);color:#fff;font-weight:700;padding:8px 14px}
+.primary:hover,.send:hover{background:var(--brand-dark);border-color:var(--brand-dark)}
+.secondary,.toolbar-btn{border:2px solid var(--divider);background:var(--surface);padding:8px 13px}
+.secondary:hover,.toolbar-btn:hover{border-color:var(--border);box-shadow:2px 2px 0 var(--border)}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}

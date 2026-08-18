@@ -39,6 +39,31 @@ async def test_web_fetch_tool_reads_html(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_tool_rejects_pdf_before_decoding_body(tmp_path, monkeypatch):
+    async def fake_fetch(url: str, **_: object) -> httpx.Response:
+        request = httpx.Request("GET", url)
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7 binary payload that must not enter model context",
+            request=request,
+        )
+
+    monkeypatch.setitem(WebFetchTool.execute.__globals__, "fetch_public_http_response", fake_fetch)
+
+    tool = WebFetchTool()
+    result = await tool.execute(
+        WebFetchToolInput(url="https://example.com/report.pdf"),
+        ToolExecutionContext(cwd=tmp_path),
+    )
+
+    assert result.is_error is True
+    assert "refused non-text content" in result.output
+    assert "%PDF" not in result.output
+    assert result.metadata["reason"] == "non_text_content"
+
+
+@pytest.mark.asyncio
 async def test_web_search_tool_reads_results(tmp_path, monkeypatch):
     async def fake_fetch(url: str, **kwargs: object) -> httpx.Response:
         query = (kwargs.get("params") or {}).get("q", "")

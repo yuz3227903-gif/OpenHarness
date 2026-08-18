@@ -1,0 +1,404 @@
+{
+  "$defs": {
+    "CatalystEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_metrics": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Affected Metrics",
+          "type": "array"
+        },
+        "announced_at": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Announced At"
+        },
+        "catalyst_id": {
+          "pattern": "^CAT-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Catalyst Id",
+          "type": "string"
+        },
+        "confidence_basis": {
+          "minLength": 1,
+          "title": "Confidence Basis",
+          "type": "string"
+        },
+        "direction": {
+          "enum": [
+            "positive",
+            "negative",
+            "mixed",
+            "uncertain"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "event_type": {
+          "minLength": 1,
+          "title": "Event Type",
+          "type": "string"
+        },
+        "evidence_class": {
+          "enum": [
+            "disclosed_fact",
+            "public_report",
+            "market_expectation",
+            "analysis_inference",
+            "speculation"
+          ],
+          "title": "Evidence Class",
+          "type": "string"
+        },
+        "expected_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Date"
+        },
+        "expected_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DateRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "failure_signals": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Failure Signals",
+          "type": "array"
+        },
+        "related_fact_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Related Fact Ids",
+          "type": "array"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "transmission_path": {
+          "minLength": 1,
+          "title": "Transmission Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "catalyst_id",
+        "title",
+        "event_type",
+        "evidence_class",
+        "confidence_basis",
+        "transmission_path",
+        "direction"
+      ],
+      "title": "CatalystEvent",
+      "type": "object"
+    },
+    "DateRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end_date": {
+          "format": "date",
+          "title": "End Date",
+          "type": "string"
+        },
+        "start_date": {
+          "format": "date",
+          "title": "Start Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_date",
+        "end_date"
+      ],
+      "title": "DateRange",
+      "type": "object"
+    },
+    "HandoffRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "request": {
+          "minLength": 1,
+          "title": "Request",
+          "type": "string"
+        },
+        "target_agent_id": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Target Agent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_agent_id",
+        "request"
+      ],
+      "title": "HandoffRequest",
+      "type": "object"
+    },
+    "LogicCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "counter_evidence_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Counter Evidence Ids",
+          "type": "array"
+        },
+        "falsification_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Falsification Conditions",
+          "type": "array"
+        },
+        "logic_id": {
+          "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Logic Id",
+          "type": "string"
+        },
+        "mechanism": {
+          "minLength": 1,
+          "title": "Mechanism",
+          "type": "string"
+        },
+        "submitted_by": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Submitted By",
+          "type": "string"
+        },
+        "supporting_fact_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Supporting Fact Ids",
+          "type": "array"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "tracking_indicators": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Tracking Indicators",
+          "type": "array"
+        }
+      },
+      "required": [
+        "logic_id",
+        "title",
+        "mechanism",
+        "supporting_fact_ids",
+        "falsification_conditions",
+        "tracking_indicators",
+        "submitted_by"
+      ],
+      "title": "LogicCandidate",
+      "type": "object"
+    },
+    "UnverifiedItem": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "minLength": 1,
+          "title": "Item",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Evidence"
+        }
+      },
+      "required": [
+        "item",
+        "reason"
+      ],
+      "title": "UnverifiedItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "blocking_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocking Reasons",
+      "type": "array"
+    },
+    "catalyst_window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DateRange"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "completed_scope": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Completed Scope",
+      "type": "array"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/CatalystEvent"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "evidence_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "handoff_requests": {
+      "items": {
+        "$ref": "#/$defs/HandoffRequest"
+      },
+      "title": "Handoff Requests",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "logic_candidates": {
+      "items": {
+        "$ref": "#/$defs/LogicCandidate"
+      },
+      "title": "Logic Candidates",
+      "type": "array"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "blocked",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "unverified_events": {
+      "items": {
+        "$ref": "#/$defs/UnverifiedItem"
+      },
+      "title": "Unverified Events",
+      "type": "array"
+    },
+    "unverified_items": {
+      "items": {
+        "$ref": "#/$defs/UnverifiedItem"
+      },
+      "title": "Unverified Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "status",
+    "completed_scope",
+    "evidence_refs",
+    "unverified_items",
+    "limitations",
+    "handoff_requests",
+    "blocking_reasons"
+  ],
+  "title": "MarketCatalystResult",
+  "type": "object"
+}

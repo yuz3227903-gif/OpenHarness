@@ -1,0 +1,563 @@
+{
+  "$defs": {
+    "AssumptionChallenge": {
+      "additionalProperties": false,
+      "properties": {
+        "alternative_explanation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alternative Explanation"
+        },
+        "counter_evidence_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Counter Evidence Ids",
+          "type": "array"
+        },
+        "critical_assumption": {
+          "minLength": 1,
+          "title": "Critical Assumption",
+          "type": "string"
+        },
+        "logic_id": {
+          "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Logic Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "logic_id",
+        "critical_assumption"
+      ],
+      "title": "AssumptionChallenge",
+      "type": "object"
+    },
+    "ConflictCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "fact_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 2,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "topic": {
+          "minLength": 1,
+          "title": "Topic",
+          "type": "string"
+        }
+      },
+      "required": [
+        "topic",
+        "fact_ids",
+        "description",
+        "severity"
+      ],
+      "title": "ConflictCandidate",
+      "type": "object"
+    },
+    "FinancialFact": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "fact_id": {
+          "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "metric_name": {
+          "minLength": 1,
+          "title": "Metric Name",
+          "type": "string"
+        },
+        "period": {
+          "minLength": 1,
+          "title": "Period",
+          "type": "string"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "statement_class": {
+          "default": "disclosed_fact",
+          "enum": [
+            "disclosed_fact",
+            "public_report",
+            "market_expectation",
+            "analysis_inference",
+            "speculation"
+          ],
+          "title": "Statement Class",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "fact_id",
+        "metric_name",
+        "value",
+        "period",
+        "source_ids"
+      ],
+      "title": "FinancialFact",
+      "type": "object"
+    },
+    "HandoffRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "request": {
+          "minLength": 1,
+          "title": "Request",
+          "type": "string"
+        },
+        "target_agent_id": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Target Agent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_agent_id",
+        "request"
+      ],
+      "title": "HandoffRequest",
+      "type": "object"
+    },
+    "OperatingFact": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_id": {
+          "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "statement": {
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "statement_class": {
+          "default": "disclosed_fact",
+          "enum": [
+            "disclosed_fact",
+            "public_report",
+            "market_expectation",
+            "analysis_inference",
+            "speculation"
+          ],
+          "title": "Statement Class",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "statement",
+        "source_ids"
+      ],
+      "title": "OperatingFact",
+      "type": "object"
+    },
+    "RiskItem": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_logic_ids": {
+          "items": {
+            "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Affected Logic Ids",
+          "type": "array"
+        },
+        "falsification_indicators": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Falsification Indicators",
+          "type": "array"
+        },
+        "impact_path": {
+          "minLength": 1,
+          "title": "Impact Path",
+          "type": "string"
+        },
+        "monitoring_plan": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Monitoring Plan",
+          "type": "array"
+        },
+        "probability_basis": {
+          "minLength": 1,
+          "title": "Probability Basis",
+          "type": "string"
+        },
+        "risk_id": {
+          "pattern": "^RISK-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Risk Id",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "time_window": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time Window"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "trigger_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Trigger Conditions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "risk_id",
+        "title",
+        "trigger_conditions",
+        "impact_path",
+        "severity",
+        "probability_basis"
+      ],
+      "title": "RiskItem",
+      "type": "object"
+    },
+    "UnverifiedItem": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "minLength": 1,
+          "title": "Item",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Evidence"
+        }
+      },
+      "required": [
+        "item",
+        "reason"
+      ],
+      "title": "UnverifiedItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "assumption_matrix": {
+      "items": {
+        "$ref": "#/$defs/AssumptionChallenge"
+      },
+      "title": "Assumption Matrix",
+      "type": "array"
+    },
+    "blocking_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocking Reasons",
+      "type": "array"
+    },
+    "challenged_logic_ids": {
+      "items": {
+        "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Challenged Logic Ids",
+      "type": "array"
+    },
+    "completed_scope": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Completed Scope",
+      "type": "array"
+    },
+    "conflict_candidates": {
+      "items": {
+        "$ref": "#/$defs/ConflictCandidate"
+      },
+      "title": "Conflict Candidates",
+      "type": "array"
+    },
+    "counter_evidence": {
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/FinancialFact"
+          },
+          {
+            "$ref": "#/$defs/OperatingFact"
+          }
+        ]
+      },
+      "title": "Counter Evidence",
+      "type": "array"
+    },
+    "evidence_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "falsification_indicators": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Falsification Indicators",
+      "type": "array"
+    },
+    "handoff_requests": {
+      "items": {
+        "$ref": "#/$defs/HandoffRequest"
+      },
+      "title": "Handoff Requests",
+      "type": "array"
+    },
+    "impact_paths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Impact Paths",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "monitoring_plan": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Monitoring Plan",
+      "type": "array"
+    },
+    "probability_basis": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Probability Basis",
+      "type": "array"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "risk_items": {
+      "items": {
+        "$ref": "#/$defs/RiskItem"
+      },
+      "title": "Risk Items",
+      "type": "array"
+    },
+    "severity": {
+      "items": {
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "type": "string"
+      },
+      "title": "Severity",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "blocked",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "trigger_conditions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Trigger Conditions",
+      "type": "array"
+    },
+    "unverified_items": {
+      "items": {
+        "$ref": "#/$defs/UnverifiedItem"
+      },
+      "title": "Unverified Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "status",
+    "completed_scope",
+    "evidence_refs",
+    "unverified_items",
+    "limitations",
+    "handoff_requests",
+    "blocking_reasons"
+  ],
+  "title": "RiskResult",
+  "type": "object"
+}

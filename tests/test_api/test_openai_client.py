@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import json
+from types import SimpleNamespace
 
 import httpx
 
@@ -252,6 +255,44 @@ class _FakeOpenAIClient:
         self.chat = _FakeChat()
 
 
+class _EmptyStreamingCompletion:
+    """A provider stream that closes with a choice but no usable content."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("stream"):
+            async def _stream():
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content=None, reasoning_content=None, tool_calls=None),
+                            finish_reason="stop",
+                        )
+                    ],
+                    usage=None,
+                )
+
+            return _stream()
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content='{"status":"partial"}', tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=13, completion_tokens=4),
+        )
+
+
+class _EmptyStreamingOpenAIClient:
+    def __init__(self) -> None:
+        self.completions = _EmptyStreamingCompletion()
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
 @pytest.mark.asyncio
 async def test_openai_client_uses_full_base_url_path_for_requests():
     seen_urls: list[str] = []
@@ -289,6 +330,25 @@ async def test_openai_client_uses_full_base_url_path_for_requests():
     await http_client.aclose()
 
 
+@pytest.mark.asyncio
+async def test_openai_client_recovers_empty_stream_with_non_streaming_completion():
+    client = OpenAICompatibleClient(api_key="test-key")
+    fake_sdk = _EmptyStreamingOpenAIClient()
+    client._client = fake_sdk
+
+    request = ApiMessageRequest(
+        model="deepseek-v4-flash",
+        messages=[ConversationMessage.from_user_text("Return one JSON object")],
+    )
+    events = [event async for event in client.stream_message(request)]
+
+    assert events[-1].message.text == '{"status":"partial"}'
+    assert len(fake_sdk.completions.calls) == 2
+    assert fake_sdk.completions.calls[0]["stream"] is True
+    assert fake_sdk.completions.calls[1]["stream"] is False
+    assert "stream_options" not in fake_sdk.completions.calls[1]
+
+
 def test_openai_client_init_normalizes_base_url(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -313,6 +373,21 @@ def test_openai_client_init_passes_timeout(monkeypatch):
     OpenAICompatibleClient(api_key="test-key", timeout=45.0)
 
     assert captured["timeout"] == 45.0
+
+
+def test_openai_client_does_not_inherit_shell_proxy_by_default(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _StubAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openharness.api.openai_client.AsyncOpenAI", _StubAsyncOpenAI)
+    OpenAICompatibleClient(api_key="test-key")
+
+    http_client = captured["http_client"]
+    assert http_client._trust_env is False
+    asyncio.run(http_client.aclose())
 
 
 def test_openai_client_uses_bearer_authorization_header():

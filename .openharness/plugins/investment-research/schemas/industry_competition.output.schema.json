@@ -1,0 +1,576 @@
+{
+  "$defs": {
+    "ComparisonMetricDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "formula_or_definition": {
+          "minLength": 1,
+          "title": "Formula Or Definition",
+          "type": "string"
+        },
+        "metric_name": {
+          "minLength": 1,
+          "title": "Metric Name",
+          "type": "string"
+        },
+        "period": {
+          "minLength": 1,
+          "title": "Period",
+          "type": "string"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        }
+      },
+      "required": [
+        "metric_name",
+        "formula_or_definition",
+        "period"
+      ],
+      "title": "ComparisonMetricDefinition",
+      "type": "object"
+    },
+    "CompetitorCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "company_name": {
+          "minLength": 1,
+          "title": "Company Name",
+          "type": "string"
+        },
+        "comparability_limits": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Comparability Limits",
+          "type": "array"
+        },
+        "exchange": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exchange"
+        },
+        "selection_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selection Reasons",
+          "type": "array"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "ticker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ticker"
+        }
+      },
+      "required": [
+        "company_name"
+      ],
+      "title": "CompetitorCandidate",
+      "type": "object"
+    },
+    "CompetitorChangeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "current_competitor": {
+          "minLength": 1,
+          "title": "Current Competitor",
+          "type": "string"
+        },
+        "proposed_competitor": {
+          "$ref": "#/$defs/CompetitorCandidate"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "current_competitor",
+        "proposed_competitor",
+        "reason"
+      ],
+      "title": "CompetitorChangeRequest",
+      "type": "object"
+    },
+    "HandoffRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "request": {
+          "minLength": 1,
+          "title": "Request",
+          "type": "string"
+        },
+        "target_agent_id": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Target Agent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_agent_id",
+        "request"
+      ],
+      "title": "HandoffRequest",
+      "type": "object"
+    },
+    "LogicCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "counter_evidence_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Counter Evidence Ids",
+          "type": "array"
+        },
+        "falsification_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Falsification Conditions",
+          "type": "array"
+        },
+        "logic_id": {
+          "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Logic Id",
+          "type": "string"
+        },
+        "mechanism": {
+          "minLength": 1,
+          "title": "Mechanism",
+          "type": "string"
+        },
+        "submitted_by": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Submitted By",
+          "type": "string"
+        },
+        "supporting_fact_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Supporting Fact Ids",
+          "type": "array"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "tracking_indicators": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Tracking Indicators",
+          "type": "array"
+        }
+      },
+      "required": [
+        "logic_id",
+        "title",
+        "mechanism",
+        "supporting_fact_ids",
+        "falsification_conditions",
+        "tracking_indicators",
+        "submitted_by"
+      ],
+      "title": "LogicCandidate",
+      "type": "object"
+    },
+    "NotComparableField": {
+      "additionalProperties": false,
+      "properties": {
+        "companies": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Companies",
+          "type": "array"
+        },
+        "metric_name": {
+          "minLength": 1,
+          "title": "Metric Name",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric_name",
+        "companies",
+        "reason"
+      ],
+      "title": "NotComparableField",
+      "type": "object"
+    },
+    "PeerComparisonRow": {
+      "additionalProperties": false,
+      "properties": {
+        "company_name": {
+          "minLength": 1,
+          "title": "Company Name",
+          "type": "string"
+        },
+        "exchange": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exchange"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "ticker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ticker"
+        },
+        "values": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "object"
+        }
+      },
+      "required": [
+        "company_name",
+        "values"
+      ],
+      "title": "PeerComparisonRow",
+      "type": "object"
+    },
+    "UnverifiedItem": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "minLength": 1,
+          "title": "Item",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Evidence"
+        }
+      },
+      "required": [
+        "item",
+        "reason"
+      ],
+      "title": "UnverifiedItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "blocking_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocking Reasons",
+      "type": "array"
+    },
+    "comparison_dictionary": {
+      "items": {
+        "$ref": "#/$defs/ComparisonMetricDefinition"
+      },
+      "title": "Comparison Dictionary",
+      "type": "array"
+    },
+    "competition_structure": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Competition Structure"
+    },
+    "competitor_change_request": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CompetitorChangeRequest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "completed_scope": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Completed Scope",
+      "type": "array"
+    },
+    "evidence_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "handoff_requests": {
+      "items": {
+        "$ref": "#/$defs/HandoffRequest"
+      },
+      "title": "Handoff Requests",
+      "type": "array"
+    },
+    "industry_definition": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Industry Definition"
+    },
+    "industry_drivers": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Industry Drivers",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "logic_candidates": {
+      "items": {
+        "$ref": "#/$defs/LogicCandidate"
+      },
+      "title": "Logic Candidates",
+      "type": "array"
+    },
+    "market_scope": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Market Scope"
+    },
+    "not_comparable_fields": {
+      "items": {
+        "$ref": "#/$defs/NotComparableField"
+      },
+      "title": "Not Comparable Fields",
+      "type": "array"
+    },
+    "peer_comparison": {
+      "items": {
+        "$ref": "#/$defs/PeerComparisonRow"
+      },
+      "title": "Peer Comparison",
+      "type": "array"
+    },
+    "policy_and_value_chain": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Policy And Value Chain",
+      "type": "array"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "relative_strengths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Relative Strengths",
+      "type": "array"
+    },
+    "relative_weaknesses": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Relative Weaknesses",
+      "type": "array"
+    },
+    "source_limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Limitations",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "blocked",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "unverified_items": {
+      "items": {
+        "$ref": "#/$defs/UnverifiedItem"
+      },
+      "title": "Unverified Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "status",
+    "completed_scope",
+    "evidence_refs",
+    "unverified_items",
+    "limitations",
+    "handoff_requests",
+    "blocking_reasons"
+  ],
+  "title": "IndustryCompetitionResult",
+  "type": "object"
+}

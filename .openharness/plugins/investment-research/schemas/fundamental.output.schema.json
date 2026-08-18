@@ -1,0 +1,611 @@
+{
+  "$defs": {
+    "CalculatedMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "formula": {
+          "minLength": 1,
+          "title": "Formula",
+          "type": "string"
+        },
+        "inputs": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "title": "Inputs",
+          "type": "object"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "result": {
+          "title": "Result",
+          "type": "number"
+        },
+        "supporting_fact_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Supporting Fact Ids",
+          "type": "array"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        }
+      },
+      "required": [
+        "name",
+        "formula",
+        "inputs",
+        "result"
+      ],
+      "title": "CalculatedMetric",
+      "type": "object"
+    },
+    "FinancialFact": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "fact_id": {
+          "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "metric_name": {
+          "minLength": 1,
+          "title": "Metric Name",
+          "type": "string"
+        },
+        "period": {
+          "minLength": 1,
+          "title": "Period",
+          "type": "string"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "statement_class": {
+          "default": "disclosed_fact",
+          "enum": [
+            "disclosed_fact",
+            "public_report",
+            "market_expectation",
+            "analysis_inference",
+            "speculation"
+          ],
+          "title": "Statement Class",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "fact_id",
+        "metric_name",
+        "value",
+        "period",
+        "source_ids"
+      ],
+      "title": "FinancialFact",
+      "type": "object"
+    },
+    "HandoffRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "request": {
+          "minLength": 1,
+          "title": "Request",
+          "type": "string"
+        },
+        "target_agent_id": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Target Agent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_agent_id",
+        "request"
+      ],
+      "title": "HandoffRequest",
+      "type": "object"
+    },
+    "LogicCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "counter_evidence_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Counter Evidence Ids",
+          "type": "array"
+        },
+        "falsification_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Falsification Conditions",
+          "type": "array"
+        },
+        "logic_id": {
+          "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Logic Id",
+          "type": "string"
+        },
+        "mechanism": {
+          "minLength": 1,
+          "title": "Mechanism",
+          "type": "string"
+        },
+        "submitted_by": {
+          "enum": [
+            "planner",
+            "fundamental",
+            "industry_competition",
+            "market_catalyst",
+            "risk",
+            "reviewer_arbiter",
+            "report_writer"
+          ],
+          "title": "Submitted By",
+          "type": "string"
+        },
+        "supporting_fact_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Supporting Fact Ids",
+          "type": "array"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "tracking_indicators": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Tracking Indicators",
+          "type": "array"
+        }
+      },
+      "required": [
+        "logic_id",
+        "title",
+        "mechanism",
+        "supporting_fact_ids",
+        "falsification_conditions",
+        "tracking_indicators",
+        "submitted_by"
+      ],
+      "title": "LogicCandidate",
+      "type": "object"
+    },
+    "ManagementStatement": {
+      "additionalProperties": false,
+      "properties": {
+        "corroborating_fact_ids": {
+          "items": {
+            "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "title": "Corroborating Fact Ids",
+          "type": "array"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "statement": {
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "source_ids"
+      ],
+      "title": "ManagementStatement",
+      "type": "object"
+    },
+    "OperatingFact": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_id": {
+          "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^S-[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "statement": {
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "statement_class": {
+          "default": "disclosed_fact",
+          "enum": [
+            "disclosed_fact",
+            "public_report",
+            "market_expectation",
+            "analysis_inference",
+            "speculation"
+          ],
+          "title": "Statement Class",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "statement",
+        "source_ids"
+      ],
+      "title": "OperatingFact",
+      "type": "object"
+    },
+    "PeriodComparison": {
+      "additionalProperties": false,
+      "properties": {
+        "absolute_change": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Absolute Change"
+        },
+        "comparison_fact_id": {
+          "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Comparison Fact Id",
+          "type": "string"
+        },
+        "current_fact_id": {
+          "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Current Fact Id",
+          "type": "string"
+        },
+        "metric_name": {
+          "minLength": 1,
+          "title": "Metric Name",
+          "type": "string"
+        },
+        "percentage_change": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Percentage Change"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        }
+      },
+      "required": [
+        "metric_name",
+        "current_fact_id",
+        "comparison_fact_id"
+      ],
+      "title": "PeriodComparison",
+      "type": "object"
+    },
+    "UnverifiedItem": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "minLength": 1,
+          "title": "Item",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Evidence"
+        }
+      },
+      "required": [
+        "item",
+        "reason"
+      ],
+      "title": "UnverifiedItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "blocking_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocking Reasons",
+      "type": "array"
+    },
+    "calculated_metrics": {
+      "items": {
+        "$ref": "#/$defs/CalculatedMetric"
+      },
+      "title": "Calculated Metrics",
+      "type": "array"
+    },
+    "change_drivers": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Change Drivers",
+      "type": "array"
+    },
+    "completed_scope": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Completed Scope",
+      "type": "array"
+    },
+    "cross_review_questions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Cross Review Questions",
+      "type": "array"
+    },
+    "earnings_quality_assessment": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Earnings Quality Assessment"
+    },
+    "evidence_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "financial_facts": {
+      "items": {
+        "$ref": "#/$defs/FinancialFact"
+      },
+      "title": "Financial Facts",
+      "type": "array"
+    },
+    "handoff_requests": {
+      "items": {
+        "$ref": "#/$defs/HandoffRequest"
+      },
+      "title": "Handoff Requests",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "logic_candidates": {
+      "items": {
+        "$ref": "#/$defs/LogicCandidate"
+      },
+      "title": "Logic Candidates",
+      "type": "array"
+    },
+    "management_statements": {
+      "items": {
+        "$ref": "#/$defs/ManagementStatement"
+      },
+      "title": "Management Statements",
+      "type": "array"
+    },
+    "operating_facts": {
+      "items": {
+        "$ref": "#/$defs/OperatingFact"
+      },
+      "title": "Operating Facts",
+      "type": "array"
+    },
+    "period_comparisons": {
+      "items": {
+        "$ref": "#/$defs/PeriodComparison"
+      },
+      "title": "Period Comparisons",
+      "type": "array"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scope"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "blocked",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "unverified_items": {
+      "items": {
+        "$ref": "#/$defs/UnverifiedItem"
+      },
+      "title": "Unverified Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "status",
+    "completed_scope",
+    "evidence_refs",
+    "unverified_items",
+    "limitations",
+    "handoff_requests",
+    "blocking_reasons"
+  ],
+  "title": "FundamentalResult",
+  "type": "object"
+}

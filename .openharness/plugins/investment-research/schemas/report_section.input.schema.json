@@ -1,0 +1,235 @@
+{
+  "$defs": {
+    "ParameterCardRef": {
+      "additionalProperties": false,
+      "properties": {
+        "parameter_card_id": {
+          "minLength": 1,
+          "title": "Parameter Card Id",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parameter_card_id",
+        "version"
+      ],
+      "title": "ParameterCardRef",
+      "type": "object"
+    },
+    "SupplementRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expected Fields",
+          "type": "array"
+        },
+        "input_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "issue_id": {
+          "pattern": "^ISSUE-[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Issue Id",
+          "type": "string"
+        },
+        "problem_statement": {
+          "minLength": 1,
+          "title": "Problem Statement",
+          "type": "string"
+        },
+        "supplement_round": {
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Supplement Round",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "issue_id",
+        "supplement_round",
+        "problem_statement"
+      ],
+      "title": "SupplementRequest",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One bounded chapter-writing task executed by the existing ReportWriter.",
+  "properties": {
+    "agent_id": {
+      "const": "report_writer",
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "allowed_evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Evidence Ids",
+      "type": "array"
+    },
+    "approved_catalyst_ids": {
+      "items": {
+        "pattern": "^CAT-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Approved Catalyst Ids",
+      "type": "array"
+    },
+    "approved_fact_ids": {
+      "items": {
+        "pattern": "^F-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Approved Fact Ids",
+      "type": "array"
+    },
+    "approved_logic_ids": {
+      "items": {
+        "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Approved Logic Ids",
+      "type": "array"
+    },
+    "approved_risk_ids": {
+      "items": {
+        "pattern": "^RISK-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Approved Risk Ids",
+      "type": "array"
+    },
+    "attempt": {
+      "default": 1,
+      "maximum": 2,
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "delivery_mode": {
+      "default": "formal",
+      "enum": [
+        "formal",
+        "provisional"
+      ],
+      "title": "Delivery Mode",
+      "type": "string"
+    },
+    "gate_2_decision_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gate 2 Decision Id"
+    },
+    "input_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Refs",
+      "type": "array"
+    },
+    "objective": {
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "parameter_card": {
+      "$ref": "#/$defs/ParameterCardRef"
+    },
+    "parameter_card_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parameter Card Version"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "review_id": {
+      "pattern": "^REVIEW-[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Review Id",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "section_id": {
+      "enum": [
+        "company_overview",
+        "operating_changes",
+        "investment_logics",
+        "peer_comparison",
+        "catalysts",
+        "risks"
+      ],
+      "title": "Section Id",
+      "type": "string"
+    },
+    "selected_logic_ids": {
+      "items": {
+        "pattern": "^L-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Selected Logic Ids",
+      "type": "array"
+    },
+    "supplement": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SupplementRequest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "task_id": {
+      "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "task_id",
+    "objective",
+    "agent_id",
+    "parameter_card",
+    "review_id",
+    "section_id"
+  ],
+  "title": "ReportSectionRequest",
+  "type": "object"
+}

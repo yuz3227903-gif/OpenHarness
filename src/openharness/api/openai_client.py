@@ -10,6 +10,7 @@ import re
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from openai import AsyncOpenAI
 
 from openharness.api.client import (
@@ -268,6 +269,12 @@ class OpenAICompatibleClient:
         kwargs: dict[str, Any] = {
             "api_key": api_key,
             "default_headers": {"Authorization": f"Bearer {api_key}"},
+            # Do not silently inherit HTTP(S)_PROXY from the shell. A stale
+            # local proxy is otherwise indistinguishable from a provider
+            # outage and prevents every Agent from reaching its model. Users
+            # who require a corporate proxy should configure it explicitly at
+            # the application/network layer instead.
+            "http_client": httpx.AsyncClient(trust_env=False),
         }
         normalized_base_url = _normalize_openai_base_url(base_url)
         if normalized_base_url:
@@ -338,6 +345,7 @@ class OpenAICompatibleClient:
         collected_tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
         usage_data: dict[str, int] = {}
+        saw_choice = False
         # Buffer to strip inline <think>…</think> blocks across streaming chunks.
         _think_buf = ""
 
@@ -352,6 +360,7 @@ class OpenAICompatibleClient:
                     }
                 continue
 
+            saw_choice = True
             delta = chunk.choices[0].delta
             chunk_finish = chunk.choices[0].finish_reason
 
@@ -416,6 +425,34 @@ class OpenAICompatibleClient:
                 name=tc["name"],
                 input=args,
             ))
+
+        # Some OpenAI-compatible providers occasionally close a streaming
+        # response after emitting a completion choice but before yielding any
+        # visible text or tool call. It is not a valid Agent turn. Retry this
+        # *one response* without streaming so a provider-specific stream
+        # parser hiccup does not turn a completed research task into an empty
+        # assistant message. Do not run this for usage-only streams: those are
+        # normally test/transport artefacts rather than a completed choice.
+        if not content and saw_choice:
+            log.warning("empty streaming completion; retrying once without streaming")
+            fallback_params = dict(params)
+            fallback_params["stream"] = False
+            fallback_params.pop("stream_options", None)
+            response = await self._client.chat.completions.create(**fallback_params)
+            if not getattr(response, "choices", None):
+                raise RequestFailure("Non-streaming fallback returned no completion choices.")
+            fallback_message = _parse_assistant_response(response)
+            fallback_usage = getattr(response, "usage", None)
+            fallback_choice = response.choices[0]
+            yield ApiMessageCompleteEvent(
+                message=fallback_message,
+                usage=UsageSnapshot(
+                    input_tokens=int(getattr(fallback_usage, "prompt_tokens", 0) or 0),
+                    output_tokens=int(getattr(fallback_usage, "completion_tokens", 0) or 0),
+                ),
+                stop_reason=getattr(fallback_choice, "finish_reason", None),
+            )
+            return
 
         final_message = ConversationMessage(role="assistant", content=content)
 

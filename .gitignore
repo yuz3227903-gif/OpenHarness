@@ -10,6 +10,7 @@ build/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-copy/
 .openharness-venv/
 venv/
 env/
@@ -27,9 +28,25 @@ htmlcov/
 # React TUI frontend
 frontend/terminal/node_modules/
 
-# User data (never commit API keys or session data)
-.openharness/
+# User data (never commit API keys or session data).  Keep the repository's
+# reviewed investment-research plugin versioned while ignoring every other
+# project-local OpenHarness file.
+.openharness/*
+!.openharness/secrets/
+.openharness/secrets/*
+!.openharness/plugins/
+.openharness/plugins/*
+!.openharness/plugins/investment-research/
+!.openharness/plugins/investment-research/**
+.openharness/plugins/investment-research/**/__pycache__/
+.openharness/plugins/investment-research/**/*.py[cod]
+pytest-cache-files-*/
+.test-workbench/
 react_tui_smoke.txt
+.superpowers/
+.worktrees/
+tmp/
+.npm-cache/
 
 # OS
 .DS_Store
