@@ -1,289 +1,374 @@
-/* 科技感外观层 —— 仪表盘 / 终端
+/* 科技感外观层 v2 —— HUD / 仪表盘
  *
- * 配色一个不动：所有颜色都取自 tokens.css，只用它们的透明度变体。
- * 改的是"物理属性"而不是色相：
+ * 配色一个字节不动：所有颜色都来自 tokens.css，或是同一支品牌红
+ * #C8102E 的透明度变体。改的全是"物理属性"：
  *
- *   厚描边 → 发丝线 + 内描边      粗重变精密
- *   硬投影 → 贴边辉光            纸片变屏幕
- *   直角   → 四角刻度括号         面板变仪表
- *   比例字 → 等宽 + 表格数字      文本变读数
- *   静止   → 扫描线 + 呼吸        死图变在运行
+ *   厚描边 → 双层发丝线 + 辉光      粗重变精密
+ *   直角   → 切角 + 四角取景括号     方块变器件
+ *   平涂   → 密网格 + 十字准星 + 径向辉光   纸面变屏幕
+ *   实心   → 磨砂半透明层            贴纸变面板玻璃
+ *   比例字 → 等宽大写 + 表格数字      文本变读数
+ *   静止   → 常驻扫描 + 呼吸环        截图变在运行
  *
- * 这一层只覆盖外观，不碰栅格、尺寸和间距，所以随时可以整份删掉回到原样。
- * 加载顺序在最后，靠顺序而不是 !important 取胜。
+ * 只覆盖外观，不动栅格/尺寸/间距。删掉本文件与 index.html 里那一行即回到原样。
  */
 
 :root{
-  /* 读数字体：数据用等宽，正文仍用原来的 UI 字体。中文回退到系统字形。 */
   --font-data:"Cascadia Mono","JetBrains Mono",Consolas,"SF Mono",ui-monospace,
               "Microsoft YaHei UI",monospace;
-  --hair:rgba(200,16,46,.22);        /* 发丝线：品牌红的极淡描边 */
-  --hair-strong:rgba(200,16,46,.42);
-  --glow:0 0 0 1px rgba(200,16,46,.18), 0 8px 22px -12px rgba(118,9,31,.55);
-  --grid:rgba(200,16,46,.075);       /* 底纹网格：要能被余光看到，又不参与阅读 */
-  --scan:rgba(200,16,46,.06);
+  --hair:rgba(200,16,46,.28);
+  --hair-strong:rgba(200,16,46,.55);
+  --grid:rgba(200,16,46,.10);
+  --grid-major:rgba(200,16,46,.18);
+  --scan:rgba(200,16,46,.10);
+  /* 辉光分三层：贴边硬线 + 中距扩散 + 远距晕开，叠起来才像发光而不是阴影 */
+  --glow:0 0 0 1px rgba(200,16,46,.35),0 0 10px -2px rgba(200,16,46,.45),
+         0 10px 26px -14px rgba(118,9,31,.7);
+  --glow-soft:0 0 0 1px rgba(200,16,46,.22),0 0 14px -6px rgba(200,16,46,.5);
+  /* 切角尺寸：所有"器件"共用一个角，形状语言才统一 */
+  --notch:10px;
 }
 
-/* ---------------------------------------------------------------- 底纹
- * 纯白底是"纸"，加一层工程网格 + 极淡扫描带之后才是"屏"。
- * 网格 24px 一格，透明度低到不干扰阅读，只在余光里成立。 */
-.app-shell{border:1px solid var(--hair-strong)}
-/* 网格要画在真正看得见的面上：main-pane 自己是不透明的白，画在 app-shell 上会被它盖住。 */
-.main-pane,.message-list,.task-board,.file-board,.directory-board,.search-board{
-  background:
-    repeating-linear-gradient(0deg,var(--grid) 0 1px,transparent 1px 26px),
-    repeating-linear-gradient(90deg,var(--grid) 0 1px,transparent 1px 26px),
-    var(--surface);
+/* 全局标签体：按钮、页签、分区名一律等宽大写宽字距——仪表铭牌的读法 */
+.pane-tab,.secondary,.toolbar-btn,.primary,.send,.filter-chip,.task-view-toggle button,
+.section-toggle,.board-column header,.file-head,.task-head,.view-header .eyebrow,
+.context-head span,.local-steps li,.detect-hint,.composer-capability{
+  font-family:var(--font-data);
+  letter-spacing:.08em;
+  text-transform:uppercase;
 }
-/* 消息区顶部一点向下的渐隐，像屏幕的辉光边缘 */
-.message-list{
-  background-image:
-    linear-gradient(180deg,var(--scan),transparent 120px),
-    repeating-linear-gradient(0deg,var(--grid) 0 1px,transparent 1px 26px),
-    repeating-linear-gradient(90deg,var(--grid) 0 1px,transparent 1px 26px);
-}
+/* 中文不适合 uppercase，但 letter-spacing 一样成立；这条把中文标签的大写去掉 */
+:lang(zh) .section-toggle,:lang(zh) .board-column header{text-transform:none}
 
-/* 数据读数：编号、时间、计数、体积、状态一律等宽 + 表格数字。
- * 这是整套风格里最起作用的一条——文本一变等宽，界面立刻从聊天软件变成终端。 */
+/* 数据读数层 */
 .message-top time,.comment-top time,.board-card-id,.task-row-title small,
 .file-row span:nth-child(5),.file-row span:nth-child(6),.kv strong,.kv-path,
 .pane-tab b,.section-title b,.board-chip,.tool-tag,.runtime-badge,
 .detect-copy small,.activity code,.activity-output,.approval code,
 .local-intro small,.member-card-copy span,.agent-status-label,
-.attachment-file small,.search-result-meta,.graph-inline-stats{
+.attachment-file small,.search-result-meta,.graph-inline-stats,
+.workspace-head span,.channel-identity p,.mention,.task-status,.file-source{
   font-family:var(--font-data);
   font-variant-numeric:tabular-nums;
-  letter-spacing:.01em;
+  letter-spacing:.03em;
 }
-.board-card-id,.eyebrow,.board-chip,.pane-tab b{letter-spacing:.06em}
+.board-card-id,.eyebrow,.board-chip,.pane-tab b{letter-spacing:.1em}
 
-/* ------------------------------------------------------------------ 左栏
- * 导航栏做成 HUD：一条贯穿的发丝线做刻度轨，选中项左侧亮起而不是弹出投影。 */
+/* ================================================================= 外框
+ * 整个应用套一层双线取景框，四角有定位括号——这是"仪器"最直接的signature。 */
+.app-shell{
+  position:relative;
+  border:1px solid var(--hair-strong);
+  box-shadow:inset 0 0 0 3px #fff,inset 0 0 0 4px rgba(200,16,46,.16);
+}
+.app-shell::before,.app-shell::after{
+  content:"";position:fixed;width:22px;height:22px;z-index:200;pointer-events:none;
+}
+.app-shell::before{
+  left:3px;top:3px;
+  border-left:2px solid var(--brand);border-top:2px solid var(--brand);
+}
+.app-shell::after{
+  right:3px;bottom:3px;
+  border-right:2px solid var(--brand);border-bottom:2px solid var(--brand);
+}
+
+/* ================================================================= 底纹
+ * 密网格 + 每 4 格一条主线 + 右上角径向辉光。画在真正可见的面上，
+ * 画在 app-shell 上会被不透明的 main-pane 整个盖住。 */
+/* 点阵而不是线网：横线会从正文里穿过去，读起来累；点阵一样是 HUD 语汇，
+ * 但它落在字与字的间隙里，不参与阅读。主线只保留稀疏的一层做分区。 */
+.main-pane,.task-board,.file-board,.directory-board,.search-board,.graph-board{
+  position:relative;
+  background:
+    radial-gradient(120% 90% at 100% 0%,rgba(200,16,46,.10),transparent 55%),
+    repeating-linear-gradient(0deg,var(--grid-major) 0 1px,transparent 1px 130px),
+    repeating-linear-gradient(90deg,var(--grid-major) 0 1px,transparent 1px 130px),
+    radial-gradient(circle,var(--grid) .9px,transparent 1px),
+    var(--surface);
+  background-size:auto,auto,auto,22px 22px,auto;
+}
+.message-list{
+  background:radial-gradient(circle,var(--grid) .9px,transparent 1px) 0 0/22px 22px,transparent;
+}
+/* 主区四角取景括号（四个都画，不是两个） */
+.main-pane::before,.main-pane::after{
+  content:"";position:absolute;width:16px;height:16px;z-index:6;pointer-events:none;
+  border:0;
+}
+.main-pane::before{
+  left:0;top:0;
+  border-left:2px solid var(--brand);border-top:2px solid var(--brand);
+  box-shadow:0 0 12px -2px rgba(200,16,46,.6);
+}
+.main-pane::after{
+  right:0;bottom:0;
+  border-right:2px solid var(--brand);border-bottom:2px solid var(--brand);
+  box-shadow:0 0 12px -2px rgba(200,16,46,.6);
+}
+
+/* ================================================================= 左栏 HUD */
 .rail{
+  position:relative;
   border-right:1px solid var(--hair-strong);
   background:
-    linear-gradient(180deg,rgba(255,255,255,.35),transparent 30%),
+    repeating-linear-gradient(0deg,rgba(255,255,255,.30) 0 1px,transparent 1px 4px),
+    linear-gradient(180deg,rgba(255,255,255,.5),transparent 40%),
     var(--rail-bg);
+}
+/* 贯穿的刻度轨 */
+.rail::after{
+  content:"";position:absolute;right:0;top:0;bottom:0;width:3px;
+  background:repeating-linear-gradient(180deg,var(--hair) 0 2px,transparent 2px 10px);
+  pointer-events:none;
 }
 .brand-mark{
   border:1px solid var(--brand-dark);
-  box-shadow:var(--glow),inset 0 0 0 1px rgba(255,255,255,.28);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%);
+  box-shadow:var(--glow),inset 0 0 0 1px rgba(255,255,255,.35);
 }
-.rail-btn{border:1px solid transparent;transition:background .15s,box-shadow .15s}
-.rail-btn:hover{border-color:var(--hair);background:rgba(255,255,255,.6)}
+.rail-btn{border:1px solid transparent;transition:background .15s,box-shadow .18s,border-color .15s}
+.rail-btn:hover{border-color:var(--hair);background:rgba(255,255,255,.7);box-shadow:var(--glow-soft)}
 .rail-btn.active{
-  border-color:var(--hair-strong);background:#fff;
-  box-shadow:var(--glow);
+  border-color:var(--brand);background:#fff;box-shadow:var(--glow);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%);
 }
-/* 选中项左边的亮条：像仪表上的当前档位 */
 .rail-btn.active::after{
   content:"";position:absolute;left:-12px;top:50%;transform:translateY(-50%);
-  width:3px;height:22px;background:var(--brand);
+  width:3px;height:24px;background:var(--brand);box-shadow:0 0 10px 1px rgba(200,16,46,.75);
 }
 .rail-label{
-  border:1px solid var(--hair-strong);box-shadow:var(--glow);
-  font-family:var(--font-data);letter-spacing:.04em;
+  border:1px solid var(--brand);box-shadow:var(--glow);
+  font-family:var(--font-data);letter-spacing:.08em;text-transform:uppercase;
 }
 
-/* ------------------------------------------------------------------ 侧栏 */
-.sidebar{border-right:1px solid var(--hair-strong)}
-.workspace-head{
-  border-bottom:1px solid var(--hair);
-  background:linear-gradient(180deg,#fff,var(--brand-softer));
+/* ================================================================= 侧栏 */
+.sidebar{
+  border-right:1px solid var(--hair-strong);
+  background:radial-gradient(circle,rgba(200,16,46,.09) .9px,transparent 1px) 0 0/22px 22px,
+             var(--brand-softer);
 }
-/* 分组标题：等宽 + 字距 + 前导刻度线，像面板上的分区铭牌 */
-.section-title{position:relative;letter-spacing:.08em}
-.section-toggle{font-family:var(--font-data);font-size:11px;text-transform:uppercase}
-.workspace-head strong{letter-spacing:.04em}
-.workspace-head span{font-family:var(--font-data);letter-spacing:.04em}
+.workspace-head{
+  border-bottom:1px solid var(--hair-strong);
+  background:linear-gradient(180deg,#fff,var(--brand-soft));
+  box-shadow:0 1px 0 rgba(200,16,46,.12);
+}
+.section-title{letter-spacing:.1em}
+.section-toggle{font-size:11px}
+.section-title b{border:1px solid var(--hair);padding:0 5px;color:var(--brand)}
 .row-wrap.active{
   background:linear-gradient(90deg,var(--brand-soft),transparent);
-  box-shadow:inset 2px 0 0 var(--brand);
+  box-shadow:inset 3px 0 0 var(--brand),0 0 14px -8px rgba(200,16,46,.8);
+}
+.channel:hover,.agent-row:hover{background:linear-gradient(90deg,var(--brand-soft),transparent 80%)}
+
+/* 状态灯：实心点 + 呼吸环 */
+.status-dot{position:relative;box-shadow:0 0 0 1px rgba(255,255,255,.9),0 0 8px currentColor}
+.agent-row[data-status="running"] .status-dot{color:var(--brand)}
+.agent-row[data-status="running"] .status-dot::after{
+  content:"";position:absolute;inset:-4px;border:1px solid var(--brand);border-radius:50%;
+  animation:tech-ring 1.8s ease-out infinite;
+}
+@keyframes tech-ring{
+  0%{transform:scale(.6);opacity:.9}
+  100%{transform:scale(1.9);opacity:0}
 }
 
-/* 状态灯做成有光晕的指示灯，而不是一个实心点 */
-.status-dot{box-shadow:0 0 0 1px rgba(255,255,255,.9),0 0 6px currentColor}
-.agent-row[data-status="running"] .status-dot{color:var(--brand)}
-
-/* ------------------------------------------------------------------ 主区 */
-/* 频道头下沿加一条刻度尺：每 12px 一个刻痕，像仪器面板的量程条 */
+/* ================================================================= 顶栏 */
 .channel-head{
   position:relative;
   border-bottom:1px solid var(--hair-strong);
-  background:linear-gradient(180deg,#fff,var(--brand-softer));
+  background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(253,232,237,.92));
+  backdrop-filter:blur(6px) saturate(1.15);
+  overflow:hidden;
 }
+/* 顶栏常驻一道极慢的扫描：界面始终"通着电" */
+.channel-head::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(100deg,transparent 42%,rgba(200,16,46,.10) 50%,transparent 58%);
+  background-size:260% 100%;
+  animation:tech-scan 7s linear infinite;
+}
+/* 下沿刻度尺 */
 .channel-head::after{
-  content:"";position:absolute;left:0;right:0;bottom:0;height:4px;
-  background:repeating-linear-gradient(90deg,var(--hair) 0 1px,transparent 1px 12px);
-  pointer-events:none;
+  content:"";position:absolute;left:0;right:0;bottom:0;height:5px;pointer-events:none;
+  background:repeating-linear-gradient(90deg,var(--hair-strong) 0 1px,transparent 1px 11px);
 }
-.channel-mark{border:1px solid var(--hair-strong);box-shadow:var(--glow)}
-.channel-title-line h1{letter-spacing:.01em}
-/* 频道副标题当作设备铭牌读 */
-.channel-identity p{font-family:var(--font-data);font-size:11px;letter-spacing:.03em}
-/* 主区四角的定位括号：整块面板变成一台仪器的取景框 */
-.main-pane{position:relative}
-.main-pane::before,.main-pane::after{
-  content:"";position:absolute;width:14px;height:14px;pointer-events:none;z-index:5;
+@keyframes tech-scan{0%{background-position:130% 0}100%{background-position:-130% 0}}
+
+.channel-mark{
+  border:1px solid var(--brand);box-shadow:var(--glow);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%);
 }
-.main-pane::before{left:0;top:0;border-left:2px solid var(--brand);border-top:2px solid var(--brand)}
-.main-pane::after{right:0;bottom:0;border-right:2px solid var(--brand);border-bottom:2px solid var(--brand)}
-.channel-icon-btn,.member-count-btn,.head-actions>#refresh,
-.secondary,.toolbar-btn{
-  border:1px solid var(--hair-strong);transition:box-shadow .15s,border-color .15s;
+.channel-title-line h1{letter-spacing:.02em}
+.channel-identity p{font-size:11px}
+.channel-icon-btn,.member-count-btn,.head-actions>#refresh,.secondary,.toolbar-btn{
+  border:1px solid var(--hair-strong);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%);
+  transition:box-shadow .18s,border-color .15s,background .15s;
 }
 .channel-icon-btn:hover,.member-count-btn:hover,.secondary:hover,.toolbar-btn:hover{
-  border-color:var(--brand);box-shadow:var(--glow);
+  border-color:var(--brand);box-shadow:var(--glow);background:var(--brand-soft);
 }
-.primary,.send{border:1px solid var(--brand);box-shadow:var(--glow)}
+.primary,.send{
+  border:1px solid var(--brand);box-shadow:var(--glow);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%);
+}
 
-/* 运行状态条：顶上一条会走的扫描线，运行中才动 */
+/* 运行条 */
 .run-banner{
   position:relative;border-bottom:1px solid var(--hair);
-  background:linear-gradient(90deg,var(--brand-softer),transparent 60%);
-  font-family:var(--font-data);letter-spacing:.02em;
+  background:linear-gradient(90deg,var(--brand-soft),transparent 65%);
+  font-family:var(--font-data);letter-spacing:.05em;
 }
 .run-banner::before{
-  content:"";position:absolute;left:0;top:0;height:1px;width:100%;
+  content:"";position:absolute;left:0;top:0;height:2px;width:100%;
   background:linear-gradient(90deg,transparent,var(--brand),transparent);
-  opacity:0;
+  box-shadow:0 0 10px 1px rgba(200,16,46,.7);opacity:0;
 }
-.run-banner.running::before{opacity:1;animation:tech-sweep 2.4s linear infinite}
-@keyframes tech-sweep{
-  0%{transform:translateX(-100%)}
-  100%{transform:translateX(100%)}
-}
+.run-banner.running::before{opacity:1;animation:tech-sweep 2.2s linear infinite}
+@keyframes tech-sweep{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
 
-/* 页签：底部一条发丝轨，选中项亮起 */
+/* 页签 */
 .pane-tabs{border-bottom:1px solid var(--hair-strong)}
-.pane-tab{border:1px solid transparent;border-bottom:0;letter-spacing:.02em}
+.pane-tab{border:1px solid transparent;border-bottom:0;font-size:12px}
+.pane-tab:hover{background:var(--brand-soft)}
 .pane-tab.active{
-  border-color:var(--hair-strong);background:#fff;
+  border-color:var(--brand);background:#fff;
+  clip-path:polygon(0 0,100% 0,100% 100%,0 100%);
   box-shadow:0 -2px 0 var(--brand) inset,var(--glow);
 }
-.pane-tab b{border:1px solid var(--hair);background:transparent;color:var(--brand)}
+.pane-tab b{border:1px solid var(--hair-strong);background:transparent;color:var(--brand)}
 
-/* ---------------------------------------------------------------- 消息流
- * 整条时间轴：一条贯穿的竖导轨，每条消息在轨上有自己的刻痕，hover 时刻痕亮起。
- * 这是聊天视图里最能立住"仪表"感的一处——它把对话变成一条可读的日志轨。 */
+/* ================================================================= 消息流 */
 .message-list{position:relative}
 .message-list::before{
   content:"";position:absolute;left:26px;top:0;bottom:0;width:1px;
-  background:linear-gradient(180deg,transparent,var(--hair) 8%,var(--hair) 92%,transparent);
+  background:linear-gradient(180deg,transparent,var(--hair) 6%,var(--hair) 94%,transparent);
   pointer-events:none;
 }
-.message{position:relative;border-bottom:1px solid rgba(200,16,46,.10)}
+.message{position:relative;border-bottom:1px solid rgba(200,16,46,.12)}
 .message::before{
-  content:"";position:absolute;left:-8px;top:22px;width:9px;height:1px;
-  background:var(--hair-strong);transition:background .15s,width .15s;
+  content:"";position:absolute;left:-8px;top:22px;width:10px;height:1px;
+  background:var(--hair-strong);transition:background .15s,width .15s,box-shadow .15s;
 }
-.message:hover::before{background:var(--brand);width:13px}
-/* 发言人这一行前面的引导线，收束到头像上 */
-.message-top strong{letter-spacing:.02em}
-/* 头像切一个角：方块变成"器件"，比圆角更有仪器味，也不动尺寸 */
+.message:hover{background:linear-gradient(90deg,var(--brand-softer),transparent 70%)}
+.message:hover::before{background:var(--brand);width:15px;box-shadow:0 0 8px rgba(200,16,46,.8)}
 .message-avatar,.agent-avatar,.dm-avatar,.member-card-avatar,.comment-avatar{
   clip-path:polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%);
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.4),0 0 10px -3px rgba(200,16,46,.75);
 }
-.message-top time{font-size:11px;opacity:.85}
+.message-top strong{letter-spacing:.02em}
 .mention{
-  padding:0 3px;border-bottom:1px solid var(--hair-strong);
-  font-family:var(--font-data);
+  padding:0 4px;border:1px solid var(--hair);background:rgba(200,16,46,.05);
 }
 
-/* -------------------------------------------------------------- 卡片/面板
- * 四角刻度括号：科技感里最省力也最有效的一个符号。
- * 只画左上和右下两个角，避免四角全画显得吵。 */
-.board-card,.member-card,.context-card,.local-intro,.approval,.detect-row{
-  position:relative;border:1px solid var(--hair-strong);
+/* ================================================================= 卡片
+ * 切角 + 四角括号 + hover 辉光。这是列表视图里最强的一处形状语言。 */
+.board-card,.member-card,.context-card,.local-intro,.approval,.detect-row,.board-column{
+  position:relative;
+  border:1px solid var(--hair-strong);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - var(--notch)),
+                    calc(100% - var(--notch)) 100%,0 100%);
 }
 .board-card::before,.member-card::before,.context-card::before,
 .local-intro::before,.approval::before{
-  content:"";position:absolute;left:-1px;top:-1px;width:9px;height:9px;
+  content:"";position:absolute;left:0;top:0;width:11px;height:11px;pointer-events:none;
   border-left:2px solid var(--brand);border-top:2px solid var(--brand);
-  pointer-events:none;
 }
 .board-card::after,.member-card::after,.context-card::after,
 .local-intro::after,.approval::after{
-  content:"";position:absolute;right:-1px;bottom:-1px;width:9px;height:9px;
-  border-right:2px solid var(--brand);border-bottom:2px solid var(--brand);
-  pointer-events:none;
+  content:"";position:absolute;left:0;bottom:0;width:11px;height:11px;pointer-events:none;
+  border-left:2px solid var(--brand);border-bottom:2px solid var(--brand);
 }
-.board-card:hover,.member-card:hover{box-shadow:var(--glow)}
-.board-column{border:1px solid var(--hair);background:linear-gradient(180deg,#fff,var(--brand-softer))}
-.board-column header{border-bottom:1px solid var(--hair);letter-spacing:.04em}
-.board-chip{border:1px solid var(--hair-strong);background:transparent}
-
-/* 进行中的任务卡：一层缓慢扫描，说明它真的在动。
- * 用背景而不是 ::after —— 那个伪元素是右下角的定位括号，占用了它会让
- * 运行中的卡片少一个角，看起来像渲染坏了。 */
+.board-card:hover,.member-card:hover{box-shadow:var(--glow);border-color:var(--brand)}
+.board-column{background:linear-gradient(180deg,#fff,var(--brand-softer))}
+.board-column header{border-bottom:1px solid var(--hair-strong)}
+.board-chip{border:1px solid var(--hair-strong);background:transparent;color:var(--brand)}
 .board-card[data-status="running"]{
   background-image:linear-gradient(120deg,transparent 40%,var(--scan) 50%,transparent 60%);
   background-size:220% 100%;
   animation:tech-scan 2.8s linear infinite;
 }
-@keyframes tech-scan{0%{background-position:120% 0}100%{background-position:-120% 0}}
 
-/* ---------------------------------------------------------------- 表格 */
-.file-row,.task-row{border-bottom:1px solid rgba(200,16,46,.10)}
+/* ================================================================= 表格 */
+.file-row,.task-row{border-bottom:1px solid rgba(200,16,46,.12)}
 .file-head,.task-head{
-  border-bottom:1px solid var(--hair-strong);
-  background:linear-gradient(180deg,#fff,var(--brand-softer));
-  font-family:var(--font-data);letter-spacing:.06em;text-transform:uppercase;
+  border-bottom:1px solid var(--brand);
+  background:linear-gradient(180deg,#fff,var(--brand-soft));
+  font-size:11px;
 }
 .file-row:not(.file-head):hover,.task-row:not(.task-head):hover{
-  background:var(--brand-softer);box-shadow:inset 2px 0 0 var(--brand);
+  background:var(--brand-softer);box-shadow:inset 3px 0 0 var(--brand);
 }
-.file-source,.task-status{
-  border:1px solid var(--hair-strong);background:transparent;
-  font-family:var(--font-data);letter-spacing:.03em;
-}
+.file-source,.task-status{border:1px solid var(--hair-strong);background:transparent}
 
-/* -------------------------------------------------------------- 输入区 */
-.composer{border-top:1px solid var(--hair-strong);background:linear-gradient(180deg,var(--brand-softer),#fff)}
-.composer-inner{border:1px solid var(--hair-strong);background:#fff;transition:box-shadow .15s,border-color .15s}
+/* ================================================================= 输入区 */
+.composer{
+  border-top:1px solid var(--hair-strong);
+  background:linear-gradient(180deg,rgba(253,232,237,.9),rgba(255,255,255,.95));
+  backdrop-filter:blur(6px);
+}
+.composer-inner{
+  border:1px solid var(--hair-strong);background:rgba(255,255,255,.96);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);
+  transition:box-shadow .18s,border-color .15s;
+}
 .composer-inner:focus-within{border-color:var(--brand);box-shadow:var(--glow)}
-.composer-capability,.composer-hint{font-family:var(--font-data);letter-spacing:.02em}
 .attach-btn{border:1px solid var(--hair-strong)}
 .attach-btn:hover{border-color:var(--brand);box-shadow:var(--glow)}
-.mention-menu,.workbench-dialog{border:1px solid var(--hair-strong);box-shadow:var(--glow)}
+.mention-menu,.workbench-dialog{border:1px solid var(--brand);box-shadow:var(--glow)}
 .mention-option strong{font-family:var(--font-data)}
 
-/* -------------------------------------------------------------- 右抽屉 */
-.context-pane{border-left:1px solid var(--hair-strong)}
-.context-head{
-  border-bottom:1px solid var(--hair);
-  background:linear-gradient(180deg,#fff,var(--brand-softer));
-  letter-spacing:.04em;
+/* ================================================================= 抽屉 */
+.context-pane{
+  border-left:1px solid var(--hair-strong);
+  background:radial-gradient(circle,var(--grid) .9px,transparent 1px) 0 0/22px 22px,
+             var(--surface);
 }
-.kv{border-bottom:1px dashed rgba(200,16,46,.16)}
+.context-head{
+  border-bottom:1px solid var(--hair-strong);
+  background:linear-gradient(180deg,#fff,var(--brand-soft));
+}
+.kv{border-bottom:1px dashed rgba(200,16,46,.2)}
 .tool-tag{border:1px solid var(--hair-strong);background:transparent;color:var(--brand)}
 
-/* ------------------------------------------------------------ 本地 Agent */
-.filter-chip{border:1px solid var(--hair-strong);font-family:var(--font-data);letter-spacing:.03em}
+/* ============================================================ 本地 Agent */
+.filter-chip{border:1px solid var(--hair-strong);font-size:11px}
 .filter-chip.active{box-shadow:var(--glow)}
 .bridge-status{border:1px solid var(--hair-strong);font-family:var(--font-data)}
-.local-steps li{font-family:var(--font-data);letter-spacing:.03em}
-.activity{border-left-width:2px;font-family:var(--font-data)}
-.activity-output{border:1px solid var(--hair-strong);box-shadow:inset 0 0 24px rgba(0,0,0,.35)}
-.detect-dot{box-shadow:0 0 6px currentColor}
+.activity{border-left-width:3px;font-family:var(--font-data)}
+.activity-output{border:1px solid var(--hair-strong);box-shadow:inset 0 0 30px rgba(0,0,0,.45)}
+.detect-dot{box-shadow:0 0 8px currentColor}
 
-/* -------------------------------------------------------------- 搜索 */
-.search-topbar{border-bottom:1px solid var(--hair-strong);background:linear-gradient(180deg,#fff,var(--brand-softer))}
+/* ================================================================= 搜索 */
+.search-topbar{border-bottom:1px solid var(--hair-strong);background:linear-gradient(180deg,#fff,var(--brand-soft))}
 .search-input-component{border:1px solid var(--hair-strong)}
 .search-input-component:focus-within{border-color:var(--brand);box-shadow:var(--glow)}
 .search-filter-component{border:1px solid var(--hair)}
-#search-hint{font-family:var(--font-data);letter-spacing:.06em}
+#search-hint{font-family:var(--font-data);letter-spacing:.1em}
 
-/* --------------------------------------------------------------- 提示 */
-.toast{border:1px solid var(--hair-strong);box-shadow:var(--glow);font-family:var(--font-data)}
+.toast{border:1px solid var(--brand);box-shadow:var(--glow);font-family:var(--font-data)}
 
-/* 关系图容器也当仪表看待 */
-.graph-svg{border:1px solid var(--hair);background:
-  repeating-linear-gradient(0deg,var(--grid) 0 1px,transparent 1px 32px),
-  repeating-linear-gradient(90deg,var(--grid) 0 1px,transparent 1px 32px),#fff}
+/* 关系图画布也是一块仪表屏 */
+/* 关系图是唯一适合真线网的地方：那里本来就是坐标空间，没有正文被穿过 */
+.graph-svg{
+  border:1px solid var(--hair-strong);
+  background:
+    radial-gradient(90% 70% at 50% 0%,rgba(200,16,46,.07),transparent 60%),
+    repeating-linear-gradient(0deg,var(--grid) 0 1px,transparent 1px 32px),
+    repeating-linear-gradient(90deg,var(--grid) 0 1px,transparent 1px 32px),#fff;
+}
 
-/* 关掉动画的用户看到的是同一套静态外观，不是残缺的界面 */
+/* 滚动条收细并染成品牌色，最后一处"系统默认"的痕迹也去掉 */
+*{scrollbar-width:thin;scrollbar-color:rgba(200,16,46,.45) transparent}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:rgba(200,16,46,.4);border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(200,16,46,.65);background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+
+/* 关掉动画的用户看到的是同一套静态外观，不是残缺界面 */
 @media(prefers-reduced-motion:reduce){
-  .run-banner.running::before,.board-card[data-status="running"]{animation:none}
+  .run-banner.running::before,.board-card[data-status="running"],
+  .channel-head::before,.agent-row[data-status="running"] .status-dot::after{animation:none}
 }
