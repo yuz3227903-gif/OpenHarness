@@ -10,8 +10,19 @@
   <link rel="stylesheet" href="/local-agent.css">
   <link rel="stylesheet" href="/themes.css">
   <link rel="stylesheet" href="/tech.css">
-  <!-- 在样式生效前就把主题定下来，否则会先闪一下默认色再跳到用户选的那套 -->
-  <script>try{var t=localStorage.getItem('workbench.theme');if(t)document.documentElement.dataset.theme=t;}catch(e){}</script>
+  <link rel="stylesheet" href="/skins.css">
+  <!-- 在样式生效前就把主题定下来，否则会先闪一下默认色再跳到用户选的那套。
+       配色和形态是两个维度，所以存的是选项 id，由脚本拆成 theme + skin。 -->
+  <script>try{
+    var picked=localStorage.getItem('workbench.theme');
+    var known={crimson:['crimson',''],deepspace:['deepspace',''],amber:['amber',''],
+               graphite:['graphite',''],blueprint:['crimson','blueprint'],
+               neon:['crimson','neon'],matrix:['crimson','matrix']};
+    var pair=known[picked];
+    if(pair){document.documentElement.dataset.theme=pair[0];
+             if(pair[1])document.documentElement.dataset.skin=pair[1];
+             document.documentElement.dataset.themeId=picked;}
+  }catch(e){}</script>
 </head>
 <body>
   <!-- Icon sprite: Lucide (ISC licence, https://lucide.dev). Inlined because a

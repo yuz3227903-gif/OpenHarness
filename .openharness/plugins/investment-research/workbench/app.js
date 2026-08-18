@@ -1648,20 +1648,37 @@ function showUtilityDrawer(kind){
 // 主题只换色号，形态由 tech.css 统一提供，所以这里不需要知道任何一套主题
 // 长什么样——只要把 data-theme 挂到根元素上。色卡直接用该主题的三个主色画，
 // 不用读名字就知道点开会变成什么。
+// 配色（theme）和形态（skin）是两个维度：同一套投研红色号可以配不同的形态。
+// 菜单里拉平成一个列表，因为对用户来说"换个样子"是一件事，不是两件。
 const THEME_KEY='workbench.theme';
 const THEMES=[
-  {id:'crimson',   name:'投研红',   swatch:['#FFFFFF','#C8102E','#F6C5CF']},
-  {id:'deepspace', name:'深空蓝',   swatch:['#070E16','#38BDF8','#0A1622']},
-  {id:'amber',     name:'琥珀终端', swatch:['#100B04','#F59E0B','#1A1206']},
-  {id:'graphite',  name:'石墨绿',   swatch:['#FBFDFC','#0D9488','#CFE6E2']},
+  {id:'crimson',   name:'投研红 · 仪表盘', theme:'crimson',   skin:'',
+   swatch:['#FFFFFF','#C8102E','#F6C5CF']},
+  {id:'blueprint', name:'投研红 · 蓝图',   theme:'crimson',   skin:'blueprint',
+   swatch:['#FFFFFF','#C8102E','#F6C5CF']},
+  {id:'neon',      name:'投研红 · 霓虹',   theme:'crimson',   skin:'neon',
+   swatch:['#FFFFFF','#C8102E','#F6C5CF']},
+  {id:'matrix',    name:'投研红 · 矩阵',   theme:'crimson',   skin:'matrix',
+   swatch:['#FFFFFF','#C8102E','#F6C5CF']},
+  {id:'deepspace', name:'深空蓝',         theme:'deepspace', skin:'',
+   swatch:['#070E16','#38BDF8','#0A1622']},
+  {id:'amber',     name:'琥珀终端',       theme:'amber',     skin:'',
+   swatch:['#100B04','#F59E0B','#1A1206']},
+  {id:'graphite',  name:'石墨绿',         theme:'graphite',  skin:'',
+   swatch:['#FBFDFC','#0D9488','#CFE6E2']},
 ];
 function currentTheme(){
-  return document.documentElement.dataset.theme || 'crimson';
+  return document.documentElement.dataset.themeId || 'crimson';
 }
 function applyTheme(id){
-  const theme=THEMES.some(item=>item.id===id) ? id : 'crimson';
-  document.documentElement.dataset.theme=theme;
-  try{ localStorage.setItem(THEME_KEY,theme); }catch(_error){ /* 私密模式：只在本次会话生效 */ }
+  const picked=THEMES.find(item=>item.id===id) || THEMES[0];
+  const root=document.documentElement;
+  root.dataset.theme=picked.theme;
+  root.dataset.themeId=picked.id;
+  // 空字符串的 data-skin 也会命中 [data-skin] 选择器，所以要整个删掉
+  if(picked.skin) root.dataset.skin=picked.skin;
+  else delete root.dataset.skin;
+  try{ localStorage.setItem(THEME_KEY,picked.id); }catch(_error){ /* 私密模式：只在本次会话生效 */ }
   renderThemeMenu();
   // 关系图是画上去的，不吃 CSS 变量，换主题后要重画一次
   if(state.workspaceView==='graph' && typeof renderGraphBoard==='function') renderGraphBoard();
@@ -1670,9 +1687,11 @@ function renderThemeMenu(){
   const menu=$('theme-menu');
   if(!menu) return;
   const active=currentTheme();
+  // 四套投研红的色号完全一样，光看色卡分不出来，所以色卡还要画出形态特征：
+  // 实心=仪表盘、虚线=蓝图、光晕=霓虹、条纹=矩阵。
   menu.innerHTML='<p class="theme-menu-title">主题</p>'+THEMES.map(theme=>
     `<button type="button" role="menuitem" class="theme-option${theme.id===active?' active':''}" data-theme-id="${esc(theme.id)}">
-       <span class="theme-swatch">${theme.swatch.map(color=>`<i style="background:${esc(color)}"></i>`).join('')}</span>
+       <span class="theme-swatch"${theme.skin?` data-skin-preview="${esc(theme.skin)}"`:''}>${theme.swatch.map(color=>`<i style="background:${esc(color)}"></i>`).join('')}</span>
        <span class="theme-name">${esc(theme.name)}</span>
      </button>`).join('');
   menu.querySelectorAll('[data-theme-id]').forEach(button=>button.addEventListener('click',()=>{
